@@ -1,0 +1,232 @@
+{
+  "version": "1.0",
+  "summary": "Coordinate downstream planning, governance, and execution agents from a single generated manifest.",
+  "policySummary": "Use product profile policies for concurrency, blocker escalation, and approval gating.",
+  "runnerContractPath": "runner-contract.json",
+  "coordinationStrategy": "Resolve intake blockers first, then run planning review steps in parallel where possible, then begin execution.",
+  "recommendedArchitectureOptionId": "option-a",
+  "recommendedArchitectureShape": "modular monolith",
+  "sharedContext": {
+    "phase": "phase_1",
+    "path": "core",
+    "plannerProfile": "product",
+    "intakeCompleteness": "partial"
+  },
+  "sharedArtifacts": [
+    "plan-output.json",
+    "structured-input.json",
+    "project-charter.md",
+    "architecture-overview.md",
+    "delivery-plan.md",
+    "runner-contract.json",
+    ".devreview.json",
+    "scaffoldkit-input.json",
+    ".ai/AGENTS.md",
+    ".ai/ARCHITECTURE.md",
+    ".ai/TASKS.md",
+    ".ai/DECISIONS.md",
+    "/tools/agent-planforge/playbooks/planning-and-scoping.md",
+    "agent-engineering-playbook/playbooks/01-project-setup.md",
+    "agent-engineering-playbook/playbooks/02-architecture.md",
+    "agent-engineering-playbook/playbooks/03-team-roles.md",
+    "agent-engineering-playbook/playbooks/04-design-principles.md",
+    "agent-engineering-playbook/playbooks/05-development-workflow.md",
+    "agent-engineering-playbook/playbooks/06-testing-strategy.md",
+    "agent-engineering-playbook/playbooks/07-quality-assurance.md",
+    "agent-engineering-playbook/playbooks/08-documentation.md",
+    "intake-questionnaire.md",
+    "adrs/001-initial-architecture-shape.md",
+    "adrs/002-primary-data-store.md"
+  ],
+  "steps": [
+    {
+      "id": "step-1-intake-clarification",
+      "name": "Resolve Missing Planning Inputs",
+      "objective": "Close the blocking or high-value planning gaps before deeper architecture or delivery work continues.",
+      "executionMode": "sequential",
+      "dependsOn": [],
+      "parallelGroup": "preflight",
+      "agentAssignments": [
+        {
+          "id": "agent-intake-clarifier",
+          "role": "requirements-analyst",
+          "promptExportId": "intake-followup",
+          "promptPath": "prompts/intake-followup.md",
+          "reads": [
+            "plan-output.json",
+            "intake-questionnaire.md",
+            "project-charter.md",
+            ".ai/TASKS.md",
+            "prompts/intake-followup.md"
+          ],
+          "writes": [
+            "updated planning input",
+            "clarified assumptions",
+            "resolved blocker answers"
+          ],
+          "successCriteria": [
+            "Every blocking intake question has an explicit answer or a named decision owner.",
+            "The clarified requirements are concrete enough to rerun the planner without guesswork."
+          ]
+        }
+      ],
+      "dependencyPolicy": {
+        "hard": [],
+        "soft": []
+      },
+      "blockerPolicy": {
+        "onBlocked": "notify-and-wait",
+        "escalationTarget": "human owner",
+        "maxAutoRetries": 0
+      },
+      "approvalGate": {
+        "required": false,
+        "approvers": [
+          "human owner"
+        ],
+        "reason": "No explicit approval gate required beyond normal review."
+      },
+      "profilePolicy": {
+        "plannerProfile": "product",
+        "maxParallelAgents": 2,
+        "autoContinue": true,
+        "reviewRequired": false
+      },
+      "statusFiles": {
+        "input": "runner/step-1-intake-clarification/input.json",
+        "status": "runner/step-1-intake-clarification/status.json",
+        "result": "runner/step-1-intake-clarification/result.json",
+        "blockers": "runner/step-1-intake-clarification/blockers.json"
+      }
+    },
+    {
+      "id": "step-2-architecture-review",
+      "name": "Review Architecture Direction",
+      "objective": "Challenge the default architecture and confirm whether the recommended option still fits the clarified scope.",
+      "executionMode": "parallel",
+      "dependsOn": [
+        "step-1-intake-clarification"
+      ],
+      "parallelGroup": "planning-review",
+      "agentAssignments": [
+        {
+          "id": "agent-architecture-reviewer",
+          "role": "architecture-reviewer",
+          "promptExportId": "architecture-analysis",
+          "promptPath": "prompts/architecture-analysis.md",
+          "reads": [
+            "plan-output.json",
+            "architecture-overview.md",
+            ".ai/ARCHITECTURE.md",
+            "delivery-plan.md",
+            "prompts/architecture-analysis.md"
+          ],
+          "writes": [
+            "architecture review notes",
+            "ADR update proposals",
+            "recommended architecture adjustments"
+          ],
+          "successCriteria": [
+            "The recommended option is either confirmed or replaced with an explicit rationale.",
+            "Key tradeoffs and module boundaries are clear enough to guide the first implementation wave."
+          ]
+        }
+      ],
+      "dependencyPolicy": {
+        "hard": [
+          "step-1-intake-clarification"
+        ],
+        "soft": []
+      },
+      "blockerPolicy": {
+        "onBlocked": "notify-and-wait",
+        "escalationTarget": "human owner",
+        "maxAutoRetries": 0
+      },
+      "approvalGate": {
+        "required": false,
+        "approvers": [
+          "human owner"
+        ],
+        "reason": "No explicit approval gate required beyond normal review."
+      },
+      "profilePolicy": {
+        "plannerProfile": "product",
+        "maxParallelAgents": 2,
+        "autoContinue": true,
+        "reviewRequired": false
+      },
+      "statusFiles": {
+        "input": "runner/step-2-architecture-review/input.json",
+        "status": "runner/step-2-architecture-review/status.json",
+        "result": "runner/step-2-architecture-review/result.json",
+        "blockers": "runner/step-2-architecture-review/blockers.json"
+      }
+    },
+    {
+      "id": "step-4-wave-1-execution",
+      "name": "Execute First Delivery Wave",
+      "objective": "Implement the initial foundation tasks with the current architecture and control assumptions.",
+      "executionMode": "sequential",
+      "dependsOn": [
+        "step-2-architecture-review"
+      ],
+      "parallelGroup": "delivery",
+      "agentAssignments": [
+        {
+          "id": "agent-delivery-lead",
+          "role": "implementation-lead",
+          "promptExportId": "execution-next-wave",
+          "promptPath": "prompts/execution-next-wave.md",
+          "reads": [
+            "plan-output.json",
+            "delivery-plan.md",
+            ".ai/TASKS.md",
+            "prompts/execution-next-wave.md",
+            "tasks/001-write-project-charter-and-architecture-baseline.md",
+            "tasks/002-set-up-repository-and-delivery-baseline.md"
+          ],
+          "writes": [
+            "implemented wave-1 scope",
+            "updated tests and docs",
+            "next-wave handoff notes"
+          ],
+          "successCriteria": [
+            "All tasks in wave-1 are either completed or explicitly re-scoped with reasons.",
+            "Dependency-sensitive work lands in a reviewable sequence without skipping tests or documentation."
+          ]
+        }
+      ],
+      "dependencyPolicy": {
+        "hard": [
+          "step-2-architecture-review"
+        ],
+        "soft": []
+      },
+      "blockerPolicy": {
+        "onBlocked": "notify-and-wait",
+        "escalationTarget": "human owner",
+        "maxAutoRetries": 0
+      },
+      "approvalGate": {
+        "required": false,
+        "approvers": [
+          "human owner"
+        ],
+        "reason": "No explicit approval gate required beyond normal review."
+      },
+      "profilePolicy": {
+        "plannerProfile": "product",
+        "maxParallelAgents": 2,
+        "autoContinue": true,
+        "reviewRequired": false
+      },
+      "statusFiles": {
+        "input": "runner/step-4-wave-1-execution/input.json",
+        "status": "runner/step-4-wave-1-execution/status.json",
+        "result": "runner/step-4-wave-1-execution/result.json",
+        "blockers": "runner/step-4-wave-1-execution/blockers.json"
+      }
+    }
+  ]
+}

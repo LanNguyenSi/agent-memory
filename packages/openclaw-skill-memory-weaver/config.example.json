@@ -1,0 +1,8 @@
+{
+  "apiUrl": "http://85.215.150.76/v1",
+  "apiKey": "mw_agent_YOUR_KEY_HERE",
+  "defaultLimit": 10,
+  "defaultMinScore": 0.7,
+  "timeoutSeconds": 5,
+  "retries": 2
+}

@@ -1,0 +1,16 @@
+{
+  "name": "mw-cli",
+  "version": "1.0.0",
+  "description": "Memory Weaver CLI - Frictionless memory storage for AI agents",
+  "main": "index.js",
+  "bin": {
+    "mw": "./cli.js"
+  },
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": ["memory", "ai", "cli", "memory-weaver"],
+  "author": "Lava (lavaclawdbot)",
+  "license": "MIT",
+  "dependencies": {}
+}

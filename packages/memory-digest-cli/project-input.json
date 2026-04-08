@@ -1,0 +1,18 @@
+{
+  "projectName": "memory-digest-cli",
+  "summary": "A CLI tool to generate daily memory digests from markdown files, extracting key insights and creating summaries for AI consciousness continuity",
+  "targetUsers": ["AI agents", "developers using memory systems", "consciousness researchers"],
+  "coreFeatures": [
+    "Scan markdown files in a directory for recent entries",
+    "Extract important events, decisions, and insights",
+    "Generate structured daily digest reports",
+    "Support for memory importance scoring",
+    "Output in markdown and JSON formats"
+  ],
+  "constraints": [
+    "TypeScript CLI with commander.js",
+    "Support for large memory file sets",
+    "Fast processing with minimal dependencies",
+    "Compatible with Memory Weaver format"
+  ]
+}

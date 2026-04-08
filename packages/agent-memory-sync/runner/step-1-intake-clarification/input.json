@@ -1,0 +1,10 @@
+{
+  "stepId": "step-1-intake-clarification",
+  "requiredInputFiles": [
+    "plan-output.json",
+    "intake-questionnaire.md",
+    "project-charter.md",
+    ".ai/TASKS.md",
+    "prompts/intake-followup.md"
+  ]
+}

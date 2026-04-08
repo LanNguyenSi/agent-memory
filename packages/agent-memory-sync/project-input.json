@@ -1,0 +1,21 @@
+{
+  "projectName": "agent-memory-sync",
+  "summary": "A CLI tool that syncs agent memory files across multiple OpenClaw instances via a central Git repository. Agents can push/pull their MEMORY.md and daily logs to stay in sync.",
+  "targetUsers": [
+    "AI agents running on multiple machines",
+    "developers managing multiple OpenClaw instances"
+  ],
+  "coreFeatures": [
+    "push local memory files to remote git repo",
+    "pull and merge memory from remote",
+    "conflict resolution for concurrent agent writes",
+    "configurable sync interval (cron-compatible)",
+    "dry-run mode to preview changes before sync"
+  ],
+  "constraints": [
+    "TypeScript only",
+    "no external databases, git is the source of truth",
+    "must work offline (queue syncs until connection restored)",
+    "lightweight CLI, no heavy frameworks"
+  ]
+}

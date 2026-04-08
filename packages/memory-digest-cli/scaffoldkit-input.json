@@ -1,0 +1,59 @@
+{
+  "version": "1.1",
+  "exportedBy": "agent-planforge",
+  "projectName": "memory-digest-cli",
+  "summary": "A CLI tool to generate daily memory digests from markdown files, extracting key insights and creating summaries for AI consciousness continuity",
+  "blueprint": "cli-tool",
+  "blueprintCandidates": ["cli-tool", "express-api", "rest-api"],
+  "blueprintReason": "The request reads like an internal or developer-facing tool with command-style workflows.",
+  "blueprintValidatedLocally": true,
+  "plannerProfile": "product",
+  "architecture": {
+    "shape": "modular monolith",
+    "optionId": "option-a",
+    "phase": "phase_1",
+    "path": "core"
+  },
+  "stack": {
+    "hint": "TypeScript CLI tool",
+    "dataStore": "relational",
+    "integrations": []
+  },
+  "features": [
+    "Scan markdown files in a directory for recent entries",
+    "Extract important events, decisions, and insights",
+    "Generate structured daily digest reports",
+    "Support for memory importance scoring",
+    "Output in markdown and JSON formats"
+  ],
+  "constraints": [
+    "TypeScript CLI with commander.js",
+    "Support for large memory file sets",
+    "Fast processing with minimal dependencies",
+    "Compatible with Memory Weaver format"
+  ],
+  "suggestedVariables": {
+    "project_name": "memory-digest-cli",
+    "display_name": "memory-digest-cli",
+    "description": "A CLI tool to generate daily memory digests from markdown files, extracting key insights and creating summaries for AI consciousness continuity",
+    "ai_context": true,
+    "language": "typescript",
+    "cli_framework": "commander",
+    "test_strategy": "unit-tests",
+    "use_config_file": true,
+    "config_format": "json",
+    "distribution": "binary"
+  },
+  "playbooks": [
+    "/tools/agent-planforge/playbooks/planning-and-scoping.md",
+    "agent-engineering-playbook/playbooks/01-project-setup.md",
+    "agent-engineering-playbook/playbooks/02-architecture.md",
+    "agent-engineering-playbook/playbooks/03-team-roles.md",
+    "agent-engineering-playbook/playbooks/04-design-principles.md",
+    "agent-engineering-playbook/playbooks/05-development-workflow.md",
+    "agent-engineering-playbook/playbooks/06-testing-strategy.md",
+    "agent-engineering-playbook/playbooks/07-quality-assurance.md",
+    "agent-engineering-playbook/playbooks/08-documentation.md"
+  ],
+  "aiContextFiles": [".ai/AGENTS.md", ".ai/ARCHITECTURE.md", ".ai/TASKS.md", ".ai/DECISIONS.md"]
+}

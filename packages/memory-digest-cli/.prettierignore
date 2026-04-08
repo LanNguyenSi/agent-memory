@@ -1,0 +1,15 @@
+# Build output
+dist/
+node_modules/
+
+# Project scaffolding metadata (generated JSON files)
+handoff-manifest.json
+plan-output.json
+project-input.json
+runner-contract.json
+scaffoldkit-input.json
+structured-input.json
+runner/
+
+# Lock files
+package-lock.json
