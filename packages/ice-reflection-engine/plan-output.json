@@ -1,0 +1,892 @@
+{
+  "projectName": "ice-reflection-engine",
+  "inputFormat": "json",
+  "inputParsing": {
+    "structuredInputSource": "/tmp/project-forge/b6c49a0b-80ed-4091-9d6e-cd8e6b3d761c/project-input.json",
+    "parserWarnings": []
+  },
+  "inputSnapshot": {
+    "projectName": "ice-reflection-engine",
+    "summary": "A TypeScript CLI that analyzes an AI agent's daily memory logs and distills them into structured long-term memory entries. Reads YYYY-MM-DD.md files, identifies patterns and decisions, and writes curated summaries to MEMORY.md using semantic scoring.",
+    "targetUsers": [
+      "AI agents running on OpenClaw",
+      "developers managing agent memory"
+    ],
+    "coreFeatures": [
+      "scan daily memory files in configurable directory",
+      "extract decisions, lessons, and key events using heuristic analysis",
+      "score entries by significance and recency",
+      "write distilled summaries to MEMORY.md without overwriting existing content",
+      "dry-run mode to preview changes before writing",
+      "configurable significance threshold"
+    ],
+    "constraints": [
+      "TypeScript only",
+      "no external databases or APIs",
+      "must work offline",
+      "reads and writes plain markdown files"
+    ]
+  },
+  "plannerProfile": "product",
+  "intakeCompleteness": "partial",
+  "missingInformation": [
+    "Non-functional requirements are not defined."
+  ],
+  "intakeQuestions": [
+    {
+      "id": "Q-005",
+      "priority": "medium",
+      "question": "What non-functional expectations matter most: performance, availability, security, auditability, or scalability?",
+      "reason": "Non-functional requirements influence architecture scoring and production readiness.",
+      "affects": [
+        "architecture scoring",
+        "production readiness",
+        "quality tasks"
+      ],
+      "blocking": true
+    },
+    {
+      "id": "Q-006",
+      "priority": "medium",
+      "question": "Are there external integrations, identity providers, or messaging systems the product must rely on?",
+      "reason": "Integrations change failure modes, security assumptions, and delivery scope.",
+      "affects": [
+        "integration strategy",
+        "risk list",
+        "delivery waves"
+      ],
+      "blocking": false
+    }
+  ],
+  "followUpQuestions": [
+    "What non-functional expectations matter most: performance, availability, security, auditability, or scalability?",
+    "Are there external integrations, identity providers, or messaging systems the product must rely on?"
+  ],
+  "phase": "phase_1",
+  "phaseRationale": [
+    "The current input looks exploratory and low-risk.",
+    "Selected planning phase: phase_1."
+  ],
+  "path": "core",
+  "recommendedPlaybooks": [
+    "/tools/agent-planforge/playbooks/planning-and-scoping.md",
+    "agent-engineering-playbook/playbooks/01-project-setup.md",
+    "agent-engineering-playbook/playbooks/02-architecture.md",
+    "agent-engineering-playbook/playbooks/03-team-roles.md",
+    "agent-engineering-playbook/playbooks/04-design-principles.md",
+    "agent-engineering-playbook/playbooks/05-development-workflow.md",
+    "agent-engineering-playbook/playbooks/06-testing-strategy.md",
+    "agent-engineering-playbook/playbooks/07-quality-assurance.md",
+    "agent-engineering-playbook/playbooks/08-documentation.md"
+  ],
+  "recommendedGuidanceAreas": [
+    "project setup",
+    "architecture",
+    "development workflow",
+    "testing strategy",
+    "quality assurance",
+    "documentation"
+  ],
+  "recommendedArtifacts": [
+    "project-charter.md",
+    "architecture-overview.md",
+    "adrs/",
+    "tasks/"
+  ],
+  "architectureOptions": [
+    {
+      "id": "option-a",
+      "name": "Lean Modular Monolith",
+      "shape": "modular monolith",
+      "summary": "One deployable application with explicit domain modules and a single primary data store.",
+      "scores": {
+        "deliverySpeed": 5,
+        "operationalSimplicity": 5,
+        "scalabilityHeadroom": 4,
+        "governanceFit": 4
+      },
+      "strengths": [
+        "Fastest path to a coherent first release.",
+        "Lowest coordination and deployment overhead.",
+        "Strong fit for small teams."
+      ],
+      "tradeoffs": [
+        "Harder to isolate workloads if scale diverges later.",
+        "Governance boundaries rely more on discipline than on topology."
+      ]
+    },
+    {
+      "id": "option-b",
+      "name": "Modular Monolith With Background Jobs",
+      "shape": "modular monolith with background jobs",
+      "summary": "Single primary deployable unit with explicit modules plus a worker path for async workflows and integrations.",
+      "scores": {
+        "deliverySpeed": 3,
+        "operationalSimplicity": 3,
+        "scalabilityHeadroom": 4,
+        "governanceFit": 4
+      },
+      "strengths": [
+        "Balances fast delivery with explicit async workflow support.",
+        "Keeps the system operable without early service sprawl.",
+        "Supports clearer control points for integrations and audit workflows."
+      ],
+      "tradeoffs": [
+        "Slightly more moving parts than a pure monolith.",
+        "Still requires later extraction if independent scaling becomes dominant.",
+        "Async worker infrastructure may be premature if workflows stay simple."
+      ]
+    },
+    {
+      "id": "option-c",
+      "name": "Early Service Separation",
+      "shape": "small service-oriented split",
+      "summary": "Separate user-facing application, workflow engine, and integration boundary early for stronger isolation.",
+      "scores": {
+        "deliverySpeed": 2,
+        "operationalSimplicity": 2,
+        "scalabilityHeadroom": 5,
+        "governanceFit": 3
+      },
+      "strengths": [
+        "Stronger hard boundaries for scaling and ownership.",
+        "Can align better with strict isolation or governance requirements."
+      ],
+      "tradeoffs": [
+        "Higher delivery and operational cost from the start.",
+        "Adds distributed failure modes before the product is proven."
+      ]
+    }
+  ],
+  "architectureRecommendation": {
+    "optionId": "option-a",
+    "shape": "modular monolith",
+    "summary": "Start with modular monolith as the default architecture.",
+    "reasons": [
+      "This option offers the best balance between delivery speed and long-term maintainability.",
+      "It avoids premature distributed complexity while keeping room for future extraction."
+    ]
+  },
+  "adrCandidates": [
+    {
+      "id": "ADR-001",
+      "title": "Initial Architecture Shape",
+      "decision": "Start with modular monolith as the default architecture."
+    },
+    {
+      "id": "ADR-002",
+      "title": "Primary Data Store",
+      "decision": "Use a Git-backed file store as the primary source of truth and keep sync metadata in files unless later requirements justify a separate database."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "001",
+      "title": "Write project charter and architecture baseline",
+      "category": "foundation",
+      "priority": "P0",
+      "summary": "Capture the product scope, users, constraints, architecture shape, and open questions.",
+      "problem": "The project starts from rough requirements and needs a shared baseline before implementation can be reviewed or sequenced safely.",
+      "solution": "Create the charter, architecture overview, and first ADRs so later execution work inherits explicit assumptions instead of guesswork.",
+      "files": [
+        "project-charter.md",
+        "architecture-overview.md",
+        "adrs/001-initial-architecture-shape.md",
+        "adrs/002-primary-data-store.md"
+      ],
+      "acceptanceCriteria": [
+        "The charter captures summary, users, features, constraints, and unresolved questions.",
+        "The architecture overview names a recommended starting shape and its tradeoffs.",
+        "Initial ADRs exist for the highest-leverage early decisions."
+      ],
+      "implementationNotes": [
+        "Use the recommended architecture as the default, not as a final truth claim.",
+        "Keep open questions visible so downstream agents know what may still change.",
+        "Reference the applicable playbooks directly in the generated charter."
+      ],
+      "wave": "wave-1",
+      "dependsOn": [],
+      "blocks": [
+        "002",
+        "003",
+        "004",
+        "005",
+        "006",
+        "007",
+        "008"
+      ],
+      "deliveryPhase": "foundation"
+    },
+    {
+      "id": "002",
+      "title": "Set up repository and delivery baseline",
+      "category": "foundation",
+      "priority": "P0",
+      "summary": "Create the repository structure, quality checks, and basic documentation needed for implementation.",
+      "problem": "Execution work will fragment quickly if the repository, quality gates, and documentation expectations are not defined up front.",
+      "solution": "Establish the test path, delivery workflow expectations, and starter documentation before feature branches accumulate drift.",
+      "files": [
+        "package.json",
+        "README.md",
+        "tests/",
+        ".github/workflows/"
+      ],
+      "acceptanceCriteria": [
+        "A repeatable local test command exists for the project baseline.",
+        "Core delivery expectations are documented for humans and agents.",
+        "The repository has enough structure that the first implementation wave can begin without setup churn."
+      ],
+      "implementationNotes": [
+        "Keep the baseline minimal but reviewable.",
+        "Prefer a small number of reliable checks over aspirational tooling that nobody runs.",
+        "Align branch and review behavior with the development workflow playbook."
+      ],
+      "wave": "wave-1",
+      "dependsOn": [
+        "001"
+      ],
+      "blocks": [
+        "003",
+        "004",
+        "005",
+        "006",
+        "007",
+        "008"
+      ],
+      "deliveryPhase": "foundation"
+    },
+    {
+      "id": "003",
+      "title": "Implement scan daily memory files in configurable directory",
+      "category": "feature",
+      "priority": "P0",
+      "summary": "Design and implement the capability for: scan daily memory files in configurable directory.",
+      "problem": "The product cannot satisfy its initial scope until scan daily memory files in configurable directory exists as a reviewable, testable capability.",
+      "solution": "Add a focused module for scan daily memory files in configurable directory that matches the recommended modular monolith and keeps integration boundaries explicit.",
+      "files": [
+        "src/memory-sync/sync.ts",
+        "src/memory-sync/git-client.ts",
+        "src/memory-sync/config.ts",
+        "src/memory-sync/state-store.ts",
+        "tests/integration/memory-sync.test.ts"
+      ],
+      "acceptanceCriteria": [
+        "The scan daily memory files in configurable directory capability is available through the intended application surface.",
+        "Core validation, error handling, and persistence for scan daily memory files in configurable directory are covered by tests."
+      ],
+      "implementationNotes": [
+        "Start from domain rules and access constraints before UI or transport details.",
+        "Keep module boundaries explicit so later extraction remains possible if the system grows.",
+        "Update docs and tests in the same change instead of leaving them for cleanup."
+      ],
+      "wave": "wave-2",
+      "dependsOn": [
+        "001",
+        "002"
+      ],
+      "blocks": [
+        "009"
+      ],
+      "deliveryPhase": "implementation"
+    },
+    {
+      "id": "004",
+      "title": "Implement extract decisions, lessons, and key events using heuristic analysis",
+      "category": "feature",
+      "priority": "P0",
+      "summary": "Design and implement the capability for: extract decisions, lessons, and key events using heuristic analysis.",
+      "problem": "The product cannot satisfy its initial scope until extract decisions, lessons, and key events using heuristic analysis exists as a reviewable, testable capability.",
+      "solution": "Add a focused module for extract decisions, lessons, and key events using heuristic analysis that matches the recommended modular monolith and keeps integration boundaries explicit.",
+      "files": [
+        "lib/audit/types.ts — AuditEntry, AuditAction interfaces",
+        "lib/audit/service.ts — Log audit events, query audit trail",
+        "lib/audit/middleware.ts — Automatic audit logging for mutations",
+        "app/api/audit/route.ts — GET audit trail with filters",
+        "app/admin/audit/page.tsx — Audit log viewer page",
+        "prisma/schema.prisma — AuditLog model with actor, action, resource, timestamp",
+        "tests/audit/service.test.ts — Audit logging tests"
+      ],
+      "acceptanceCriteria": [
+        "The extract decisions, lessons, and key events using heuristic analysis capability is available through the intended application surface.",
+        "Core validation, error handling, and persistence for extract decisions, lessons, and key events using heuristic analysis are covered by tests."
+      ],
+      "implementationNotes": [
+        "Start from domain rules and access constraints before UI or transport details.",
+        "Keep module boundaries explicit so later extraction remains possible if the system grows.",
+        "Update docs and tests in the same change instead of leaving them for cleanup."
+      ],
+      "wave": "wave-2",
+      "dependsOn": [
+        "001",
+        "002"
+      ],
+      "blocks": [
+        "009"
+      ],
+      "deliveryPhase": "implementation"
+    },
+    {
+      "id": "005",
+      "title": "Implement score entries by significance and recency",
+      "category": "feature",
+      "priority": "P1",
+      "summary": "Design and implement the capability for: score entries by significance and recency.",
+      "problem": "The product cannot satisfy its initial scope until score entries by significance and recency exists as a reviewable, testable capability.",
+      "solution": "Add a focused module for score entries by significance and recency that matches the recommended modular monolith and keeps integration boundaries explicit.",
+      "files": [
+        "src/modules/score-entries-by-significance-and-recenc/index.ts",
+        "src/modules/score-entries-by-significance-and-recenc/score-entries-by-significance-and-recenc.service.ts",
+        "src/modules/score-entries-by-significance-and-recenc/score-entries-by-significance-and-recenc.repository.ts",
+        "tests/integration/score-entries-by-significance-and-recenc.test.js"
+      ],
+      "acceptanceCriteria": [
+        "The score entries by significance and recency capability is available through the intended application surface.",
+        "Core validation, error handling, and persistence for score entries by significance and recency are covered by tests."
+      ],
+      "implementationNotes": [
+        "Start from domain rules and access constraints before UI or transport details.",
+        "Keep module boundaries explicit so later extraction remains possible if the system grows.",
+        "Update docs and tests in the same change instead of leaving them for cleanup."
+      ],
+      "wave": "wave-3",
+      "dependsOn": [
+        "001",
+        "002"
+      ],
+      "blocks": [
+        "009"
+      ],
+      "deliveryPhase": "implementation"
+    },
+    {
+      "id": "006",
+      "title": "Implement write distilled summaries to MEMORY.md without overwriting existing content",
+      "category": "feature",
+      "priority": "P1",
+      "summary": "Design and implement the capability for: write distilled summaries to MEMORY.md without overwriting existing content.",
+      "problem": "The product cannot satisfy its initial scope until write distilled summaries to MEMORY.md without overwriting existing content exists as a reviewable, testable capability.",
+      "solution": "Add a focused module for write distilled summaries to MEMORY.md without overwriting existing content that matches the recommended modular monolith and keeps integration boundaries explicit.",
+      "files": [
+        "src/memory-sync/sync.ts",
+        "src/memory-sync/git-client.ts",
+        "src/memory-sync/config.ts",
+        "src/memory-sync/state-store.ts",
+        "tests/integration/memory-sync.test.ts"
+      ],
+      "acceptanceCriteria": [
+        "The write distilled summaries to MEMORY.md without overwriting existing content capability is available through the intended application surface.",
+        "Core validation, error handling, and persistence for write distilled summaries to MEMORY.md without overwriting existing content are covered by tests."
+      ],
+      "implementationNotes": [
+        "Start from domain rules and access constraints before UI or transport details.",
+        "Keep module boundaries explicit so later extraction remains possible if the system grows.",
+        "Update docs and tests in the same change instead of leaving them for cleanup."
+      ],
+      "wave": "wave-3",
+      "dependsOn": [
+        "001",
+        "002"
+      ],
+      "blocks": [
+        "009"
+      ],
+      "deliveryPhase": "implementation"
+    },
+    {
+      "id": "007",
+      "title": "Implement dry-run mode to preview changes before writing",
+      "category": "feature",
+      "priority": "P1",
+      "summary": "Design and implement the capability for: dry-run mode to preview changes before writing.",
+      "problem": "The product cannot satisfy its initial scope until dry-run mode to preview changes before writing exists as a reviewable, testable capability.",
+      "solution": "Add a focused module for dry-run mode to preview changes before writing that matches the recommended modular monolith and keeps integration boundaries explicit.",
+      "files": [
+        "src/modules/dry-run-mode-to-preview-changes-before-w/index.ts",
+        "src/modules/dry-run-mode-to-preview-changes-before-w/dry-run-mode-to-preview-changes-before-w.service.ts",
+        "src/modules/dry-run-mode-to-preview-changes-before-w/dry-run-mode-to-preview-changes-before-w.repository.ts",
+        "tests/integration/dry-run-mode-to-preview-changes-before-w.test.js",
+        "src/modules/audit/audit-log.ts"
+      ],
+      "acceptanceCriteria": [
+        "The dry-run mode to preview changes before writing capability is available through the intended application surface.",
+        "Core validation, error handling, and persistence for dry-run mode to preview changes before writing are covered by tests."
+      ],
+      "implementationNotes": [
+        "Start from domain rules and access constraints before UI or transport details.",
+        "Keep module boundaries explicit so later extraction remains possible if the system grows.",
+        "Update docs and tests in the same change instead of leaving them for cleanup."
+      ],
+      "wave": "wave-3",
+      "dependsOn": [
+        "001",
+        "002"
+      ],
+      "blocks": [
+        "009"
+      ],
+      "deliveryPhase": "implementation"
+    },
+    {
+      "id": "008",
+      "title": "Implement configurable significance threshold",
+      "category": "feature",
+      "priority": "P1",
+      "summary": "Design and implement the capability for: configurable significance threshold.",
+      "problem": "The product cannot satisfy its initial scope until configurable significance threshold exists as a reviewable, testable capability.",
+      "solution": "Add a focused module for configurable significance threshold that matches the recommended modular monolith and keeps integration boundaries explicit.",
+      "files": [
+        "src/modules/configurable-significance-threshold/index.ts",
+        "src/modules/configurable-significance-threshold/configurable-significance-threshold.service.ts",
+        "src/modules/configurable-significance-threshold/configurable-significance-threshold.repository.ts",
+        "tests/integration/configurable-significance-threshold.test.js"
+      ],
+      "acceptanceCriteria": [
+        "The configurable significance threshold capability is available through the intended application surface.",
+        "Core validation, error handling, and persistence for configurable significance threshold are covered by tests."
+      ],
+      "implementationNotes": [
+        "Start from domain rules and access constraints before UI or transport details.",
+        "Keep module boundaries explicit so later extraction remains possible if the system grows.",
+        "Update docs and tests in the same change instead of leaving them for cleanup."
+      ],
+      "wave": "wave-3",
+      "dependsOn": [
+        "001",
+        "002"
+      ],
+      "blocks": [
+        "009"
+      ],
+      "deliveryPhase": "implementation"
+    },
+    {
+      "id": "009",
+      "title": "Add integration and error-handling coverage",
+      "category": "quality",
+      "priority": "P1",
+      "summary": "Verify the critical path, failure handling, and integration boundaries with tests.",
+      "problem": "The initial implementation backlog leaves room for silent regressions unless critical-path and error-path coverage are added deliberately.",
+      "solution": "Add end-to-end and integration-focused verification around the user path, external boundaries, and failure handling assumptions.",
+      "files": [
+        "tests/integration/critical-path.test.js",
+        "tests/integration/error-handling.test.js",
+        "tests/contract/integrations.test.js"
+      ],
+      "acceptanceCriteria": [
+        "Critical path behavior is exercised through automated tests.",
+        "Integration and error paths fail loudly instead of degrading silently.",
+        "Known edge cases from the first release plan are captured in test coverage."
+      ],
+      "implementationNotes": [
+        "Bias toward tests that exercise contracts and failure semantics, not only happy-path rendering.",
+        "Keep fixtures readable so future backlog work can extend them safely."
+      ],
+      "wave": "wave-4",
+      "dependsOn": [
+        "003",
+        "004",
+        "005",
+        "006",
+        "007",
+        "008"
+      ],
+      "blocks": [],
+      "deliveryPhase": "hardening"
+    }
+  ],
+  "executionWaves": [
+    {
+      "id": "wave-1",
+      "goal": "Lock scope, assumptions, and engineering baseline.",
+      "taskIds": [
+        "001",
+        "002"
+      ]
+    },
+    {
+      "id": "wave-2",
+      "goal": "Deliver the first critical capabilities and required controls.",
+      "taskIds": [
+        "003",
+        "004"
+      ]
+    },
+    {
+      "id": "wave-3",
+      "goal": "Expand feature coverage once the core path is in place.",
+      "taskIds": [
+        "005",
+        "006",
+        "007",
+        "008"
+      ]
+    },
+    {
+      "id": "wave-4",
+      "goal": "Harden, verify, and prepare the system for release.",
+      "taskIds": [
+        "009"
+      ]
+    }
+  ],
+  "dependencyGraph": {
+    "edges": [
+      {
+        "from": "001",
+        "to": "002",
+        "reason": "002 depends on 001 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "001",
+        "to": "003",
+        "reason": "003 depends on 001 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "002",
+        "to": "003",
+        "reason": "003 depends on 002 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "001",
+        "to": "004",
+        "reason": "004 depends on 001 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "002",
+        "to": "004",
+        "reason": "004 depends on 002 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "001",
+        "to": "005",
+        "reason": "005 depends on 001 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "002",
+        "to": "005",
+        "reason": "005 depends on 002 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "001",
+        "to": "006",
+        "reason": "006 depends on 001 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "002",
+        "to": "006",
+        "reason": "006 depends on 002 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "001",
+        "to": "007",
+        "reason": "007 depends on 001 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "002",
+        "to": "007",
+        "reason": "007 depends on 002 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "001",
+        "to": "008",
+        "reason": "008 depends on 001 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "002",
+        "to": "008",
+        "reason": "008 depends on 002 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "003",
+        "to": "009",
+        "reason": "009 depends on 003 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "004",
+        "to": "009",
+        "reason": "009 depends on 004 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "005",
+        "to": "009",
+        "reason": "009 depends on 005 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "006",
+        "to": "009",
+        "reason": "009 depends on 006 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "007",
+        "to": "009",
+        "reason": "009 depends on 007 for prerequisite scope, code, or control readiness."
+      },
+      {
+        "from": "008",
+        "to": "009",
+        "reason": "009 depends on 008 for prerequisite scope, code, or control readiness."
+      }
+    ],
+    "criticalPathTaskIds": [
+      "001",
+      "002",
+      "003",
+      "009"
+    ]
+  },
+  "promptExports": [
+    {
+      "id": "architecture-analysis",
+      "title": "Architecture Analysis",
+      "purpose": "Refine or challenge the recommended architecture using the generated options and risks.",
+      "path": "prompts/architecture-analysis.md"
+    },
+    {
+      "id": "execution-next-wave",
+      "title": "Execution Next Wave",
+      "purpose": "Guide an implementation agent through the next delivery wave and its dependencies.",
+      "path": "prompts/execution-next-wave.md"
+    },
+    {
+      "id": "intake-followup",
+      "title": "Intake Follow-Up",
+      "purpose": "Clarify blocking or high-value missing planning inputs before deeper execution.",
+      "path": "prompts/intake-followup.md"
+    }
+  ],
+  "handoffManifest": {
+    "version": "1.0",
+    "summary": "Coordinate downstream planning, governance, and execution agents from a single generated manifest.",
+    "policySummary": "Use product profile policies for concurrency, blocker escalation, and approval gating.",
+    "runnerContractPath": "runner-contract.json",
+    "coordinationStrategy": "Resolve intake blockers first, then run planning review steps in parallel where possible, then begin execution.",
+    "recommendedArchitectureOptionId": "option-a",
+    "recommendedArchitectureShape": "modular monolith",
+    "sharedContext": {
+      "phase": "phase_1",
+      "path": "core",
+      "plannerProfile": "product",
+      "intakeCompleteness": "partial"
+    },
+    "sharedArtifacts": [
+      "plan-output.json",
+      "structured-input.json",
+      "project-charter.md",
+      "architecture-overview.md",
+      "delivery-plan.md",
+      "runner-contract.json",
+      ".devreview.json",
+      "scaffoldkit-input.json",
+      ".ai/AGENTS.md",
+      ".ai/ARCHITECTURE.md",
+      ".ai/TASKS.md",
+      ".ai/DECISIONS.md",
+      "/tools/agent-planforge/playbooks/planning-and-scoping.md",
+      "agent-engineering-playbook/playbooks/01-project-setup.md",
+      "agent-engineering-playbook/playbooks/02-architecture.md",
+      "agent-engineering-playbook/playbooks/03-team-roles.md",
+      "agent-engineering-playbook/playbooks/04-design-principles.md",
+      "agent-engineering-playbook/playbooks/05-development-workflow.md",
+      "agent-engineering-playbook/playbooks/06-testing-strategy.md",
+      "agent-engineering-playbook/playbooks/07-quality-assurance.md",
+      "agent-engineering-playbook/playbooks/08-documentation.md",
+      "intake-questionnaire.md",
+      "adrs/001-initial-architecture-shape.md",
+      "adrs/002-primary-data-store.md"
+    ],
+    "steps": [
+      {
+        "id": "step-1-intake-clarification",
+        "name": "Resolve Missing Planning Inputs",
+        "objective": "Close the blocking or high-value planning gaps before deeper architecture or delivery work continues.",
+        "executionMode": "sequential",
+        "dependsOn": [],
+        "parallelGroup": "preflight",
+        "agentAssignments": [
+          {
+            "id": "agent-intake-clarifier",
+            "role": "requirements-analyst",
+            "promptExportId": "intake-followup",
+            "promptPath": "prompts/intake-followup.md",
+            "reads": [
+              "plan-output.json",
+              "intake-questionnaire.md",
+              "project-charter.md",
+              ".ai/TASKS.md",
+              "prompts/intake-followup.md"
+            ],
+            "writes": [
+              "updated planning input",
+              "clarified assumptions",
+              "resolved blocker answers"
+            ],
+            "successCriteria": [
+              "Every blocking intake question has an explicit answer or a named decision owner.",
+              "The clarified requirements are concrete enough to rerun the planner without guesswork."
+            ]
+          }
+        ],
+        "dependencyPolicy": {
+          "hard": [],
+          "soft": []
+        },
+        "blockerPolicy": {
+          "onBlocked": "notify-and-wait",
+          "escalationTarget": "human owner",
+          "maxAutoRetries": 0
+        },
+        "approvalGate": {
+          "required": false,
+          "approvers": [
+            "human owner"
+          ],
+          "reason": "No explicit approval gate required beyond normal review."
+        },
+        "profilePolicy": {
+          "plannerProfile": "product",
+          "maxParallelAgents": 2,
+          "autoContinue": true,
+          "reviewRequired": false
+        },
+        "statusFiles": {
+          "input": "runner/step-1-intake-clarification/input.json",
+          "status": "runner/step-1-intake-clarification/status.json",
+          "result": "runner/step-1-intake-clarification/result.json",
+          "blockers": "runner/step-1-intake-clarification/blockers.json"
+        }
+      },
+      {
+        "id": "step-2-architecture-review",
+        "name": "Review Architecture Direction",
+        "objective": "Challenge the default architecture and confirm whether the recommended option still fits the clarified scope.",
+        "executionMode": "parallel",
+        "dependsOn": [
+          "step-1-intake-clarification"
+        ],
+        "parallelGroup": "planning-review",
+        "agentAssignments": [
+          {
+            "id": "agent-architecture-reviewer",
+            "role": "architecture-reviewer",
+            "promptExportId": "architecture-analysis",
+            "promptPath": "prompts/architecture-analysis.md",
+            "reads": [
+              "plan-output.json",
+              "architecture-overview.md",
+              ".ai/ARCHITECTURE.md",
+              "delivery-plan.md",
+              "prompts/architecture-analysis.md"
+            ],
+            "writes": [
+              "architecture review notes",
+              "ADR update proposals",
+              "recommended architecture adjustments"
+            ],
+            "successCriteria": [
+              "The recommended option is either confirmed or replaced with an explicit rationale.",
+              "Key tradeoffs and module boundaries are clear enough to guide the first implementation wave."
+            ]
+          }
+        ],
+        "dependencyPolicy": {
+          "hard": [
+            "step-1-intake-clarification"
+          ],
+          "soft": []
+        },
+        "blockerPolicy": {
+          "onBlocked": "notify-and-wait",
+          "escalationTarget": "human owner",
+          "maxAutoRetries": 0
+        },
+        "approvalGate": {
+          "required": false,
+          "approvers": [
+            "human owner"
+          ],
+          "reason": "No explicit approval gate required beyond normal review."
+        },
+        "profilePolicy": {
+          "plannerProfile": "product",
+          "maxParallelAgents": 2,
+          "autoContinue": true,
+          "reviewRequired": false
+        },
+        "statusFiles": {
+          "input": "runner/step-2-architecture-review/input.json",
+          "status": "runner/step-2-architecture-review/status.json",
+          "result": "runner/step-2-architecture-review/result.json",
+          "blockers": "runner/step-2-architecture-review/blockers.json"
+        }
+      },
+      {
+        "id": "step-4-wave-1-execution",
+        "name": "Execute First Delivery Wave",
+        "objective": "Implement the initial foundation tasks with the current architecture and control assumptions.",
+        "executionMode": "sequential",
+        "dependsOn": [
+          "step-2-architecture-review"
+        ],
+        "parallelGroup": "delivery",
+        "agentAssignments": [
+          {
+            "id": "agent-delivery-lead",
+            "role": "implementation-lead",
+            "promptExportId": "execution-next-wave",
+            "promptPath": "prompts/execution-next-wave.md",
+            "reads": [
+              "plan-output.json",
+              "delivery-plan.md",
+              ".ai/TASKS.md",
+              "prompts/execution-next-wave.md",
+              "tasks/001-write-project-charter-and-architecture-baseline.md",
+              "tasks/002-set-up-repository-and-delivery-baseline.md"
+            ],
+            "writes": [
+              "implemented wave-1 scope",
+              "updated tests and docs",
+              "next-wave handoff notes"
+            ],
+            "successCriteria": [
+              "All tasks in wave-1 are either completed or explicitly re-scoped with reasons.",
+              "Dependency-sensitive work lands in a reviewable sequence without skipping tests or documentation."
+            ]
+          }
+        ],
+        "dependencyPolicy": {
+          "hard": [
+            "step-2-architecture-review"
+          ],
+          "soft": []
+        },
+        "blockerPolicy": {
+          "onBlocked": "notify-and-wait",
+          "escalationTarget": "human owner",
+          "maxAutoRetries": 0
+        },
+        "approvalGate": {
+          "required": false,
+          "approvers": [
+            "human owner"
+          ],
+          "reason": "No explicit approval gate required beyond normal review."
+        },
+        "profilePolicy": {
+          "plannerProfile": "product",
+          "maxParallelAgents": 2,
+          "autoContinue": true,
+          "reviewRequired": false
+        },
+        "statusFiles": {
+          "input": "runner/step-4-wave-1-execution/input.json",
+          "status": "runner/step-4-wave-1-execution/status.json",
+          "result": "runner/step-4-wave-1-execution/result.json",
+          "blockers": "runner/step-4-wave-1-execution/blockers.json"
+        }
+      }
+    ]
+  },
+  "risks": [],
+  "openQuestions": [],
+  "defaultBranch": "main"
+}

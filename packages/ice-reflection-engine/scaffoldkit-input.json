@@ -1,0 +1,69 @@
+{
+  "version": "1.1",
+  "exportedBy": "agent-planforge",
+  "projectName": "ice-reflection-engine",
+  "summary": "A TypeScript CLI that analyzes an AI agent's daily memory logs and distills them into structured long-term memory entries. Reads YYYY-MM-DD.md files, identifies patterns and decisions, and writes curated summaries to MEMORY.md using semantic scoring.",
+  "blueprint": "cli-tool",
+  "blueprintCandidates": [
+    "cli-tool",
+    "express-api",
+    "rest-api"
+  ],
+  "blueprintReason": "The request reads like an internal or developer-facing tool with command-style workflows.",
+  "blueprintValidatedLocally": true,
+  "plannerProfile": "product",
+  "architecture": {
+    "shape": "modular monolith",
+    "optionId": "option-a",
+    "phase": "phase_1",
+    "path": "core"
+  },
+  "stack": {
+    "hint": "TypeScript CLI tool",
+    "dataStore": "git",
+    "integrations": []
+  },
+  "features": [
+    "scan daily memory files in configurable directory",
+    "extract decisions, lessons, and key events using heuristic analysis",
+    "score entries by significance and recency",
+    "write distilled summaries to MEMORY.md without overwriting existing content",
+    "dry-run mode to preview changes before writing",
+    "configurable significance threshold"
+  ],
+  "constraints": [
+    "TypeScript only",
+    "no external databases or APIs",
+    "must work offline",
+    "reads and writes plain markdown files"
+  ],
+  "suggestedVariables": {
+    "project_name": "ice-reflection-engine",
+    "display_name": "ice-reflection-engine",
+    "description": "A TypeScript CLI that analyzes an AI agent's daily memory logs and distills them into structured long-term memory entries. Reads YYYY-MM-DD.md files, identifies patterns and decisions, and writes curated summaries to MEMORY.md using semantic scoring.",
+    "ai_context": true,
+    "language": "typescript",
+    "cli_framework": "commander",
+    "test_strategy": "unit-tests",
+    "use_config_file": true,
+    "config_format": "json",
+    "distribution": "binary"
+  },
+  "playbooks": [
+    "/tools/agent-planforge/playbooks/planning-and-scoping.md",
+    "agent-engineering-playbook/playbooks/01-project-setup.md",
+    "agent-engineering-playbook/playbooks/02-architecture.md",
+    "agent-engineering-playbook/playbooks/03-team-roles.md",
+    "agent-engineering-playbook/playbooks/04-design-principles.md",
+    "agent-engineering-playbook/playbooks/05-development-workflow.md",
+    "agent-engineering-playbook/playbooks/06-testing-strategy.md",
+    "agent-engineering-playbook/playbooks/07-quality-assurance.md",
+    "agent-engineering-playbook/playbooks/08-documentation.md"
+  ],
+  "aiContextFiles": [
+    ".ai/AGENTS.md",
+    ".ai/ARCHITECTURE.md",
+    ".ai/TASKS.md",
+    ".ai/DECISIONS.md"
+  ]
+}

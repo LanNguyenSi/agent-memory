@@ -1,0 +1,22 @@
+{
+  "projectName": "ice-reflection-engine",
+  "summary": "A TypeScript CLI that analyzes an AI agent's daily memory logs and distills them into structured long-term memory entries. Reads YYYY-MM-DD.md files, identifies patterns and decisions, and writes curated summaries to MEMORY.md using semantic scoring.",
+  "targetUsers": [
+    "AI agents running on OpenClaw",
+    "developers managing agent memory"
+  ],
+  "coreFeatures": [
+    "scan daily memory files in configurable directory",
+    "extract decisions, lessons, and key events using heuristic analysis",
+    "score entries by significance and recency",
+    "write distilled summaries to MEMORY.md without overwriting existing content",
+    "dry-run mode to preview changes before writing",
+    "configurable significance threshold"
+  ],
+  "constraints": [
+    "TypeScript only",
+    "no external databases or APIs",
+    "must work offline",
+    "reads and writes plain markdown files"
+  ]
+}

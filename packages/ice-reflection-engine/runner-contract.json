@@ -1,0 +1,178 @@
+{
+  "version": "1.0",
+  "summary": "Machine-readable contract for downstream agents consuming the planforge handoff manifest.",
+  "statusLifecycle": [
+    {
+      "id": "queued",
+      "meaning": "Step exists but should not start yet."
+    },
+    {
+      "id": "ready",
+      "meaning": "Dependencies are satisfied and the step may begin."
+    },
+    {
+      "id": "in_progress",
+      "meaning": "The agent is actively working on the step."
+    },
+    {
+      "id": "blocked",
+      "meaning": "A blocker prevents progress and escalation is required."
+    },
+    {
+      "id": "partial",
+      "meaning": "Partial outputs exist but acceptance criteria are not yet satisfied."
+    },
+    {
+      "id": "completed",
+      "meaning": "The step finished with required outputs and status evidence."
+    }
+  ],
+  "requiredStatusFields": [
+    "stepId",
+    "agentId",
+    "status",
+    "updatedAt",
+    "summary",
+    "blockers",
+    "outputArtifacts"
+  ],
+  "requiredResultFields": [
+    "stepId",
+    "agentId",
+    "completedAt",
+    "outcomeSummary",
+    "artifacts",
+    "openIssues",
+    "nextStepRecommendations"
+  ],
+  "stepContracts": [
+    {
+      "stepId": "step-1-intake-clarification",
+      "name": "Resolve Missing Planning Inputs",
+      "requiredInputFiles": [
+        "plan-output.json",
+        "intake-questionnaire.md",
+        "project-charter.md",
+        ".ai/TASKS.md",
+        "prompts/intake-followup.md"
+      ],
+      "expectedOutputFiles": [
+        "updated planning input",
+        "clarified assumptions",
+        "resolved blocker answers"
+      ],
+      "statusFiles": {
+        "input": "runner/step-1-intake-clarification/input.json",
+        "status": "runner/step-1-intake-clarification/status.json",
+        "result": "runner/step-1-intake-clarification/result.json",
+        "blockers": "runner/step-1-intake-clarification/blockers.json"
+      },
+      "allowedStatuses": [
+        "queued",
+        "ready",
+        "in_progress",
+        "blocked",
+        "partial",
+        "completed"
+      ],
+      "dependencyPolicy": {
+        "hard": [],
+        "soft": []
+      },
+      "approvalGate": {
+        "required": false,
+        "approvers": [
+          "human owner"
+        ],
+        "reason": "No explicit approval gate required beyond normal review."
+      }
+    },
+    {
+      "stepId": "step-2-architecture-review",
+      "name": "Review Architecture Direction",
+      "requiredInputFiles": [
+        "plan-output.json",
+        "architecture-overview.md",
+        ".ai/ARCHITECTURE.md",
+        "delivery-plan.md",
+        "prompts/architecture-analysis.md"
+      ],
+      "expectedOutputFiles": [
+        "architecture review notes",
+        "ADR update proposals",
+        "recommended architecture adjustments"
+      ],
+      "statusFiles": {
+        "input": "runner/step-2-architecture-review/input.json",
+        "status": "runner/step-2-architecture-review/status.json",
+        "result": "runner/step-2-architecture-review/result.json",
+        "blockers": "runner/step-2-architecture-review/blockers.json"
+      },
+      "allowedStatuses": [
+        "queued",
+        "ready",
+        "in_progress",
+        "blocked",
+        "partial",
+        "completed"
+      ],
+      "dependencyPolicy": {
+        "hard": [
+          "step-1-intake-clarification"
+        ],
+        "soft": []
+      },
+      "approvalGate": {
+        "required": false,
+        "approvers": [
+          "human owner"
+        ],
+        "reason": "No explicit approval gate required beyond normal review."
+      }
+    },
+    {
+      "stepId": "step-4-wave-1-execution",
+      "name": "Execute First Delivery Wave",
+      "requiredInputFiles": [
+        "plan-output.json",
+        "delivery-plan.md",
+        ".ai/TASKS.md",
+        "prompts/execution-next-wave.md",
+        "tasks/001-write-project-charter-and-architecture-baseline.md",
+        "tasks/002-set-up-repository-and-delivery-baseline.md"
+      ],
+      "expectedOutputFiles": [
+        "implemented wave-1 scope",
+        "updated tests and docs",
+        "next-wave handoff notes"
+      ],
+      "statusFiles": {
+        "input": "runner/step-4-wave-1-execution/input.json",
+        "status": "runner/step-4-wave-1-execution/status.json",
+        "result": "runner/step-4-wave-1-execution/result.json",
+        "blockers": "runner/step-4-wave-1-execution/blockers.json"
+      },
+      "allowedStatuses": [
+        "queued",
+        "ready",
+        "in_progress",
+        "blocked",
+        "partial",
+        "completed"
+      ],
+      "dependencyPolicy": {
+        "hard": [
+          "step-2-architecture-review"
+        ],
+        "soft": []
+      },
+      "approvalGate": {
+        "required": false,
+        "approvers": [
+          "human owner"
+        ],
+        "reason": "No explicit approval gate required beyond normal review."
+      }
+    }
+  ]
+}

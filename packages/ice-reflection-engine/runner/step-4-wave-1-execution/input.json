@@ -1,0 +1,11 @@
+{
+  "stepId": "step-4-wave-1-execution",
+  "requiredInputFiles": [
+    "plan-output.json",
+    "delivery-plan.md",
+    ".ai/TASKS.md",
+    "prompts/execution-next-wave.md",
+    "tasks/001-write-project-charter-and-architecture-baseline.md",
+    "tasks/002-set-up-repository-and-delivery-baseline.md"
+  ]
+}

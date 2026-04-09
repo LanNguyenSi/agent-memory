@@ -1,0 +1,27 @@
+{
+  "name": "ice-reflection-engine",
+  "version": "0.1.0",
+  "description": "Analyze AI agent daily memory logs and distill them into structured long-term memory entries",
+  "main": "dist/main.js",
+  "bin": {
+    "ice-reflect": "dist/main.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/main.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
+  },
+  "overrides": {
+    "esbuild": ">=0.25.0"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "stepId": "step-2-architecture-review",
+  "requiredInputFiles": [
+    "plan-output.json",
+    "architecture-overview.md",
+    ".ai/ARCHITECTURE.md",
+    "delivery-plan.md",
+    "prompts/architecture-analysis.md"
+  ]
+}
