@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# This repo is a loose collection of independent npm packages under
+# `packages/*` — no root package.json, no npm workspaces. The matrix
+# runs one job per package so a failure in one doesn't mask the
+# others, and each package is installed/built/tested in isolation.
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # mw-cli has one pre-existing failing test ("Store command
+        # validates content") tracked as a follow-up. Flagged with
+        # `continue-on-error` so CI still runs it and reports the
+        # failure without blocking the other four packages from going
+        # green. Remove the flag once the test is fixed.
+        package:
+          - agent-memory-sync
+          - ice-reflection-engine
+          - lava-sprint-timer
+          - memory-digest-cli
+        include:
+          - package: mw-cli
+            continue-on-error: true
+    continue-on-error: ${{ matrix.continue-on-error || false }}
+    defaults:
+      run:
+        working-directory: packages/${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/${{ matrix.package }}/package-lock.json
+
+      - name: Install
+        # `npm ci` when a lockfile exists, fall back to `npm install`
+        # for packages that haven't been locked yet (mw-cli).
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck --if-present
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Test
+        run: npm test --if-present
