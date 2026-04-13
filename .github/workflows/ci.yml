@@ -21,20 +21,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # mw-cli has one pre-existing failing test ("Store command
-        # validates content") tracked as a follow-up. Flagged with
-        # `continue-on-error` so CI still runs it and reports the
-        # failure without blocking the other four packages from going
-        # green. Remove the flag once the test is fixed.
         package:
           - agent-memory-sync
           - ice-reflection-engine
           - lava-sprint-timer
           - memory-digest-cli
-        include:
-          - package: mw-cli
-            continue-on-error: true
-    continue-on-error: ${{ matrix.continue-on-error || false }}
+          - mw-cli
     defaults:
       run:
         working-directory: packages/${{ matrix.package }}

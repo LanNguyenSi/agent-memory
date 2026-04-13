@@ -85,6 +85,15 @@ test('Config command creates config file', () => {
 });
 
 // Test 5: Store command validates content
+//
+// Calling `mw` with absolutely no arguments short-circuits to
+// `help` and exits 0 (see cli.js `if (!command || command === 'help')`),
+// so we cannot test the store-validation path with an empty argv.
+// Instead we invoke the default store branch with ONLY a flag —
+// `--tags test` parses as the first arg (truthy, no help
+// short-circuit), falls through to the default store handler, and
+// the content-stripping regex leaves an empty string, which is
+// the real "missing content" condition we want to pin.
 test('Store command validates content', () => {
   // Need valid config for this test
   const tempConfig = {
@@ -92,17 +101,17 @@ test('Store command validates content', () => {
     apiKey: 'test_key',
     agentId: 'test_agent'
   };
-  
+
   let backup;
   if (fs.existsSync(CONFIG_PATH)) {
     backup = fs.readFileSync(CONFIG_PATH, 'utf8');
   }
-  
+
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(tempConfig));
-    
+
     try {
-      execSync(`node ${CLI_PATH}`, { encoding: 'utf8', stdio: 'pipe' });
+      execSync(`node ${CLI_PATH} --tags test`, { encoding: 'utf8', stdio: 'pipe' });
       assert(false, 'Should have failed with missing content');
     } catch (err) {
       assert(err.status === 1, 'Should exit with error code 1');
