@@ -1,6 +1,8 @@
 # Agent Memory
 
-Memory management tools for AI agents - sync, weave, digest, reflect, and persist memories across sessions.
+**Persistent Memory · Sync, weave, and digest agent memories across sessions and environments.**
+
+Agents lose state the moment a session ends. Context windows truncate, processes restart, and the model that felt "caught up" five minutes ago is a blank slate on the next run. Agent Memory is the persistence layer that closes that gap — so an agent can pick up where it left off, across sessions, machines, and platforms.
 
 ## Packages
 
