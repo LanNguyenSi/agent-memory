@@ -9,7 +9,7 @@
     "memory-router-mcp": "./dist/mcp/server.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js dist/hooks/user-prompt-submit.js dist/hooks/pre-tool-use.js dist/mcp/server.js",
     "typecheck": "tsc -p tsconfig.test.json",
     "lint": "npm run typecheck",
     "format": "prettier --write .",
