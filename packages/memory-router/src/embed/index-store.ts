@@ -6,10 +6,25 @@
 
 const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
+const { createHash } = require('node:crypto');
+
+// Full sha256 hex (64 chars). A truncated prefix would be small enough that
+// a collision returns the wrong embedding silently — the row is keyed by
+// hash alone, so two prompts with the same prefix would map to one cache
+// entry. Embedding rows are ~6 KB each; the extra 48 bytes per key are noise.
+function promptKey(prompt: string): string {
+  return createHash('sha256').update(prompt).digest('hex');
+}
 
 interface IndexStoreOptions {
   path: string;
   dimensions: number;
+  // Query-embedding cache config. Optional so callers that only need the
+  // index (e.g. `memory-router index`) don't pay the extra DDL.
+  cache?: {
+    model: string;
+    capacity: number;
+  };
 }
 
 interface IndexEntry {
@@ -29,6 +44,12 @@ function openIndex(opts: IndexStoreOptions): {
   remove: (id: string) => void;
   listEntries: () => IndexEntry[];
   search: (queryEmbedding: number[], k: number) => SearchHit[];
+  // Query-embedding cache. Returns null when the cache is disabled or the
+  // entry is missing / stored under a different model. `putCachedQuery`
+  // overwrites stale-model rows lazily and enforces the LRU cap.
+  getCachedQuery: (prompt: string) => number[] | null;
+  putCachedQuery: (prompt: string, embedding: number[]) => void;
+  cacheSize: () => number;
   close: () => void;
 } {
   const db = new Database(opts.path);
@@ -104,6 +125,111 @@ function openIndex(opts: IndexStoreOptions): {
     return listStmt.all() as IndexEntry[];
   }
 
+  // Query-embedding cache. Identical prompts (e.g. "kannst du helfen") hit
+  // the Confidence Gate every session and re-pay an OpenAI embedding call —
+  // this table memoizes the prompt→vector mapping so repeats become a single
+  // sqlite SELECT. Lives in the same file as the index because both already
+  // share an open connection and a `memory-router index --rebuild` is
+  // expected to leave the cache intact.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS query_cache (
+      prompt_sha TEXT PRIMARY KEY,
+      model TEXT NOT NULL,
+      embedding BLOB NOT NULL,
+      accessed_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS query_cache_accessed_at_idx
+      ON query_cache(accessed_at);
+  `);
+
+  const cacheModel = opts.cache?.model;
+  const cacheCapacity = opts.cache?.capacity ?? 0;
+
+  const cacheSelectStmt = db.prepare(
+    'SELECT model, embedding FROM query_cache WHERE prompt_sha = ?',
+  );
+  const cacheTouchStmt = db.prepare(
+    'UPDATE query_cache SET accessed_at = ? WHERE prompt_sha = ?',
+  );
+  const cacheUpsertStmt = db.prepare(
+    `INSERT INTO query_cache (prompt_sha, model, embedding, accessed_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(prompt_sha) DO UPDATE SET
+       model = excluded.model,
+       embedding = excluded.embedding,
+       accessed_at = excluded.accessed_at`,
+  );
+  const cacheEvictStaleModelStmt = db.prepare(
+    'DELETE FROM query_cache WHERE model != ?',
+  );
+  const cacheCountStmt = db.prepare('SELECT COUNT(*) AS n FROM query_cache');
+  // Evict oldest rows beyond the cap. We pre-compute how many to drop
+  // because SQLite's DELETE doesn't accept LIMIT without a build flag.
+  const cacheEvictOldestStmt = db.prepare(
+    `DELETE FROM query_cache
+     WHERE prompt_sha IN (
+       SELECT prompt_sha FROM query_cache
+       ORDER BY accessed_at ASC
+       LIMIT ?
+     )`,
+  );
+
+  function vecFromBlob(blob: Buffer): number[] {
+    const f32 = new Float32Array(
+      blob.buffer,
+      blob.byteOffset,
+      blob.byteLength / Float32Array.BYTES_PER_ELEMENT,
+    );
+    return Array.from(f32);
+  }
+
+  function getCachedQuery(prompt: string): number[] | null {
+    if (!cacheModel) return null;
+    const row = cacheSelectStmt.get(promptKey(prompt)) as
+      | { model: string; embedding: Buffer }
+      | undefined;
+    if (!row) return null;
+    if (row.model !== cacheModel) return null;
+    cacheTouchStmt.run(Date.now(), promptKey(prompt));
+    return vecFromBlob(row.embedding);
+  }
+
+  // Wrap the stale-model evict + upsert + LRU-evict trio in a single
+  // transaction so a concurrent reader sees consistent state and the
+  // count → delete step doesn't race with another writer overshooting
+  // the cap.
+  const putCachedQueryTx = db.transaction(
+    (key: string, model: string, blob: Buffer, now: number, capacity: number) => {
+      cacheEvictStaleModelStmt.run(model);
+      cacheUpsertStmt.run(key, model, blob, now);
+      const { n } = cacheCountStmt.get() as { n: number };
+      if (n > capacity) {
+        cacheEvictOldestStmt.run(n - capacity);
+      }
+    },
+  );
+
+  function putCachedQuery(prompt: string, embedding: number[]): void {
+    if (!cacheModel || cacheCapacity <= 0) return;
+    if (embedding.length !== opts.dimensions) {
+      throw new Error(
+        `cached embedding dimension ${embedding.length} != index dimension ${opts.dimensions}`,
+      );
+    }
+    putCachedQueryTx(
+      promptKey(prompt),
+      cacheModel,
+      toBlob(embedding),
+      Date.now(),
+      cacheCapacity,
+    );
+  }
+
+  function cacheSize(): number {
+    const { n } = cacheCountStmt.get() as { n: number };
+    return n;
+  }
+
   // sqlite-vec's MATCH returns cosine *distance* in [0, 2]; similarity =
   // 1 - distance/2 maps it back to [0, 1] so callers can compare to a
   // threshold expressed as similarity.
@@ -136,7 +262,16 @@ function openIndex(opts: IndexStoreOptions): {
     db.close();
   }
 
-  return { upsert, remove, listEntries, search, close };
+  return {
+    upsert,
+    remove,
+    listEntries,
+    search,
+    getCachedQuery,
+    putCachedQuery,
+    cacheSize,
+    close,
+  };
 }
 
 module.exports = { openIndex };
