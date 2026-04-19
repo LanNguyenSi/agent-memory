@@ -13,6 +13,17 @@ const EMBED_DIMENSIONS = 1536;
 const INDEX_SUBDIR = '.memory-router';
 const INDEX_FILENAME = 'index.sqlite';
 
+// Hard cap on the query-embedding cache. Evicts oldest by `accessed_at`
+// once exceeded. 1000 covers the long tail of repeated vague prompts
+// without bloating the sqlite file (~6 MB at 1536 floats × 4 bytes).
+const QUERY_CACHE_CAPACITY = 1000;
+
+function debug(msg: string): void {
+  if (process.env.MEMORY_ROUTER_DEBUG === '1') {
+    process.stderr.write(`memory-router: ${msg}\n`);
+  }
+}
+
 function indexPath(memoryDir: string): string {
   return join(memoryDir, INDEX_SUBDIR, INDEX_FILENAME);
 }
@@ -119,14 +130,25 @@ async function semanticSearch(
     return [];
   }
 
-  const store = openIndex({ path: idx, dimensions: EMBED_DIMENSIONS });
+  const store = openIndex({
+    path: idx,
+    dimensions: EMBED_DIMENSIONS,
+    cache: { model: cfg.model, capacity: QUERY_CACHE_CAPACITY },
+  });
   try {
-    const [queryVec] = await embedBatch({
-      apiKey: cfg.apiKey,
-      model: cfg.model,
-      baseUrl: cfg.baseUrl,
-      inputs: [prompt],
-    });
+    let queryVec = store.getCachedQuery(prompt);
+    if (queryVec) {
+      debug(`query cache hit (size=${store.cacheSize()})`);
+    } else {
+      debug(`query cache miss — embedding (size=${store.cacheSize()})`);
+      [queryVec] = await embedBatch({
+        apiKey: cfg.apiKey,
+        model: cfg.model,
+        baseUrl: cfg.baseUrl,
+        inputs: [prompt],
+      });
+      store.putCachedQuery(prompt, queryVec);
+    }
     const hits = store.search(queryVec, k);
     const byId = new Map(memories.map((m) => [m.id, m]));
     return hits

@@ -123,6 +123,17 @@ OPENAI_API_KEY=sk-... memory-router index ~/.claude/projects/PROJECT/memory
 
 The hook never builds the index inline — cold-start latency would block every prompt by seconds. Run `memory-router index` manually or wire it into a cron/agent-memory-sync post-sync step.
 
+#### Query-embedding cache
+
+Repeated vague prompts (`"mal schauen"`, `"check mal"`) re-pay one OpenAI embedding call (~150–300 ms + ~$0.00002) every time the Confidence Gate fires. The router memoizes prompt → embedding in the same `index.sqlite` file under a `query_cache` table:
+
+- **Key:** sha256(prompt) prefix (8 bytes, plenty for the LRU cap).
+- **Eviction:** LRU by `accessed_at`, hard cap of 1000 entries. Switching `MEMORY_ROUTER_EMBED_MODEL` lazily evicts entries stored under the previous model on the next put.
+- **Persistence:** survives hook process restarts (the file is the only state).
+- **Observability:** set `MEMORY_ROUTER_DEBUG=1` to see `query cache hit (size=N)` / `query cache miss — embedding (size=N)` lines on stderr without polluting the hook's stdout contract.
+
+No flag turns the cache off — it's always on when the Confidence Gate is. `memory-router index` does not touch the cache; only switching embed models does.
+
 ### Programmatically
 
 ```typescript
