@@ -26,6 +26,7 @@ jobs:
           - ice-reflection-engine
           - lava-sprint-timer
           - memory-digest-cli
+          - memory-router
           - mw-cli
     defaults:
       run:
