@@ -98,11 +98,22 @@ const hits = resolve({ prompt: 'merge PR 42' }, memories);
 **v1 — scaffold.**
 
 - ✅ Topic Gate (deterministic keyword → topic map)
-- ✅ Tool Gate (regex match on Bash command + tool-name match)
-- ✅ Confidence Gate — ambiguity heuristic wired; semantic search is stubbed pending sqlite-vec integration
+- ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
+- 🚧 Confidence Gate — ambiguity heuristic wired, but the semantic match that would actually produce hits is stubbed pending sqlite-vec integration. Gate currently returns no hits at runtime.
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract
 - 🚧 MCP server (`memory_search`, `memory_apply`, `memory_resolve`) — stub only
 - 🚧 Embedding pipeline — follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))
+
+## Trust Model
+
+Memory files under `MEMORY_ROUTER_DIR` are treated as **author-trusted code**. They ship regexes (`triggers.command_pattern`), keyword lists, and markdown bodies that directly shape Claude's context. In the current deployment they live alongside your Claude-Code session (`~/.claude/...`) and are synced via [agent-memory-sync](../agent-memory-sync) — i.e. you wrote them.
+
+The tool gate defends against **author mistakes**, not a malicious author:
+
+- `command_pattern` is rejected when it exceeds 200 characters or contains an obvious nested-quantifier shape (`(a+)+`, `(a*)*`, etc.) — the two most common ReDoS footguns.
+- No sandbox / `vm` timeout: a subtle pathological pattern would still stall the PreToolUse hook. Don't point `MEMORY_ROUTER_DIR` at untrusted content.
+
+If memory files ever arrive from a shared or remote source, tighten this before deploying: add a regex execution timeout, move matching off the hook hot path, or move to a backtracking-free engine (e.g. `re2`).
 
 ## Non-Goals
 

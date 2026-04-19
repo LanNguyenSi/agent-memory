@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { loadMemoriesFromDir } = require('../src/memory/loader');
-const { toolGate } = require('../src/gates/tool');
+const { toolGate, isSafePattern } = require('../src/gates/tool');
 const { resolve } = require('../src/router');
 
 const fixturesDir = path.join(__dirname, 'fixtures', 'memories');

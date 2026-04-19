@@ -1,3 +1,16 @@
+const MAX_PATTERN_LEN = 200;
+// Detects the most common catastrophic-backtracking shapes: nested
+// quantifiers like (a+)+, (a*)+, (a|b)+ followed by another quantifier.
+// Not a full safe-regex audit — a pragmatic guard for author mistakes in
+// trusted memory files.
+const NESTED_QUANTIFIER_RE = /\([^)]*[+*][^)]*\)[+*?]/;
+
+function isSafePattern(pattern: string): boolean {
+  if (pattern.length > MAX_PATTERN_LEN) return false;
+  if (NESTED_QUANTIFIER_RE.test(pattern)) return false;
+  return true;
+}
+
 function commandString(ctx: RouterContext): string | undefined {
   if (!ctx.tool) return undefined;
   if (ctx.tool.name !== 'Bash') return undefined;
@@ -28,6 +41,12 @@ const toolGate: Gate = {
       }
 
       if (cmd && t.command_pattern) {
+        if (!isSafePattern(t.command_pattern)) {
+          process.stderr.write(
+            `memory-router: rejected unsafe command_pattern in ${memory.path}\n`,
+          );
+          continue;
+        }
         let re: RegExp;
         try {
           re = new RegExp(t.command_pattern);
@@ -48,4 +67,4 @@ const toolGate: Gate = {
   },
 };
 
-module.exports = { toolGate };
+module.exports = { toolGate, isSafePattern };

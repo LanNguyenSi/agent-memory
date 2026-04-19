@@ -16,7 +16,7 @@ const TOPIC_PATTERNS: Record<Topic, RegExp[]> = {
     /\btruncate\s+table\b/i,
   ],
   workflow: [
-    /\bPRs?\b/,
+    /\bPRs?\b/i,
     /\bpull\s+request\b/i,
     /\breview(?:er|ing)?\b/i,
     /\bmerg(?:e|ing|ed)\b/i,

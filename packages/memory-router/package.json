@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -p tsconfig.test.json",
     "lint": "npm run typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

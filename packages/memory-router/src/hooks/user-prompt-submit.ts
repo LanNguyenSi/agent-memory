@@ -6,7 +6,6 @@ const { readStdin, writeStdout } = require('./io');
 interface HookInput {
   prompt?: string;
   cwd?: string;
-  recent_files?: string[];
   memory_dir?: string;
 }
 
@@ -24,7 +23,6 @@ async function main(): Promise<void> {
   const ctx: RouterContext = {
     prompt: input.prompt,
     cwd: input.cwd,
-    recentFiles: input.recent_files,
   };
 
   const hits: GateHit[] = resolve(ctx, memories);
