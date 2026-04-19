@@ -64,6 +64,7 @@ interface FileChange {
   existing: Record<string, unknown>;
   merged: Record<string, unknown>;
   body: string;
+  eol: '\n' | '\r\n';
   commandHints: string[];
   skipped: boolean;
   reason?: string;
@@ -89,12 +90,27 @@ function main(): void {
     process.exit(1);
   }
 
+  if (args.only && files.length === 0) {
+    process.stderr.write(`error: no file matched --only ${args.only}\n`);
+    process.exit(1);
+  }
+
   let changed = 0;
   let skipped = 0;
+  let errored = 0;
   const hintedFiles: FileChange[] = [];
 
   for (const file of files) {
-    const change: FileChange = planChange(file);
+    let change: FileChange;
+    try {
+      change = planChange(file);
+    } catch (err: unknown) {
+      // Never abort the whole run on a single unreadable/malformed file —
+      // an --apply partial state is worse than a skipped file.
+      process.stderr.write(`error reading ${file}: ${String(err)}\n`);
+      errored++;
+      continue;
+    }
 
     if (change.skipped) {
       skipped++;
@@ -106,14 +122,22 @@ function main(): void {
     process.stdout.write(`${change.id}\n`);
     for (const line of diff) process.stdout.write(`  ${line}\n`);
 
-    if (args.apply) applyChange(change);
+    if (args.apply) {
+      try {
+        applyChange(change);
+      } catch (err: unknown) {
+        process.stderr.write(`error writing ${file}: ${String(err)}\n`);
+        errored++;
+        continue;
+      }
+    }
     changed++;
 
     if (change.commandHints.length > 0) hintedFiles.push(change);
   }
 
   process.stdout.write(
-    `\n${args.apply ? 'applied' : 'would apply'} to ${changed} file(s), skipped ${skipped}\n`,
+    `\n${args.apply ? 'applied' : 'would apply'} to ${changed} file(s), skipped ${skipped}${errored ? `, errored ${errored}` : ''}\n`,
   );
 
   if (hintedFiles.length > 0) {

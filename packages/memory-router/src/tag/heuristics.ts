@@ -1,8 +1,24 @@
 const { scoreTopics } = require('../topic-patterns');
 
-// Matches the imperative urgency of a feedback memory. "never", "must",
-// "always" → hard-rule / critical. Otherwise → normal.
-const CRITICAL_RE = /\b(never|must\s+never|must|always|critical|will\s+destroy|production|overwrites?|silently\s+(drops?|lose?s?)|data\s+loss|blocker)\b/i;
+// Imperative-urgency signals. Each is strong on its own; we still require two
+// distinct hits in the haystack before flipping to `critical` (see
+// proposeFrontmatter below) so phrases like "nothing critical" or "we must"
+// in passing don't over-promote a routine feedback memory.
+//
+// Deliberately excluded: bare `must`, `always`, `production`. Too generic —
+// "you must ensure" or "always in production" are descriptive, not
+// prescriptive. If needed, author tags severity manually.
+const CRITICAL_SIGNALS: RegExp[] = [
+  /\bnever\b/i,
+  /\bmust\s+never\b/i,
+  /\bmust\s+not\b/i,
+  /\bsilently\s+(drops?|lose?s?|fails?)\b/i,
+  /\bdata\s+loss\b/i,
+  /\bwill\s+destroy\b/i,
+  /\bdestructive\b/i,
+  /\bblocker\b/i,
+  /\boverwrites?\b/i,
+];
 
 // Inline code snippets that *look* like shell commands the user might run
 // accidentally. We never auto-generate a command_pattern — too risky — but
@@ -49,7 +65,10 @@ function proposeFrontmatter(input: HeuristicInput): Proposal {
 
   if (input.type === 'feedback') {
     const haystack = `${input.name}\n${input.description}\n${input.body}`;
-    out.severity = CRITICAL_RE.test(haystack) ? 'critical' : 'normal';
+    const criticalHits = CRITICAL_SIGNALS.filter((re) => re.test(haystack)).length;
+    // Two distinct signals required: a single "never" in a long body is
+    // usually a warning in passing, not the rule itself.
+    out.severity = criticalHits >= 2 ? 'critical' : 'normal';
   }
 
   const hints = new Set<string>();

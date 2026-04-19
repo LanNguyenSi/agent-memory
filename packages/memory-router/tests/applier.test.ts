@@ -74,6 +74,33 @@ deploy deploy rollback.
   }
 });
 
+test('apply preserves CRLF line endings', () => {
+  const dir = mkTmp();
+  const file = path.join(dir, 'feedback_crlf.md');
+  const lines = [
+    '---',
+    'name: CRLF rule',
+    'description: deploy release rollback every time',
+    'type: feedback',
+    '---',
+    '',
+    'deploy deploy release rollback',
+    '',
+  ];
+  fs.writeFileSync(file, lines.join('\r\n'));
+
+  try {
+    const change = planChange(file);
+    assert.equal(change.eol, '\r\n');
+    applyChange(change);
+    const after = fs.readFileSync(file, 'utf8');
+    assert.ok(after.includes('\r\n'), 'should still contain CRLF');
+    assert.ok(!/[^\r]\n/.test(after), 'should not introduce lone LFs');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('memory without a topic match keeps its frontmatter unchanged', () => {
   const dir = mkTmp();
   const file = path.join(dir, 'reference_plain.md');

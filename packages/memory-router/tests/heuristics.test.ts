@@ -6,8 +6,8 @@ test('feedback with deployment-heavy body gets [deployment] + critical', () => {
   const p = proposeFrontmatter({
     id: 'feedback_vps_compose_drift',
     name: 'VPS compose drift',
-    description: 'Never carry deployment patches as uncommitted local mods',
-    body: 'Always deploy via docker compose. Never force-push. Production must use -f docker-compose.prod.yml.',
+    description: 'Never carry deployment patches — will destroy deploy state',
+    body: 'Deploy via docker compose. Never force-push. Overwrites production safely.',
     type: 'feedback',
   });
   assert.ok(p.topics?.includes('deployment'));
@@ -58,6 +58,28 @@ test('caps at 2 topics even with many matches', () => {
     type: 'feedback',
   });
   assert.ok(p.topics!.length <= 2);
+});
+
+test('"nothing critical" in body does NOT flip severity to critical', () => {
+  const p = proposeFrontmatter({
+    id: 'x',
+    name: 'Minor style hint',
+    description: 'A mild preference about testing style',
+    body: 'You must not worry here — nothing critical. Just a testing preference about mock cleanup.',
+    type: 'feedback',
+  });
+  assert.equal(p.severity, 'normal');
+});
+
+test('two distinct critical signals flip to critical', () => {
+  const p = proposeFrontmatter({
+    id: 'x',
+    name: 'Never delete the prod db',
+    description: 'Will destroy data and silently drops future writes',
+    body: 'deploy deploy deploy',
+    type: 'feedback',
+  });
+  assert.equal(p.severity, 'critical');
 });
 
 test('dangerous command hint is extracted from body but not auto-applied', () => {

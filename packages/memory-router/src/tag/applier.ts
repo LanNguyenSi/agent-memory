@@ -1,5 +1,11 @@
-const { readFileSync, readdirSync, statSync, writeFileSync } = require('node:fs');
-const { join } = require('node:path');
+const {
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} = require('node:fs');
+const { basename, join } = require('node:path');
 const { parse: parseYaml, stringify: stringifyYaml } = require('yaml');
 const { proposeFrontmatter } = require('./heuristics');
 
@@ -11,6 +17,7 @@ interface FileChange {
   existing: Record<string, unknown>;
   merged: Record<string, unknown>;
   body: string;
+  eol: '\n' | '\r\n';
   commandHints: string[];
   skipped: boolean;
   reason?: string;
@@ -30,8 +37,10 @@ function listMemoryFiles(dir: string, onlyId?: string): string[] {
 }
 
 function planChange(path: string): FileChange {
-  const id = path.replace(/^.*\//, '').replace(/\.md$/, '');
-  const source = readFileSync(path, 'utf8');
+  const id = basename(path, '.md');
+  const source = readFileSync(path, 'utf8') as string;
+  // Detect the file's line-ending style so we preserve it on write.
+  const eol: '\n' | '\r\n' = /\r\n/.test(source) ? '\r\n' : '\n';
   const match = FRONTMATTER_RE.exec(source);
 
   if (!match) {
@@ -41,6 +50,7 @@ function planChange(path: string): FileChange {
       existing: {},
       merged: {},
       body: '',
+      eol,
       commandHints: [],
       skipped: true,
       reason: 'no frontmatter',
@@ -60,6 +70,7 @@ function planChange(path: string): FileChange {
       existing,
       merged: existing,
       body,
+      eol,
       commandHints: [],
       skipped: true,
       reason: 'frontmatter missing name/type',
@@ -91,21 +102,32 @@ function planChange(path: string): FileChange {
     existing,
     merged,
     body,
+    eol,
     commandHints: proposal.commandHints ?? [],
     skipped: !added,
     reason: added ? undefined : 'no new fields to add',
   };
 }
 
-function renderFile(merged: Record<string, unknown>, body: string): string {
-  const yaml = stringifyYaml(merged).trimEnd();
-  return `---\n${yaml}\n---\n\n${body}`;
+function renderFile(
+  merged: Record<string, unknown>,
+  body: string,
+  eol: '\n' | '\r\n',
+): string {
+  // yaml.stringify emits LF; normalize to the file's original ending before
+  // glueing frontmatter + body back together.
+  const yaml = stringifyYaml(merged).trimEnd().replace(/\n/g, eol);
+  return `---${eol}${yaml}${eol}---${eol}${eol}${body}`;
 }
 
 function applyChange(change: FileChange): void {
   if (change.skipped) return;
-  const contents = renderFile(change.merged, change.body);
-  writeFileSync(change.path, contents);
+  const contents = renderFile(change.merged, change.body, change.eol);
+  // Atomic write: a Ctrl-C mid-writeFileSync would leave the target truncated.
+  // write tmp then rename — rename is atomic on a single filesystem.
+  const tmp = `${change.path}.memrouter.${process.pid}.tmp`;
+  writeFileSync(tmp, contents);
+  renameSync(tmp, change.path);
 }
 
 module.exports = { listMemoryFiles, planChange, applyChange, renderFile };
