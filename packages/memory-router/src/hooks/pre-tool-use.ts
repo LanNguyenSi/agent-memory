@@ -6,7 +6,7 @@ const { renderHitsAsContext } = require('../render');
 const { readStdin } = require('./io');
 
 // Claude Code PreToolUse hook input. We only consume tool_name / tool_input /
-// cwd; the full schema also carries session_id / transcript_path / tool_use_id.
+// cwd; the full schema also carries session_id / transcript_path.
 // See: https://code.claude.com/docs/en/hooks.md
 interface HookInput {
   tool_name?: string;
