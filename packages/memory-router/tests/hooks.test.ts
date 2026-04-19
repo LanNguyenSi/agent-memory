@@ -29,6 +29,7 @@ test('user-prompt-submit emits hookSpecificOutput.additionalContext for a topic 
   assert.equal(code, 0);
   const parsed = JSON.parse(stdout);
   assert.ok(parsed.hookSpecificOutput);
+  assert.equal(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
   assert.match(parsed.hookSpecificOutput.additionalContext, /Stacked PR base/);
   assert.match(
     parsed.hookSpecificOutput.additionalContext,
@@ -51,6 +52,7 @@ test('pre-tool-use emits hookSpecificOutput for git push --force', () => {
   });
   assert.equal(code, 0);
   const parsed = JSON.parse(stdout);
+  assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.match(
     parsed.hookSpecificOutput.additionalContext,
     /No force-push to shared branches/,

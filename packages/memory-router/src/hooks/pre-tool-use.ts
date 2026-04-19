@@ -36,7 +36,12 @@ async function main(): Promise<void> {
   // destructive ops. Deferred until we have a real critical-severity
   // corpus to calibrate against.
   process.stdout.write(
-    `${JSON.stringify({ hookSpecificOutput: { additionalContext } })}\n`,
+    `${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        additionalContext,
+      },
+    })}\n`,
   );
 }
 
