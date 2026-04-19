@@ -49,7 +49,12 @@ async function main(): Promise<void> {
   if (!additionalContext) return;
 
   process.stdout.write(
-    `${JSON.stringify({ hookSpecificOutput: { additionalContext } })}\n`,
+    `${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext,
+      },
+    })}\n`,
   );
 }
 
