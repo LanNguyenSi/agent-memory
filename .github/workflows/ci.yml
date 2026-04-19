@@ -50,6 +50,16 @@ jobs:
             npm install --no-audit --no-fund
           fi
 
+      # Native-dep smoke: fail fast on CI when a native addon's ABI doesn't
+      # match this runner's Node. memory-router ships better-sqlite3 +
+      # sqlite-vec; a missing binding would otherwise show up as an opaque
+      # test failure later. Cheap no-op for pure-JS packages.
+      - name: Native-dep smoke
+        run: |
+          if [ "${{ matrix.package }}" = "memory-router" ]; then
+            node -e "const s = require('sqlite-vec'); const D = require('better-sqlite3'); const db = new D(':memory:'); s.load(db); console.log('native deps OK');"
+          fi
+
       - name: Typecheck
         run: npm run typecheck --if-present
 

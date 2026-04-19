@@ -33,6 +33,11 @@ function openIndex(opts: IndexStoreOptions): {
 } {
   const db = new Database(opts.path);
   sqliteVec.load(db);
+  // WAL lets a hook reader coexist with a CLI writer rebuilding the index.
+  // busy_timeout gives SQLite 2 seconds to clear a write lock instead of
+  // failing the hook immediately on SQLITE_BUSY.
+  db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 2000');
 
   // Metadata table: what we have indexed + the mtime at index time.
   db.exec(`
@@ -66,17 +71,26 @@ function openIndex(opts: IndexStoreOptions): {
     return Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength);
   }
 
+  // Wrap entries + vec writes in a single transaction so a concurrent
+  // reader never observes an entries row whose vec row has been deleted
+  // but not yet reinserted. better-sqlite3 transactions are synchronous.
+  const upsertTx = db.transaction(
+    (id: string, mtime: number, blob: Buffer) => {
+      upsertEntry.run(id, mtime);
+      const row = selectRowid.get(id) as { rowid: number };
+      const rowid = BigInt(row.rowid);
+      deleteVec.run(rowid);
+      insertVec.run(rowid, blob);
+    },
+  );
+
   function upsert(id: string, mtime: number, embedding: number[]): void {
     if (embedding.length !== opts.dimensions) {
       throw new Error(
         `embedding dimension ${embedding.length} != index dimension ${opts.dimensions}`,
       );
     }
-    upsertEntry.run(id, mtime);
-    const row = selectRowid.get(id) as { rowid: number };
-    const rowid = BigInt(row.rowid);
-    deleteVec.run(rowid);
-    insertVec.run(rowid, toBlob(embedding));
+    upsertTx(id, mtime, toBlob(embedding));
   }
 
   function remove(id: string): void {

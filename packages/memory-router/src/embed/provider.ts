@@ -12,10 +12,17 @@ interface EmbedOptions {
   model: string;
   baseUrl?: string;
   inputs: string[];
+  timeoutMs?: number;
 }
+
+// 5 s is plenty for a single embed call on healthy networks and bounds the
+// hook's worst-case prompt latency. Index rebuilds use the same timeout per
+// batch (64 inputs) which is the larger call.
+const DEFAULT_TIMEOUT_MS = 5000;
 
 async function embedBatch(opts: EmbedOptions): Promise<number[][]> {
   const base = (opts.baseUrl ?? 'https://api.openai.com').replace(/\/+$/, '');
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const res = await fetch(`${base}/v1/embeddings`, {
     method: 'POST',
     headers: {
@@ -23,6 +30,7 @@ async function embedBatch(opts: EmbedOptions): Promise<number[][]> {
       Authorization: `Bearer ${opts.apiKey}`,
     },
     body: JSON.stringify({ model: opts.model, input: opts.inputs }),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
