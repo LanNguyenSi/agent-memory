@@ -90,6 +90,24 @@ Both binaries consume Claude-Code's hook stdin contract and emit
 
 on stdout — Claude Code injects `additionalContext` as system context for the model. When no gate fires, stdout stays empty to keep the model's context clean.
 
+### Migrating existing memories
+
+Legacy memory files (`name`/`description`/`type` only) never fire through the router — they're missing `topics:` and `triggers:`. The `memory-router tag` CLI proposes those fields based on a scored keyword match (name 3×, description 2×, body 1×; top 2 topics per file; minimum score 3):
+
+```bash
+# Dry-run — prints a diff per file and a stderr hint block for bodies that
+# mention dangerous shell commands worth a Tool-Gate trigger.
+memory-router tag ~/.claude/projects/PROJECT/memory
+
+# Commit the changes.
+memory-router tag ~/.claude/projects/PROJECT/memory --apply
+
+# Limit to a single file.
+memory-router tag ~/.claude/projects/PROJECT/memory --only feedback_stacked_pr_base
+```
+
+Idempotent — re-running is a no-op on files already tagged. Existing frontmatter is preserved; only `topics` and `severity` are added when missing. `triggers.command_pattern` is never auto-generated (too risky); candidates are printed to stderr for manual review.
+
 ### Programmatically
 
 ```typescript
