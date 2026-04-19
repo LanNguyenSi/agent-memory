@@ -2,24 +2,24 @@
 const { loadMemoriesFromDir } = require('../memory/loader');
 const { resolve } = require('../router');
 const { toolGate } = require('../gates/tool');
-const { readStdin, writeStdout } = require('./io');
+const { renderHitsAsContext } = require('../render');
+const { readStdin } = require('./io');
 
+// Claude Code PreToolUse hook input. We only consume tool_name / tool_input /
+// cwd; the full schema also carries session_id / transcript_path.
+// See: https://code.claude.com/docs/en/hooks.md
 interface HookInput {
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   cwd?: string;
-  memory_dir?: string;
 }
 
 async function main(): Promise<void> {
   const raw = await readStdin();
   const input: HookInput = raw ? (JSON.parse(raw) as HookInput) : {};
 
-  const memoryDir = input.memory_dir ?? process.env.MEMORY_ROUTER_DIR;
-  if (!memoryDir || !input.tool_name) {
-    writeStdout({ hits: [], reason: 'missing memory_dir or tool_name' });
-    return;
-  }
+  const memoryDir = process.env.MEMORY_ROUTER_DIR;
+  if (!memoryDir || !input.tool_name) return;
 
   const memories = loadMemoriesFromDir(memoryDir);
   const ctx: RouterContext = {
@@ -28,15 +28,16 @@ async function main(): Promise<void> {
   };
 
   const hits: GateHit[] = resolve(ctx, memories, { gates: [toolGate] });
-  writeStdout({
-    hits: hits.map((h) => ({
-      id: h.memory.id,
-      path: h.memory.path,
-      gate: h.gate,
-      score: h.score,
-      reason: h.reason,
-    })),
-  });
+  const additionalContext = renderHitsAsContext(hits);
+  if (!additionalContext) return;
+
+  // TODO(15ca7a24): consider setting permissionDecision="ask" when any
+  // hit's memory has severity="critical" so the user explicitly confirms
+  // destructive ops. Deferred until we have a real critical-severity
+  // corpus to calibrate against.
+  process.stdout.write(
+    `${JSON.stringify({ hookSpecificOutput: { additionalContext } })}\n`,
+  );
 }
 
 main().catch((err: unknown) => {

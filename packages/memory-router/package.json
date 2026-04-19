@@ -13,6 +13,7 @@
     "lint": "npm run typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "pretest": "npm run build",
     "test": "node --import tsx --test tests/**/*.test.ts"
   },
   "engines": {

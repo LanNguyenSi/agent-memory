@@ -25,8 +25,4 @@ function readStdin(): Promise<string> {
   });
 }
 
-function writeStdout(obj: unknown): void {
-  process.stdout.write(`${JSON.stringify(obj)}\n`);
-}
-
-module.exports = { readStdin, writeStdout };
+module.exports = { readStdin };
