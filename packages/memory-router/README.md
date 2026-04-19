@@ -56,9 +56,13 @@ Wire the two hook binaries in your `~/.claude/settings.json`:
 
 ```json
 {
+  "env": {
+    "MEMORY_ROUTER_DIR": "/home/you/.claude/projects/YOURPROJECT/memory"
+  },
   "hooks": {
     "UserPromptSubmit": [
       {
+        "matcher": "",
         "hooks": [{
           "type": "command",
           "command": "memory-router-user-prompt-submit"
@@ -74,14 +78,17 @@ Wire the two hook binaries in your `~/.claude/settings.json`:
         }]
       }
     ]
-  },
-  "env": {
-    "MEMORY_ROUTER_DIR": "/home/you/.claude/projects/YOURPROJECT/memory"
   }
 }
 ```
 
-Both binaries read JSON from stdin (Claude-Code hook contract) and emit `{ "hits": [...] }` on stdout.
+Both binaries consume Claude-Code's hook stdin contract and emit
+
+```json
+{ "hookSpecificOutput": { "additionalContext": "<rendered markdown>" } }
+```
+
+on stdout — Claude Code injects `additionalContext` as system context for the model. When no gate fires, stdout stays empty to keep the model's context clean.
 
 ### Programmatically
 

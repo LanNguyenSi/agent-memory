@@ -1,40 +1,37 @@
 #!/usr/bin/env node
 const { loadMemoriesFromDir } = require('../memory/loader');
 const { resolve } = require('../router');
-const { readStdin, writeStdout } = require('./io');
+const { renderHitsAsContext } = require('../render');
+const { readStdin } = require('./io');
 
+// Claude Code UserPromptSubmit hook input. The full schema also carries
+// session_id / transcript_path / permission_mode — we only need prompt + cwd.
+// See: https://code.claude.com/docs/en/hooks.md
 interface HookInput {
   prompt?: string;
   cwd?: string;
-  memory_dir?: string;
 }
 
 async function main(): Promise<void> {
   const raw = await readStdin();
   const input: HookInput = raw ? (JSON.parse(raw) as HookInput) : {};
 
-  const memoryDir = input.memory_dir ?? process.env.MEMORY_ROUTER_DIR;
+  const memoryDir = process.env.MEMORY_ROUTER_DIR;
   if (!memoryDir) {
-    writeStdout({ hits: [], reason: 'no memory_dir configured' });
+    // Silent no-op: an unconfigured router must never add context noise.
     return;
   }
 
   const memories = loadMemoriesFromDir(memoryDir);
-  const ctx: RouterContext = {
-    prompt: input.prompt,
-    cwd: input.cwd,
-  };
-
+  const ctx: RouterContext = { prompt: input.prompt, cwd: input.cwd };
   const hits: GateHit[] = resolve(ctx, memories);
-  writeStdout({
-    hits: hits.map((h) => ({
-      id: h.memory.id,
-      path: h.memory.path,
-      gate: h.gate,
-      score: h.score,
-      reason: h.reason,
-    })),
-  });
+
+  const additionalContext = renderHitsAsContext(hits);
+  if (!additionalContext) return;
+
+  process.stdout.write(
+    `${JSON.stringify({ hookSpecificOutput: { additionalContext } })}\n`,
+  );
 }
 
 main().catch((err: unknown) => {
