@@ -28,38 +28,7 @@ function confidenceThreshold(ambiguity: number): number {
   return Math.max(0, 0.85 - ambiguity * 0.35);
 }
 
-// Semantic match stub — wired to sqlite-vec embeddings in a follow-up task.
-// Returns empty for now; the confidence gate only emits the ambiguity-driven
-// threshold so downstream consumers can plan their injection budget.
-function semanticSearch(
-  _prompt: string,
-  _memories: Memory[],
-): { memory: Memory; score: number }[] {
-  return [];
-}
-
-const confidenceGate: Gate = {
-  name: 'confidence',
-  evaluate(ctx: RouterContext, memories: Memory[]): GateHit[] {
-    if (!ctx.prompt) return [];
-    const ambiguity = computeAmbiguity(ctx.prompt);
-    const threshold = confidenceThreshold(ambiguity);
-
-    const matches = semanticSearch(ctx.prompt, memories);
-    return matches
-      .filter((m) => m.score >= threshold)
-      .map((m) => ({
-        memory: m.memory,
-        gate: 'confidence' as const,
-        score: m.score,
-        reason: `semantic match (ambiguity=${ambiguity.toFixed(2)}, threshold=${threshold.toFixed(2)})`,
-      }));
-  },
-};
-
 module.exports = {
-  confidenceGate,
   computeAmbiguity,
   confidenceThreshold,
-  semanticSearch,
 };
