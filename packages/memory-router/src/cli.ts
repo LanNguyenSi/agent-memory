@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { listMemoryFiles, planChange, applyChange } = require('./tag/applier');
+const { rebuildIndex } = require('./embed/indexer');
 
 interface ParsedArgs {
   cmd: string;
@@ -32,16 +33,23 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function printHelp(): void {
-  process.stdout.write(`memory-router tag <dir> [--apply] [--only <id>]
+  process.stdout.write(`memory-router <command> [options]
 
-Scan a Claude-Code memory directory and propose frontmatter additions
-(topics, severity) based on content heuristics. Default is dry-run — pass
---apply to write changes. Use --only <id> to limit to a single file.
+Commands:
+  tag <dir> [--apply] [--only <id>]
+    Propose frontmatter additions (topics, severity) based on content
+    heuristics. Dry-run by default.
+
+  index <dir>
+    Embed each memory file and store a sqlite-vec index at
+    <dir>/.memory-router/index.sqlite. Required for the Confidence Gate
+    semantic matches. Env: OPENAI_API_KEY (required),
+    MEMORY_ROUTER_EMBED_MODEL (default: text-embedding-3-small).
 
 Examples:
   memory-router tag ~/.claude/projects/PROJECT/memory
   memory-router tag ~/.claude/projects/PROJECT/memory --apply
-  memory-router tag ~/.claude/projects/PROJECT/memory --only feedback_stacked_pr_base
+  memory-router index ~/.claude/projects/PROJECT/memory
 `);
 }
 
@@ -70,16 +78,32 @@ interface FileChange {
   reason?: string;
 }
 
-function main(): void {
+async function runIndex(dir: string): Promise<void> {
+  const result = await rebuildIndex(dir);
+  if (result.reason) {
+    process.stderr.write(`${result.reason}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(
+    `indexed ${result.embedded} file(s) (${result.skipped} up-to-date, ${result.removed} removed)\n`,
+  );
+}
+
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args.cmd !== 'tag') {
+  if (args.cmd !== 'tag' && args.cmd !== 'index') {
     printHelp();
     process.exit(args.cmd === '' ? 0 : 1);
   }
   if (!args.dir) {
     process.stderr.write('error: <dir> is required\n');
     process.exit(1);
+  }
+
+  if (args.cmd === 'index') {
+    await runIndex(args.dir);
+    return;
   }
 
   let files: string[];
@@ -153,4 +177,7 @@ function main(): void {
   }
 }
 
-main();
+main().catch((err: unknown) => {
+  process.stderr.write(`error: ${String(err)}\n`);
+  process.exit(1);
+});

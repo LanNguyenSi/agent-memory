@@ -108,6 +108,21 @@ memory-router tag ~/.claude/projects/PROJECT/memory --only feedback_stacked_pr_b
 
 Idempotent — re-running is a no-op on files already tagged. Existing frontmatter is preserved; only `topics` and `severity` are added when missing. `triggers.command_pattern` is never auto-generated (too risky); candidates are printed to stderr for manual review.
 
+### Building the embedding index
+
+The Confidence Gate's semantic match requires a one-time index build:
+
+```bash
+OPENAI_API_KEY=sk-... memory-router index ~/.claude/projects/PROJECT/memory
+```
+
+- Stores embeddings under `<dir>/.memory-router/index.sqlite` via sqlite-vec (cosine distance).
+- Default model: `text-embedding-3-small` (1536 dim). Override with `MEMORY_ROUTER_EMBED_MODEL`.
+- Re-runs are incremental — unchanged files (by mtime) are skipped, removed files are purged.
+- If the key or index are missing, the Confidence Gate silently returns no hits; the Topic and Tool Gates still fire.
+
+The hook never builds the index inline — cold-start latency would block every prompt by seconds. Run `memory-router index` manually or wire it into a cron/agent-memory-sync post-sync step.
+
 ### Programmatically
 
 ```typescript
@@ -124,7 +139,7 @@ const hits = resolve({ prompt: 'merge PR 42' }, memories);
 
 - ✅ Topic Gate (deterministic keyword → topic map)
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
-- 🚧 Confidence Gate — ambiguity heuristic wired, but the semantic match that would actually produce hits is stubbed pending sqlite-vec integration. Gate currently returns no hits at runtime.
+- ✅ Confidence Gate (ambiguity heuristic + sqlite-vec semantic search). Runs only when sync gates are silent; fails open if `OPENAI_API_KEY` is missing or the index is absent.
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract
 - 🚧 MCP server (`memory_search`, `memory_apply`, `memory_resolve`) — stub only
 - 🚧 Embedding pipeline — follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))

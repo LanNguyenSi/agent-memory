@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const { loadMemoriesFromDir } = require('../memory/loader');
-const { resolve } = require('../router');
+const { resolve, resolveConfidence, dedupeAndRank } = require('../router');
 const { renderHitsAsContext } = require('../render');
 const { readStdin } = require('./io');
 
@@ -24,9 +24,28 @@ async function main(): Promise<void> {
 
   const memories = loadMemoriesFromDir(memoryDir);
   const ctx: RouterContext = { prompt: input.prompt, cwd: input.cwd };
-  const hits: GateHit[] = resolve(ctx, memories);
 
-  const additionalContext = renderHitsAsContext(hits);
+  // Sync gates first (topic, tool) — cheap, deterministic.
+  const syncHits: GateHit[] = resolve(ctx, memories);
+
+  // Confidence gate is async (hits OpenAI embeddings API). Run only when
+  // the sync gates didn't already cover the prompt, to keep latency low
+  // and avoid redundant context when a deterministic gate already fired.
+  let allHits: GateHit[] = syncHits;
+  if (syncHits.length === 0) {
+    try {
+      const semHits: GateHit[] = await resolveConfidence(ctx, memories, memoryDir);
+      allHits = dedupeAndRank([...syncHits, ...semHits], 5);
+    } catch (err: unknown) {
+      // Never let a semantic-search failure block the prompt — log and fall
+      // back to the sync hits.
+      process.stderr.write(
+        `memory-router: semantic search failed, falling back: ${String(err)}\n`,
+      );
+    }
+  }
+
+  const additionalContext = renderHitsAsContext(allHits);
   if (!additionalContext) return;
 
   process.stdout.write(
