@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Retrieval and policy layer for Claude-Code memory files — decides when and which memories to inject based on topic, tool-call, and confidence gates.",
   "bin": {
+    "memory-router": "./dist/cli.js",
     "memory-router-user-prompt-submit": "./dist/hooks/user-prompt-submit.js",
     "memory-router-pre-tool-use": "./dist/hooks/pre-tool-use.js",
     "memory-router-mcp": "./dist/mcp/server.js"
