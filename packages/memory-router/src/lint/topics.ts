@@ -75,7 +75,22 @@ export function lintMemoryDirForUnknownTopics(dir: string): LintReport {
   const hits: UnknownTopicHit[] = [];
 
   for (const memory of memories) {
-    const topics = memory.frontmatter.topics ?? [];
+    const topics = memory.frontmatter.topics;
+    if (topics === undefined || topics === null) continue;
+    if (!Array.isArray(topics)) {
+      // Frontmatter has `topics:` set to a scalar (string, number, …)
+      // instead of a list. The runtime topic gate would treat this as no
+      // topics at all (the `?? []` fallback never fires because the value
+      // is non-null), so the memory silently never matches. Surface it as
+      // a distinct hit instead of iterating string characters.
+      hits.push({
+        path: memory.path,
+        memoryId: memory.id,
+        unknownTopic: `<non-list ${typeof topics}: ${JSON.stringify(topics)}>`,
+        suggestion: null,
+      });
+      continue;
+    }
     for (const t of topics) {
       const value = String(t);
       if (knownSet.has(value)) continue;

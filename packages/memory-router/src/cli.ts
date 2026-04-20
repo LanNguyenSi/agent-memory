@@ -105,6 +105,22 @@ async function runIndex(dir: string): Promise<void> {
 }
 
 function runLint(dir: string): void {
+  // The loader silently treats unreadable dirs as empty, which would let a
+  // typo'd CI path produce a green build. Stat upfront so the linter exits
+  // 1 with a clear error instead.
+  const fs = require('node:fs');
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: cannot read ${dir}: ${String(err)}\n`);
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
+    process.stderr.write(`error: ${dir} is not a directory\n`);
+    process.exit(1);
+  }
+
   let report;
   try {
     report = lintMemoryDirForUnknownTopics(dir);

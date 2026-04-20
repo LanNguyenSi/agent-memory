@@ -79,6 +79,35 @@ test('memories without topics field are not flagged', () => {
   assert.equal(report.scannedCount, 1);
 });
 
+test('flags non-list topics scalar instead of iterating string chars', () => {
+  const dir = makeTmpDir();
+  // Author wrote `topics: workflow` (scalar) instead of `topics:\n  - workflow`.
+  // Without the guard this used to iterate "w","o","r","k"… and produce one
+  // hit per character.
+  writeMemory(
+    dir,
+    'scalar.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics: workflow',
+  );
+
+  const report = lintMemoryDirForUnknownTopics(dir);
+  assert.equal(report.hits.length, 1);
+  assert.match(report.hits[0].unknownTopic, /non-list string/);
+});
+
+test('flags non-list topics number', () => {
+  const dir = makeTmpDir();
+  writeMemory(
+    dir,
+    'numscalar.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics: 42',
+  );
+
+  const report = lintMemoryDirForUnknownTopics(dir);
+  assert.equal(report.hits.length, 1);
+  assert.match(report.hits[0].unknownTopic, /non-list number/);
+});
+
 test('aggregates hits across multiple files', () => {
   const dir = makeTmpDir();
   writeMemory(
