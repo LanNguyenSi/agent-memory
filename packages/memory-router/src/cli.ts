@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 const { listMemoryFiles, planChange, applyChange } = require('./tag/applier');
 const { rebuildIndex } = require('./embed/indexer');
+const {
+  lintMemoryDirForUnknownTopics,
+  formatReportText,
+} = require('./lint/topics');
 
 interface ParsedArgs {
   cmd: string;
@@ -18,7 +22,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     const a = argv[i];
     if (a === '--apply') apply = true;
     else if (a === '--only') only = argv[++i];
-    else if (a === '--help' || a === '-h') {
+    else if (a === '--unknown-topics') {
+      // Default and currently the only `lint` check; accepted for forward
+      // compatibility when more checks are added.
+    } else if (a === '--help' || a === '-h') {
       printHelp();
       process.exit(0);
     } else if (a.startsWith('--')) {
@@ -46,10 +53,18 @@ Commands:
     semantic matches. Env: OPENAI_API_KEY (required),
     MEMORY_ROUTER_EMBED_MODEL (default: text-embedding-3-small).
 
+  lint <dir> [--unknown-topics]
+    Validate memory frontmatter. Today the only check is
+    --unknown-topics: flags topics that are not in the runtime topic
+    registry (Memory routing silently no-matches them). Exits non-zero
+    if any unknown topics were found. --unknown-topics is the default
+    when no flag is given.
+
 Examples:
   memory-router tag ~/.claude/projects/PROJECT/memory
   memory-router tag ~/.claude/projects/PROJECT/memory --apply
   memory-router index ~/.claude/projects/PROJECT/memory
+  memory-router lint ~/.claude/projects/PROJECT/memory
 `);
 }
 
@@ -89,10 +104,38 @@ async function runIndex(dir: string): Promise<void> {
   );
 }
 
+function runLint(dir: string): void {
+  // The loader silently treats unreadable dirs as empty, which would let a
+  // typo'd CI path produce a green build. Stat upfront so the linter exits
+  // 1 with a clear error instead.
+  const fs = require('node:fs');
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: cannot read ${dir}: ${String(err)}\n`);
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
+    process.stderr.write(`error: ${dir} is not a directory\n`);
+    process.exit(1);
+  }
+
+  let report;
+  try {
+    report = lintMemoryDirForUnknownTopics(dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: ${String(err)}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(formatReportText(report));
+  process.exit(report.hits.length > 0 ? 1 : 0);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args.cmd !== 'tag' && args.cmd !== 'index') {
+  if (args.cmd !== 'tag' && args.cmd !== 'index' && args.cmd !== 'lint') {
     printHelp();
     process.exit(args.cmd === '' ? 0 : 1);
   }
@@ -103,6 +146,11 @@ async function main(): Promise<void> {
 
   if (args.cmd === 'index') {
     await runIndex(args.dir);
+    return;
+  }
+
+  if (args.cmd === 'lint') {
+    runLint(args.dir);
     return;
   }
 
