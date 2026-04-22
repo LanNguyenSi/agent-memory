@@ -134,6 +134,43 @@ Repeated vague prompts (`"mal schauen"`, `"check mal"`) re-pay one OpenAI embedd
 
 No flag turns the cache off — it's always on when the Confidence Gate is. `memory-router index` does not touch the cache; only switching embed models does.
 
+### Keep MEMORY.md clean
+
+`MEMORY.md` is the canonical index Claude-Code loads at session start. It drifts: pointers to deleted files, memory files never added to the index, duplicates, or a file that grows past the 200-line truncation cap (lines after 200 are silently dropped from context). The drift linter catches all of these before they cost you a missing recall in a real session:
+
+```bash
+# Dry-run — exits non-zero on any finding.
+memory-router lint ~/.claude/projects/PROJECT/memory --drift
+
+# Auto-apply safe fixes (append missing pointers, remove duplicate entries).
+# Orphan pointers are never auto-deleted — might be intentional while a file
+# is temporarily absent. Invalid frontmatter and duplicate names also need
+# hand-review.
+memory-router lint ~/.claude/projects/PROJECT/memory --drift --fix
+
+# Machine-readable for CI.
+memory-router lint ~/.claude/projects/PROJECT/memory --drift --json
+```
+
+Checks:
+- **Orphan pointer** — MEMORY.md lists `file.md` but the file no longer exists.
+- **Missing pointer** — a memory file exists in the dir but is not listed in MEMORY.md.
+- **Duplicate entry** — the same filename appears twice in MEMORY.md.
+- **Duplicate name** — two memory files share a frontmatter `name` (case-insensitive).
+- **Length warning** — MEMORY.md > 200 lines (anything past line 200 is truncated by the runtime).
+- **Invalid frontmatter** — missing `name`/`description`/`type`, unknown `type`, or YAML that fails to parse. The runtime loader silently drops such files, so they never fire through any gate.
+- **Description too long** — frontmatter `description` > 150 chars; the same text is used as the MEMORY.md hook, where it would blow the one-line budget.
+
+Without any check flag `lint` runs drift **and** the `--unknown-topics` frontmatter check; pass `--drift` or `--unknown-topics` to narrow.
+
+Pre-commit hook snippet — rejects drift before it lands:
+
+```bash
+# .git/hooks/pre-commit (or a pre-commit framework config)
+memory-router lint ~/.claude/projects/PROJECT/memory --drift --json \
+  || { echo "memory-router drift check failed — run with --fix or resolve manually"; exit 1; }
+```
+
 ### Programmatically
 
 ```typescript

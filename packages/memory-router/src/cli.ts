@@ -5,27 +5,42 @@ const {
   lintMemoryDirForUnknownTopics,
   formatReportText,
 } = require('./lint/topics');
+const {
+  lintMemoryDirForDrift,
+  applyDriftFixes,
+  formatDriftReportText,
+  formatDriftReportJson,
+  formatFixResultText,
+} = require('./lint/drift');
 
 interface ParsedArgs {
   cmd: string;
   dir?: string;
   apply: boolean;
   only?: string;
+  lintChecks: { drift: boolean; unknownTopics: boolean };
+  fix: boolean;
+  json: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   let apply = false;
   let only: string | undefined;
+  let driftFlag = false;
+  let topicsFlag = false;
+  let fix = false;
+  let json = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true;
     else if (a === '--only') only = argv[++i];
-    else if (a === '--unknown-topics') {
-      // Default and currently the only `lint` check; accepted for forward
-      // compatibility when more checks are added.
-    } else if (a === '--help' || a === '-h') {
+    else if (a === '--unknown-topics') topicsFlag = true;
+    else if (a === '--drift') driftFlag = true;
+    else if (a === '--fix') fix = true;
+    else if (a === '--json') json = true;
+    else if (a === '--help' || a === '-h') {
       printHelp();
       process.exit(0);
     } else if (a.startsWith('--')) {
@@ -36,7 +51,32 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { cmd: positional[0] ?? '', dir: positional[1], apply, only };
+  // When no check flag is given, run both. A narrowing flag keeps CI green
+  // on stacked repos that only care about one dimension.
+  const anyCheck = driftFlag || topicsFlag;
+  const lintChecks = {
+    drift: anyCheck ? driftFlag : true,
+    unknownTopics: anyCheck ? topicsFlag : true,
+  };
+
+  // --fix and --json only apply to the drift check today. Surfacing a
+  // silent no-op when someone runs `lint --unknown-topics --fix` is worse
+  // than a loud stderr warning.
+  if ((fix || json) && !lintChecks.drift) {
+    process.stderr.write(
+      `warning: ${fix ? '--fix ' : ''}${json ? '--json ' : ''}only affects --drift and is a no-op with --unknown-topics alone\n`,
+    );
+  }
+
+  return {
+    cmd: positional[0] ?? '',
+    dir: positional[1],
+    apply,
+    only,
+    lintChecks,
+    fix,
+    json,
+  };
 }
 
 function printHelp(): void {
@@ -53,18 +93,25 @@ Commands:
     semantic matches. Env: OPENAI_API_KEY (required),
     MEMORY_ROUTER_EMBED_MODEL (default: text-embedding-3-small).
 
-  lint <dir> [--unknown-topics]
-    Validate memory frontmatter. Today the only check is
-    --unknown-topics: flags topics that are not in the runtime topic
-    registry (Memory routing silently no-matches them). Exits non-zero
-    if any unknown topics were found. --unknown-topics is the default
-    when no flag is given.
+  lint <dir> [--drift] [--unknown-topics] [--fix] [--json]
+    Validate memory files and MEMORY.md. Two checks today:
+      --drift           MEMORY.md vs. on-disk corpus (orphan/missing
+                        pointers, duplicates, 200-line cap, frontmatter,
+                        description length).
+      --unknown-topics  topics: values missing from the runtime topic
+                        registry (silent no-match at runtime).
+    When no check flag is given, both run. Exits non-zero on any finding.
+    --fix auto-applies drift fixes where safe (appends missing pointers,
+    removes duplicate entries). Orphan pointers are never auto-deleted.
+    --json emits a machine-readable report for drift; the topics check
+    retains its text format.
 
 Examples:
   memory-router tag ~/.claude/projects/PROJECT/memory
   memory-router tag ~/.claude/projects/PROJECT/memory --apply
   memory-router index ~/.claude/projects/PROJECT/memory
   memory-router lint ~/.claude/projects/PROJECT/memory
+  memory-router lint ~/.claude/projects/PROJECT/memory --drift --fix
 `);
 }
 
@@ -104,7 +151,12 @@ async function runIndex(dir: string): Promise<void> {
   );
 }
 
-function runLint(dir: string): void {
+function runLint(
+  dir: string,
+  checks: { drift: boolean; unknownTopics: boolean },
+  fix: boolean,
+  json: boolean,
+): void {
   // The loader silently treats unreadable dirs as empty, which would let a
   // typo'd CI path produce a green build. Stat upfront so the linter exits
   // 1 with a clear error instead.
@@ -121,15 +173,48 @@ function runLint(dir: string): void {
     process.exit(1);
   }
 
-  let report;
-  try {
-    report = lintMemoryDirForUnknownTopics(dir);
-  } catch (err: unknown) {
-    process.stderr.write(`error: ${String(err)}\n`);
-    process.exit(1);
+  let exitCode = 0;
+
+  if (checks.drift) {
+    let driftReport;
+    try {
+      driftReport = lintMemoryDirForDrift(dir);
+    } catch (err: unknown) {
+      process.stderr.write(`error: ${String(err)}\n`);
+      process.exit(1);
+    }
+    if (fix) {
+      const result = applyDriftFixes(dir, driftReport);
+      if (json) {
+        process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+      } else {
+        process.stdout.write(formatFixResultText(result));
+      }
+      if (result.remaining.length > 0) exitCode = 1;
+    } else {
+      if (json) process.stdout.write(formatDriftReportJson(driftReport));
+      else process.stdout.write(formatDriftReportText(driftReport));
+      if (driftReport.hits.length > 0) exitCode = 1;
+    }
   }
-  process.stdout.write(formatReportText(report));
-  process.exit(report.hits.length > 0 ? 1 : 0);
+
+  if (checks.unknownTopics) {
+    let report;
+    try {
+      report = lintMemoryDirForUnknownTopics(dir);
+    } catch (err: unknown) {
+      process.stderr.write(`error: ${String(err)}\n`);
+      process.exit(1);
+    }
+    // --json is drift-only (topics has its own text format today). Log the
+    // topics text report to stderr in JSON mode so CI can still see both
+    // signals without corrupting the JSON payload on stdout.
+    if (json && checks.drift) process.stderr.write(formatReportText(report));
+    else process.stdout.write(formatReportText(report));
+    if (report.hits.length > 0) exitCode = 1;
+  }
+
+  process.exit(exitCode);
 }
 
 async function main(): Promise<void> {
@@ -150,7 +235,7 @@ async function main(): Promise<void> {
   }
 
   if (args.cmd === 'lint') {
-    runLint(args.dir);
+    runLint(args.dir, args.lintChecks, args.fix, args.json);
     return;
   }
 
