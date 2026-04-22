@@ -369,6 +369,36 @@ test('non-list topics scalar does not trip drift linter', () => {
   assert.equal(findHits(report.hits, 'invalid_frontmatter').length, 0);
 });
 
+test('--fix preserves CRLF line endings', () => {
+  const dir = makeTmpDir();
+  writeMemory(dir, 'a.md', 'name: A\ndescription: hook\ntype: feedback');
+  // CRLF MEMORY.md with a duplicate — needs a --fix that rewrites.
+  fs.writeFileSync(
+    path.join(dir, 'MEMORY.md'),
+    '- [A](a.md) — first\r\n- [A again](a.md) — dup\r\n',
+  );
+
+  const report = lintMemoryDirForDrift(dir);
+  applyDriftFixes(dir, report);
+
+  const after = fs.readFileSync(path.join(dir, 'MEMORY.md'), 'utf8');
+  assert.ok(after.includes('\r\n'), `expected CRLF preserved, got: ${JSON.stringify(after)}`);
+  assert.ok(!/[^\r]\n/.test(after), `expected no bare LF, got: ${JSON.stringify(after)}`);
+});
+
+test('multiple links on one line: all are captured', () => {
+  const dir = makeTmpDir();
+  writeMemory(dir, 'a.md', 'name: A\ndescription: h\ntype: feedback');
+  writeMemory(dir, 'b.md', 'name: B\ndescription: h\ntype: feedback');
+  // One MEMORY.md line mentions both files. Previously only the first
+  // link was captured, so `b.md` was falsely reported as missing.
+  writeMemoryMd(dir, '- see [A](a.md) and [B](b.md) — shared hook\n');
+
+  const report = lintMemoryDirForDrift(dir);
+  assert.equal(findHits(report.hits, 'missing_pointer').length, 0);
+  assert.equal(findHits(report.hits, 'orphan_pointer').length, 0);
+});
+
 test('formatDriftReportText: no-hit message', () => {
   const text = formatDriftReportText({
     hits: [],

@@ -78,6 +78,7 @@ interface ParsedMemoryMd {
   raw: string;
   lines: string[];
   trailingNewline: boolean;
+  eol: '\r\n' | '\n';
   entries: MemoryMdEntry[];
   lineCount: number;
   exists: boolean;
@@ -99,6 +100,7 @@ function parseMemoryMd(dir: string): ParsedMemoryMd {
       raw: '',
       lines: [],
       trailingNewline: false,
+      eol: '\n',
       entries: [],
       lineCount: 0,
       exists: false,
@@ -106,20 +108,27 @@ function parseMemoryMd(dir: string): ParsedMemoryMd {
   }
   const raw = readFileSync(path, 'utf8');
   const trailingNewline = raw.endsWith('\n');
+  // Preserve the original line ending on --fix. Any CRLF in the file wins
+  // (a mixed-EOL file is already broken — pick one).
+  const eol: '\r\n' | '\n' = raw.includes('\r\n') ? '\r\n' : '\n';
   const trimmed = trailingNewline ? raw.slice(0, -1) : raw;
   const lines = raw === '' ? [] : trimmed.split(/\r?\n/);
 
   const entries: MemoryMdEntry[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    // A prose line may mention several memory files (e.g. "see [A](a.md)
+    // and [B](b.md)"). Capture every link, not just the first, so no
+    // pointer silently disappears.
+    let match: RegExpExecArray | null;
     LINK_RE.lastIndex = 0;
-    const match = LINK_RE.exec(line);
-    if (!match) continue;
-    const title = match[1];
-    const filename = match[2];
-    const afterIdx = match.index + match[0].length;
-    const hook = line.slice(afterIdx).replace(/^[\s—–\-:]+/, '').trim();
-    entries.push({ title, filename, hook, lineNo: i + 1 });
+    while ((match = LINK_RE.exec(line)) !== null) {
+      const title = match[1];
+      const filename = match[2];
+      const afterIdx = match.index + match[0].length;
+      const hook = line.slice(afterIdx).replace(/^[\s—–\-:]+/, '').trim();
+      entries.push({ title, filename, hook, lineNo: i + 1 });
+    }
   }
 
   return {
@@ -127,6 +136,7 @@ function parseMemoryMd(dir: string): ParsedMemoryMd {
     raw,
     lines,
     trailingNewline,
+    eol,
     entries,
     lineCount: lines.length,
     exists: true,
@@ -337,24 +347,35 @@ export function applyDriftFixes(
   const remaining: DriftHit[] = [];
   let newLines = [...memoryMd.lines];
 
-  // Duplicates first — they reference existing lines, and removing them
-  // shifts indices of later lines. Walk the current lines to find dup
-  // indices to drop (keeping the first occurrence).
+  // Duplicates first — removing them shifts later indices. For each line
+  // we must consider every link on that line (multiple links per line are
+  // supported). A line is dropped only when ALL its links are duplicates;
+  // otherwise we'd delete a fresh pointer along with the dup.
   const seenDup = new Set<string>();
   const dropIndices: number[] = [];
   for (let i = 0; i < newLines.length; i++) {
     LINK_RE.lastIndex = 0;
-    const m = LINK_RE.exec(newLines[i]);
-    if (!m) continue;
-    const fn = m[2];
-    if (seenDup.has(fn)) dropIndices.push(i);
-    else seenDup.add(fn);
+    let m: RegExpExecArray | null;
+    const fns: string[] = [];
+    while ((m = LINK_RE.exec(newLines[i])) !== null) fns.push(m[2]);
+    if (fns.length === 0) continue;
+    const allDup = fns.every((fn) => seenDup.has(fn));
+    for (const fn of fns) seenDup.add(fn);
+    if (allDup) dropIndices.push(i);
   }
   for (let i = dropIndices.length - 1; i >= 0; i--) {
     newLines.splice(dropIndices[i], 1);
   }
-  for (const hit of report.hits) {
-    if (hit.kind === 'duplicate_entry') applied.push(hit);
+  // Only claim we fixed dup_entry hits if we actually dropped something.
+  // A dup could have been resolved by hand between lint and --fix.
+  if (dropIndices.length > 0) {
+    for (const hit of report.hits) {
+      if (hit.kind === 'duplicate_entry') applied.push(hit);
+    }
+  } else {
+    for (const hit of report.hits) {
+      if (hit.kind === 'duplicate_entry') remaining.push(hit);
+    }
   }
 
   // Missing-pointer appends. Only fixable when the target memory parsed
@@ -389,9 +410,10 @@ export function applyDriftFixes(
     applied.some((h) => h.kind === 'missing_pointer');
 
   if (changed) {
-    // Always end with one newline — standard POSIX, friendlier to diffs and
-    // to downstream readers that parse line-by-line.
-    const content = newLines.join('\n') + '\n';
+    // Preserve the file's existing line-ending style. Always end with one
+    // trailing EOL — standard POSIX, friendlier to diffs, and required to
+    // keep CRLF files fully CRLF.
+    const content = newLines.join(memoryMd.eol) + memoryMd.eol;
     writeFileSync(memoryMd.path, content, 'utf8');
   }
 

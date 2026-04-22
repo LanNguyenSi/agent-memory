@@ -59,6 +59,15 @@ function parseArgs(argv: string[]): ParsedArgs {
     unknownTopics: anyCheck ? topicsFlag : true,
   };
 
+  // --fix and --json only apply to the drift check today. Surfacing a
+  // silent no-op when someone runs `lint --unknown-topics --fix` is worse
+  // than a loud stderr warning.
+  if ((fix || json) && !lintChecks.drift) {
+    process.stderr.write(
+      `warning: ${fix ? '--fix ' : ''}${json ? '--json ' : ''}only affects --drift and is a no-op with --unknown-topics alone\n`,
+    );
+  }
+
   return {
     cmd: positional[0] ?? '',
     dir: positional[1],
