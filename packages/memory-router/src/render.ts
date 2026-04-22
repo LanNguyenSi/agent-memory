@@ -5,6 +5,8 @@
 // include the memory's full body, not just an id, so the rule is actionable
 // without a follow-up read.
 
+const { checkMemoryReferences } = require('./verify-refs');
+
 function renderHitsAsContext(hits: GateHit[]): string {
   if (hits.length === 0) return '';
 
@@ -17,7 +19,17 @@ function renderHitsAsContext(hits: GateHit[]): string {
     const name = h.memory.frontmatter.name;
     const gateLabel = `${h.gate} · ${h.score.toFixed(2)}`;
     const body = h.memory.body.trim();
-    return `### ${name}  _(${gateLabel})_\n${body}`;
+
+    // Consult frontmatter.verify: if any referenced path no longer
+    // exists, flag the block so the model treats the memory with
+    // skepticism. We never suppress — the agent should still see the
+    // rule, just with a loud "this might be outdated" marker.
+    const staleness = checkMemoryReferences(h.memory.frontmatter.verify);
+    const stalePrefix = staleness.stale
+      ? `> ⚠️ **stale:** ${staleness.reason}\n>\n> This memory references something that no longer exists. Verify before acting.\n\n`
+      : '';
+
+    return `### ${name}  _(${gateLabel})_\n${stalePrefix}${body}`;
   });
 
   return [header, ...blocks].join('\n\n');

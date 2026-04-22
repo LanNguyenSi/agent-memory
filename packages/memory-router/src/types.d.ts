@@ -20,6 +20,15 @@ declare global {
     command_pattern?: string;
   }
 
+  type MemoryReferenceKind = 'path' | 'symbol' | 'flag';
+
+  interface MemoryReference {
+    kind: MemoryReferenceKind;
+    value: string;
+    /** Directory to resolve `value` against. Defaults to process.cwd(). */
+    repoRoot?: string;
+  }
+
   interface MemoryFrontmatter {
     name: string;
     description: string;
@@ -27,6 +36,13 @@ declare global {
     topics?: Topic[];
     severity?: Severity;
     triggers?: MemoryTriggers;
+    /**
+     * Optional sanity-check claims. When any entry's `value` resolves
+     * to something that no longer exists, the router prefixes this
+     * memory's injected context with "⚠️ stale:" so the model knows
+     * to treat it with skepticism (the memory is NOT suppressed).
+     */
+    verify?: MemoryReference[];
   }
 
   interface Memory {
