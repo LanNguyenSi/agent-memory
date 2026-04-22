@@ -20,7 +20,7 @@ Gates run in parallel; the router dedupes by memory id, keeps the highest-scorin
 
 ## Memory Frontmatter Extension
 
-Existing Claude-Code memory files already use YAML frontmatter (`name`, `description`, `type`). memory-router adds three optional fields:
+Existing Claude-Code memory files already use YAML frontmatter (`name`, `description`, `type`). memory-router adds four optional fields:
 
 ```yaml
 ---
@@ -34,12 +34,30 @@ triggers:                           # enables Tool Gate
   tools: [Bash]
   keywords: [force-push]
   globs: ["**/*.sh"]
+verify:                             # stale-marker check on recall
+  - kind: path
+    value: packages/gh-push-guard/src/cli.ts
 ---
 
 body markdown here
 ```
 
 All new fields are optional — legacy memories are still loaded and can still fire via Confidence Gate (once wired) or via semantic match.
+
+### `verify:` — stale-marker on recall
+
+A memory that names a concrete file, symbol, or flag is making a claim about the current repo state. Memories don't self-update: a file renamed or deleted leaves the memory silently wrong. When a matched memory has `verify:` entries and any `kind: path` entry no longer exists on disk, the router prefixes the memory's injected context with:
+
+```
+> ⚠️ **stale:** path '...' not found at ...
+>
+> This memory references something that no longer exists. Verify before acting.
+```
+
+The memory is **not** suppressed — the agent still sees the rule. It just knows to be skeptical.
+
+- `kind: 'path'` — checked inline via `fs.statSync`. Relative values resolve against `repoRoot` (default `process.cwd()`) and must stay inside it.
+- `kind: 'symbol' | 'flag'` — accepted in the shape but skipped inline (the hook stays zero-dep and sub-10 ms). Use the `verify_memory_reference` MCP tool from [agent-grounding/grounding-mcp](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) for those.
 
 ## Install
 
