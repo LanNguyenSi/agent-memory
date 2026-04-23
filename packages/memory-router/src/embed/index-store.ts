@@ -159,9 +159,19 @@ function openIndex(opts: IndexStoreOptions): {
        embedding = excluded.embedding,
        accessed_at = excluded.accessed_at`,
   );
-  const cacheEvictStaleModelStmt = db.prepare(
-    'DELETE FROM query_cache WHERE model != ?',
-  );
+  // Connection-scoped one-shot: if the cache holds rows under a different
+  // model, nuke them once at open time. Subsequent puts under `cacheModel`
+  // no longer touch rows from other models — that used to thrash the cache
+  // to size 1 whenever two processes alternated `MEMORY_ROUTER_EMBED_MODEL`.
+  if (cacheModel !== undefined) {
+    const hasStale = (db
+      .prepare('SELECT EXISTS(SELECT 1 FROM query_cache WHERE model != ?) AS has')
+      .get(cacheModel) as { has: number }).has;
+    if (hasStale) {
+      db.prepare('DELETE FROM query_cache WHERE model != ?').run(cacheModel);
+    }
+  }
+
   const cacheCountStmt = db.prepare('SELECT COUNT(*) AS n FROM query_cache');
   // Evict oldest rows beyond the cap. We pre-compute how many to drop
   // because SQLite's DELETE doesn't accept LIMIT without a build flag.
@@ -194,13 +204,12 @@ function openIndex(opts: IndexStoreOptions): {
     return vecFromBlob(row.embedding);
   }
 
-  // Wrap the stale-model evict + upsert + LRU-evict trio in a single
-  // transaction so a concurrent reader sees consistent state and the
-  // count → delete step doesn't race with another writer overshooting
-  // the cap.
+  // Wrap upsert + LRU-evict in a single transaction so a concurrent reader
+  // sees consistent state and the count → delete step doesn't race with
+  // another writer overshooting the cap. Stale-model eviction is no longer
+  // in the hot path (see the one-shot above).
   const putCachedQueryTx = db.transaction(
     (key: string, model: string, blob: Buffer, now: number, capacity: number) => {
-      cacheEvictStaleModelStmt.run(model);
       cacheUpsertStmt.run(key, model, blob, now);
       const { n } = cacheCountStmt.get() as { n: number };
       if (n > capacity) {

@@ -189,7 +189,7 @@ test('query cache enforces LRU cap — oldest by accessed_at evicted past capaci
   }
 });
 
-test('query cache evicts stale-model rows on put — alternating models stay clean', () => {
+test('query cache evicts stale-model rows once at open — alternating models stay clean', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-cache-model-'));
   const dbPath = path.join(dir, 'idx.sqlite');
   const dims = 4;
@@ -210,14 +210,62 @@ test('query cache evicts stale-model rows on put — alternating models stay cle
     cache: { model: 'model-B', capacity: 10 },
   });
   try {
-    // Putting under model-B must evict the model-A rows.
+    // The one-shot eviction runs at open; the cache is already clean before
+    // the first put under the new model.
+    assert.equal(storeB.cacheSize(), 0, 'model-A rows evicted at open');
     storeB.putCachedQuery('p', [9, 9, 9, 9]);
-    assert.equal(storeB.cacheSize(), 1, 'model-A rows gone after first model-B put');
+    assert.equal(storeB.cacheSize(), 1, 'only the new model-B row is present');
     assert.equal(storeB.getCachedQuery('q'), null, 'model-A entries inaccessible');
     const fetched = storeB.getCachedQuery('p');
     assert.deepEqual(fetched, [9, 9, 9, 9], 'returns the model-B value');
   } finally {
     storeB.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('within one connection, puts do not evict stale-model rows — cost is O(1)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-cache-noevict-'));
+  const dbPath = path.join(dir, 'idx.sqlite');
+  const dims = 4;
+
+  // Simulate a stale model-B row arriving AFTER the model-A connection
+  // opened (e.g. a parallel hook process writing under a different model).
+  // The connection was already past its one-shot sweep, so the per-put
+  // path must NOT touch the foreign row.
+  const Database = require('better-sqlite3');
+  const sqliteVec = require('sqlite-vec');
+
+  const storeA = openIndex({
+    path: dbPath,
+    dimensions: dims,
+    cache: { model: 'model-A', capacity: 10 },
+  });
+  try {
+    storeA.putCachedQuery('p', [1, 1, 1, 1]);
+
+    // Inject a model-B row through a sibling connection.
+    const sibling = new Database(dbPath);
+    sqliteVec.load(sibling);
+    const blob = Buffer.from(new Float32Array([7, 7, 7, 7]).buffer);
+    sibling
+      .prepare(
+        `INSERT INTO query_cache (prompt_sha, model, embedding, accessed_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run('sibling-key', 'model-B', blob, Date.now());
+    sibling.close();
+
+    // Putting more model-A rows must not disturb the model-B row.
+    storeA.putCachedQuery('q', [2, 2, 2, 2]);
+    storeA.putCachedQuery('r', [3, 3, 3, 3]);
+    assert.equal(
+      storeA.cacheSize(),
+      4,
+      '3 model-A rows + 1 sibling-injected model-B row',
+    );
+  } finally {
+    storeA.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
