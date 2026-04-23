@@ -108,6 +108,36 @@ Both binaries consume Claude-Code's hook stdin contract and emit
 
 on stdout — Claude Code injects `additionalContext` as system context for the model. When no gate fires, stdout stays empty to keep the model's context clean.
 
+### As an MCP server (imperative queries)
+
+The hook auto-injects memories on every prompt. For the "check if there's a memory about X before I proceed" pattern, wire memory-router as a Claude-Code MCP server and call it explicitly from a session:
+
+```json
+{
+  "mcpServers": {
+    "memory-router": {
+      "command": "memory-router-mcp",
+      "env": {
+        "MEMORY_ROUTER_DIR": "/home/you/.claude/projects/YOURPROJECT/memory",
+        "OPENAI_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+Exposes three tools:
+
+| Tool | Use |
+|------|-----|
+| `memory_search(query, k?)` | Raw semantic hits from the sqlite-vec index. Returns `[]` if the index is missing or `OPENAI_API_KEY` is unset. |
+| `memory_resolve(prompt, cwd?, tool?)` | Full router (topic + tool + confidence), same hit shape the UserPromptSubmit hook would inject. Confidence gate only runs when the sync gates miss. |
+| `memory_apply(id)` | Fetch the full body of a single memory by id (filename without extension). `isError: true` when the id doesn't exist. |
+
+All three are stateless and read-only — write tools (`memory_create`, `memory_update`) stay out of scope until the `tag` CLI is proven enough to move under an agent.
+
+Trust model matches the hook: `MEMORY_ROUTER_DIR` is treated as author-trusted (see [Trust Model](#trust-model)). The MCP server surfaces memory bodies verbatim — any risk from a compromised memory file (ReDoS in a `command_pattern`, misleading body content) is identical to what the hook would inject.
+
 ### Migrating existing memories
 
 Legacy memory files (`name`/`description`/`type` only) never fire through the router — they're missing `topics:` and `triggers:`. The `memory-router tag` CLI proposes those fields based on a scored keyword match (name 3×, description 2×, body 1×; top 2 topics per file; minimum score 3):
@@ -207,7 +237,7 @@ const hits = resolve({ prompt: 'merge PR 42' }, memories);
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
 - ✅ Confidence Gate (ambiguity heuristic + sqlite-vec semantic search). Runs only when sync gates are silent; fails open if `OPENAI_API_KEY` is missing or the index is absent.
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract
-- 🚧 MCP server (`memory_search`, `memory_apply`, `memory_resolve`) — stub only
+- ✅ MCP server (`memory_search`, `memory_apply`, `memory_resolve`)
 - 🚧 Embedding pipeline — follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))
 
 ## Trust Model
