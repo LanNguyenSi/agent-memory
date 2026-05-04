@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a new capability or rule
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - agent-memory-sync
+        - ice-reflection-engine
+        - lava-sprint-timer
+        - memory-digest-cli
+        - memory-router
+        - mw-cli
+        - openclaw-skill-memory-weaver
+        - new package
+        - other / unsure
+    validations:
+      required: true
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What problem does this solve? Who feels the pain today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Sketch the API, flag, or workflow.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
