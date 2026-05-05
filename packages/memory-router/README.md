@@ -300,6 +300,16 @@ OPENAI_API_KEY=sk-... memory-router lint ~/.claude/projects/PROJECT/memory --con
 
 Reuses the embedding cache the Confidence Gate already maintains in `~/.claude/projects/PROJECT/memory/.memory-router/index.sqlite` (built by `memory-router index`); pairs not yet in the index are embedded on the fly without persisting. When `OPENAI_API_KEY` is unset the semantic step prints a stderr warning and falls back to the regex-only signal, so CI without secrets stays green.
 
+The polarity vocabulary covers ALL-CAPS and lowercase forms of `always`, `never`, `must`, `must not`, `do`, `do not`, `don't`, `prefer`, `require`, `avoid`, `skip`, plus formal-register markers `mandatory`, `mandate`, `compulsory`, `prohibit`, `forbid`, `disallow`, and `cannot`. So a memory written as "Code review is **mandatory** before merge" and one as "Code review is **forbidden** on hot-fix branches" form a HIGH conflict on the `workflow` topic without either having to spell out `ALWAYS` / `NEVER`.
+
+Pass `--json` for a machine-readable report, mirroring `--drift --json`:
+
+```bash
+memory-router lint ~/.claude/projects/PROJECT/memory --conflicts --json
+```
+
+The schema is `{ scannedCount, feedbackCount, hits: [{ severity, topic, reason, a: { path, memoryId, firstLine }, b: { ... } }] }`. When combined with `--drift --json`, the drift JSON owns stdout and the conflicts JSON is routed to stderr, so a CI step that consumes the drift payload still sees the conflict signal without parser collisions.
+
 Pre-commit hook snippet, rejects drift before it lands:
 
 ```bash
