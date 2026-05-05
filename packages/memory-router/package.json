@@ -1,12 +1,42 @@
 {
-  "name": "memory-router",
+  "name": "@lannguyensi/memory-router",
   "version": "0.1.0",
-  "description": "Retrieval and policy layer for Claude-Code memory files — decides when and which memories to inject based on topic, tool-call, and confidence gates.",
+  "description": "Deterministic memory injection for Claude Code: topic, tool, and confidence gates against your ~/.claude/projects/*/memory/*.md files, plus lint and stale-reference tooling.",
+  "license": "MIT",
+  "homepage": "https://github.com/LanNguyenSi/agent-memory/tree/master/packages/memory-router",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LanNguyenSi/agent-memory.git",
+    "directory": "packages/memory-router"
+  },
+  "bugs": {
+    "url": "https://github.com/LanNguyenSi/agent-memory/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "memory",
+    "agent",
+    "hook",
+    "mcp",
+    "sqlite-vec"
+  ],
+  "main": "./dist/index.js",
   "bin": {
     "memory-router": "./dist/cli.js",
     "memory-router-user-prompt-submit": "./dist/hooks/user-prompt-submit.js",
     "memory-router-pre-tool-use": "./dist/hooks/pre-tool-use.js",
     "memory-router-mcp": "./dist/mcp/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

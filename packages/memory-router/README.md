@@ -54,7 +54,13 @@ The same scratch corpus works through `memory-router lint` (drift / topics / con
 
 ## Install
 
-From source while the package is unpublished:
+From npm:
+
+```bash
+npm install -g @lannguyensi/memory-router
+```
+
+Or from source:
 
 ```bash
 git clone https://github.com/LanNguyenSi/agent-memory
@@ -62,7 +68,7 @@ cd agent-memory/packages/memory-router
 npm install && npm run build
 ```
 
-The `bin/` entries land in `node_modules/.bin/` and `npm link` exposes them on `PATH`:
+The `bin/` entries land in `node_modules/.bin/` (and on `PATH` for a global install or `npm link`):
 
 | Bin | Purpose |
 |-----|---------|
@@ -339,12 +345,14 @@ Exits 1 on any STALE / malformed finding, 0 otherwise. `--json` emits a structur
 ### Programmatically
 
 ```typescript
-import { loadMemoriesFromDir, resolve } from 'memory-router';
+import { loadMemoriesFromDir, resolve } from '@lannguyensi/memory-router';
 
 const memories = loadMemoriesFromDir('/path/to/memory');
 const hits = resolve({ prompt: 'merge PR 42' }, memories);
 // → [{ memory, gate: 'topic', score: 1.0, reason: 'topic match: workflow' }]
 ```
+
+The package ships JavaScript only (no `.d.ts` yet); types for the public API are tracked as a follow-up.
 
 ## Status
 
