@@ -1,6 +1,6 @@
 {
   "name": "@lannguyensi/memory-router",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deterministic memory injection for Claude Code: topic, tool, and confidence gates against your ~/.claude/projects/*/memory/*.md files, plus lint and stale-reference tooling.",
   "license": "MIT",
   "homepage": "https://github.com/LanNguyenSi/agent-memory/tree/master/packages/memory-router",
