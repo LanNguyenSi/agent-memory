@@ -12,13 +12,17 @@ const {
   formatDriftReportJson,
   formatFixResultText,
 } = require('./lint/drift');
+const {
+  lintMemoryDirForConflicts,
+  formatConflictReportText,
+} = require('./lint/conflicts');
 
 interface ParsedArgs {
   cmd: string;
   dir?: string;
   apply: boolean;
   only?: string;
-  lintChecks: { drift: boolean; unknownTopics: boolean };
+  lintChecks: { drift: boolean; unknownTopics: boolean; conflicts: boolean };
   fix: boolean;
   json: boolean;
 }
@@ -29,6 +33,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let only: string | undefined;
   let driftFlag = false;
   let topicsFlag = false;
+  let conflictsFlag = false;
   let fix = false;
   let json = false;
 
@@ -38,6 +43,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === '--only') only = argv[++i];
     else if (a === '--unknown-topics') topicsFlag = true;
     else if (a === '--drift') driftFlag = true;
+    else if (a === '--conflicts') conflictsFlag = true;
     else if (a === '--fix') fix = true;
     else if (a === '--json') json = true;
     else if (a === '--help' || a === '-h') {
@@ -51,12 +57,16 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  // When no check flag is given, run both. A narrowing flag keeps CI green
-  // on stacked repos that only care about one dimension.
-  const anyCheck = driftFlag || topicsFlag;
+  // When no check flag is given, run drift + unknown-topics by default.
+  // --conflicts is opt-in for now: it scans every feedback memory pair, can
+  // surface a long info-level list on a mature corpus, and surfacing it
+  // unprompted in CI would be noisy. Authors run it deliberately when
+  // adding feedback memories.
+  const anyCheck = driftFlag || topicsFlag || conflictsFlag;
   const lintChecks = {
     drift: anyCheck ? driftFlag : true,
     unknownTopics: anyCheck ? topicsFlag : true,
+    conflicts: conflictsFlag,
   };
 
   // --fix and --json only apply to the drift check today. Surfacing a
@@ -64,7 +74,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   // than a loud stderr warning.
   if ((fix || json) && !lintChecks.drift) {
     process.stderr.write(
-      `warning: ${fix ? '--fix ' : ''}${json ? '--json ' : ''}only affects --drift and is a no-op with --unknown-topics alone\n`,
+      `warning: ${fix ? '--fix ' : ''}${json ? '--json ' : ''}only affects --drift and is a no-op with --unknown-topics or --conflicts alone\n`,
     );
   }
 
@@ -93,18 +103,24 @@ Commands:
     semantic matches. Env: OPENAI_API_KEY (required),
     MEMORY_ROUTER_EMBED_MODEL (default: text-embedding-3-small).
 
-  lint <dir> [--drift] [--unknown-topics] [--fix] [--json]
-    Validate memory files and MEMORY.md. Two checks today:
+  lint <dir> [--drift] [--unknown-topics] [--conflicts] [--fix] [--json]
+    Validate memory files and MEMORY.md. Three checks today:
       --drift           MEMORY.md vs. on-disk corpus (orphan/missing
                         pointers, duplicates, 200-line cap, frontmatter,
                         description length).
       --unknown-topics  topics: values missing from the runtime topic
                         registry (silent no-match at runtime).
-    When no check flag is given, both run. Exits non-zero on any finding.
+      --conflicts       Pairs of feedback memories that share a topic; flags
+                        probable contradictions (opposite imperatives in
+                        the first body line + subject vocabulary overlap)
+                        as HIGH and topic-overlap pairs as INFO. Opt-in.
+    When no check flag is given, --drift + --unknown-topics run by default
+    (--conflicts stays opt-in). Exits non-zero on any drift/topic finding
+    or any HIGH conflict.
     --fix auto-applies drift fixes where safe (appends missing pointers,
     removes duplicate entries). Orphan pointers are never auto-deleted.
-    --json emits a machine-readable report for drift; the topics check
-    retains its text format.
+    --json emits a machine-readable report for drift; the topics and
+    conflicts checks retain their text format.
 
 Examples:
   memory-router tag ~/.claude/projects/PROJECT/memory
@@ -153,7 +169,7 @@ async function runIndex(dir: string): Promise<void> {
 
 function runLint(
   dir: string,
-  checks: { drift: boolean; unknownTopics: boolean },
+  checks: { drift: boolean; unknownTopics: boolean; conflicts: boolean },
   fix: boolean,
   json: boolean,
 ): void {
@@ -212,6 +228,26 @@ function runLint(
     if (json && checks.drift) process.stderr.write(formatReportText(report));
     else process.stdout.write(formatReportText(report));
     if (report.hits.length > 0) exitCode = 1;
+  }
+
+  if (checks.conflicts) {
+    let report;
+    try {
+      report = lintMemoryDirForConflicts(dir);
+    } catch (err: unknown) {
+      process.stderr.write(`error: ${String(err)}\n`);
+      process.exit(1);
+    }
+    // Same JSON convention as topics: route the text format to stderr if
+    // drift owns stdout, so CI sees the conflict signal without corrupting
+    // the drift JSON payload.
+    if (json && checks.drift) process.stderr.write(formatConflictReportText(report));
+    else process.stdout.write(formatConflictReportText(report));
+    // Only HIGH-severity conflicts fail the build. INFO-level topic overlap
+    // is normal on a mature corpus and shouldn't block CI.
+    if (report.hits.some((h: { severity: string }) => h.severity === 'high')) {
+      exitCode = 1;
+    }
   }
 
   process.exit(exitCode);
