@@ -20,6 +20,7 @@ const {
 } = require('./lint/conflicts');
 const {
   lintMemoryDirForStale,
+  lintMemoryDirForStaleWithUrls,
   formatStaleReportText,
   formatStaleReportJson,
 } = require('./lint/stale');
@@ -44,6 +45,8 @@ interface ParsedArgs {
   repoRoots: string[];
   /** `stale --scan-body`: also extract refs from memory bodies via regex. */
   scanBody: boolean;
+  /** `stale --check-urls`: HEAD-request external URLs (off by default). */
+  checkUrls: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -59,6 +62,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 
   const repoRoots: string[] = [];
   let scanBody = false;
+  let checkUrls = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true;
@@ -80,6 +84,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
     }
     else if (a === '--scan-body') scanBody = true;
+    else if (a === '--check-urls') checkUrls = true;
     else if (a === '--fix') fix = true;
     else if (a === '--json') json = true;
     else if (a === '--help' || a === '-h') {
@@ -138,6 +143,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     json,
     repoRoots,
     scanBody,
+    checkUrls,
   };
 }
 
@@ -185,7 +191,7 @@ Commands:
     alongside --conflicts, the drift JSON owns stdout and the conflicts
     JSON is routed to stderr so CI can pipe both fds.
 
-  stale <dir> [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--scan-body] [--json]
+  stale <dir> [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--scan-body] [--check-urls] [--json]
     Scan every memory in <dir> for stale references against one or more
     repo roots. Default root list: [process.cwd()]. A ref is STALE only
     when it resolves against NONE of the roots; first hit wins for the
@@ -201,12 +207,21 @@ Commands:
                  from <repo-root>. Zero matches -> STALE candidate. If
                  <repo-root> is not a git checkout, symbol checks
                  degrade to "skipped" with a one-time stderr warning.
+    A date-staleness pass runs unconditionally as INFO: every memory
+    whose newest ISO date in the body is older than 90 days AND whose
+    frontmatter has no newer 'updatedAt:' is flagged 'possibly-stale'.
+    INFO never contributes to exit code.
     --scan-body additionally extracts refs from memory bodies via a
     backtick + path-shape regex. Off by default because real corpora
     contain a lot of backtick'd strings that look like paths but aren't
     (gh-shorthand, branch names, env-var snippets, cross-repo paths).
+    --check-urls HEAD-requests every external URL extracted from the
+    body. 4xx -> STALE; 5xx and network errors -> 'skipped' (server or
+    network problem, not a dead link). Off by default because it's
+    network-dependent.
     --json emits a structured report on stdout for CI consumers.
-    Exits 1 when any STALE ref is found, 0 otherwise.
+    Exits 1 when any STALE/no-matches/malformed ref is found, 0
+    otherwise. 'possibly-stale' and 'skipped' do not flip the exit code.
 
 Examples:
   memory-router tag ~/.claude/projects/PROJECT/memory
@@ -348,12 +363,13 @@ async function runLint(
   process.exit(exitCode);
 }
 
-function runStale(
+async function runStale(
   dir: string,
   repoRoots: string[],
   json: boolean,
   scanBody: boolean,
-): void {
+  checkUrls: boolean,
+): Promise<void> {
   const fs = require('node:fs');
   for (const candidate of [dir, ...repoRoots]) {
     let stat;
@@ -371,7 +387,9 @@ function runStale(
 
   let report;
   try {
-    report = lintMemoryDirForStale(dir, repoRoots, { scanBody });
+    report = checkUrls
+      ? await lintMemoryDirForStaleWithUrls(dir, repoRoots, { scanBody, checkUrls })
+      : lintMemoryDirForStale(dir, repoRoots, { scanBody });
   } catch (err: unknown) {
     process.stderr.write(`error: ${String(err)}\n`);
     process.exit(1);
@@ -420,11 +438,12 @@ async function main(): Promise<void> {
   }
 
   if (args.cmd === 'stale') {
-    runStale(
+    await runStale(
       args.dir,
       args.repoRoots.length > 0 ? args.repoRoots : [process.cwd()],
       args.json,
       args.scanBody,
+      args.checkUrls,
     );
     return;
   }

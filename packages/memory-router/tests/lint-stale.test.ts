@@ -6,11 +6,14 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const {
   lintMemoryDirForStale,
+  lintMemoryDirForStaleWithUrls,
   formatStaleReportText,
   formatStaleReportJson,
   __looksLikePath,
   __extractRefsFromBody,
   __extractRefsFromVerify,
+  __extractDatesFromBody,
+  __extractUrlsFromBody,
 } = require('../src/lint/stale');
 
 interface MemDir {
@@ -547,5 +550,205 @@ test('multi-root: symbol-degraded FALSE when at least one root is git', () => {
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Heuristik 3: date staleness. INFO-only, never blocks CI.
+test('extractDatesFromBody: parses ISO 8601, rejects bogus', () => {
+  const dates = __extractDatesFromBody(
+    'See 2026-04-23 and also 2025-01-01. Bogus: 2026-13-99 and version 1.2.3-rc.1.',
+  );
+  assert.equal(dates.length, 2, 'two real dates, bogus skipped');
+  // Earliest first? Doesn't matter, just check both are present.
+  const isoStrings = dates.map((d: Date) => d.toISOString().slice(0, 10)).sort();
+  assert.deepEqual(isoStrings, ['2025-01-01', '2026-04-23']);
+});
+
+test('date-staleness: body date older than 90d + no updatedAt → possibly-stale', () => {
+  const { memDir, repoRoot, cleanup } = tmpMemDirWithRepo();
+  writeMem(
+    memDir,
+    'feedback_old.md',
+    'name: old\ndescription: x\ntype: feedback',
+    'Note from 2024-01-01: stuff.',
+  );
+  try {
+    const report = lintMemoryDirForStale(memDir, repoRoot, {
+      now: new Date('2026-05-05T00:00:00Z'),
+    });
+    const date = report.hits.filter((h: { check: string }) => h.check === 'date');
+    assert.equal(date.length, 1);
+    assert.equal(date[0].status, 'possibly-stale');
+    assert.equal(date[0].ref, '2024-01-01');
+    assert.match(date[0].detail, /days old/);
+    // CI must not break on possibly-stale alone.
+    const realStale = report.hits.some(
+      (h: { status: string }) =>
+        h.status === 'missing' || h.status === 'no-matches' || h.status === 'malformed',
+    );
+    assert.equal(realStale, false, 'possibly-stale must not contribute to exit-code criteria');
+  } finally {
+    cleanup();
+  }
+});
+
+test('date-staleness: updatedAt newer than cutoff suppresses warning', () => {
+  const { memDir, repoRoot, cleanup } = tmpMemDirWithRepo();
+  writeMem(
+    memDir,
+    'feedback_refreshed.md',
+    'name: r\ndescription: x\ntype: feedback\nupdatedAt: 2026-04-15',
+    'Note from 2024-01-01: stuff.',
+  );
+  try {
+    const report = lintMemoryDirForStale(memDir, repoRoot, {
+      now: new Date('2026-05-05T00:00:00Z'),
+    });
+    const date = report.hits.filter((h: { check: string }) => h.check === 'date');
+    assert.equal(date.length, 0, 'fresh updatedAt suppresses possibly-stale');
+  } finally {
+    cleanup();
+  }
+});
+
+test('date-staleness: memory with no body dates is silent', () => {
+  const { memDir, repoRoot, cleanup } = tmpMemDirWithRepo();
+  writeMem(
+    memDir,
+    'feedback_nodate.md',
+    'name: nd\ndescription: x\ntype: feedback',
+    'Just plain prose with no dates anywhere.',
+  );
+  try {
+    const report = lintMemoryDirForStale(memDir, repoRoot, {
+      now: new Date('2026-05-05T00:00:00Z'),
+    });
+    assert.equal(report.hits.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('date-staleness: recent body date does not warn', () => {
+  const { memDir, repoRoot, cleanup } = tmpMemDirWithRepo();
+  writeMem(
+    memDir,
+    'feedback_recent.md',
+    'name: r\ndescription: x\ntype: feedback',
+    'Updated on 2026-04-25 with the new flow.',
+  );
+  try {
+    const report = lintMemoryDirForStale(memDir, repoRoot, {
+      now: new Date('2026-05-05T00:00:00Z'),
+    });
+    const date = report.hits.filter((h: { check: string }) => h.check === 'date');
+    assert.equal(date.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+// Heuristik 4: URL HEAD checks via stubbed fetch.
+test('extractUrlsFromBody: dedupes and trims trailing punctuation', () => {
+  const body = [
+    'See https://example.com/foo for details.',
+    'Same again: https://example.com/foo.',
+    'And https://other.example.com/path).',
+  ].join('\n');
+  const urls = __extractUrlsFromBody(body);
+  assert.deepEqual(urls.sort(), [
+    'https://example.com/foo',
+    'https://other.example.com/path',
+  ]);
+});
+
+test('--check-urls: 404 → STALE; 200 → silent; network-error → skipped', async () => {
+  const { memDir, repoRoot, cleanup } = tmpMemDirWithRepo();
+  writeMem(
+    memDir,
+    'feedback_urls.md',
+    'name: u\ndescription: x\ntype: feedback',
+    [
+      'Working: https://ok.example.com/page',
+      'Dead: https://dead.example.com/old',
+      'Flaky: https://flaky.example.com/down',
+    ].join('\n'),
+  );
+
+  const stubFetch = async (url: string): Promise<number | null> => {
+    if (url.includes('ok.example.com')) return 200;
+    if (url.includes('dead.example.com')) return 404;
+    if (url.includes('flaky.example.com')) return null;
+    throw new Error('unexpected url ' + url);
+  };
+
+  try {
+    const report = await lintMemoryDirForStaleWithUrls(memDir, repoRoot, {
+      checkUrls: true,
+      fetchHeadStatus: stubFetch,
+      now: new Date('2026-05-05T00:00:00Z'),
+    });
+    const urls = report.hits.filter((h: { check: string }) => h.check === 'url');
+    assert.equal(urls.length, 2, 'one stale + one skipped, healthy URL silent');
+    const stale = urls.find((h: { status: string }) => h.status === 'missing');
+    const skipped = urls.find((h: { status: string }) => h.status === 'skipped');
+    assert.ok(stale, 'expected one missing URL hit');
+    assert.equal(stale.ref, 'https://dead.example.com/old');
+    assert.match(stale.detail, /404/);
+    assert.ok(skipped, 'expected one skipped URL hit');
+    assert.equal(skipped.ref, 'https://flaky.example.com/down');
+  } finally {
+    cleanup();
+  }
+});
+
+test('--check-urls: 5xx is treated as skipped, not stale', async () => {
+  const { memDir, repoRoot, cleanup } = tmpMemDirWithRepo();
+  writeMem(
+    memDir,
+    'feedback_5xx.md',
+    'name: u\ndescription: x\ntype: feedback',
+    'See https://overloaded.example.com/path.',
+  );
+  const stubFetch = async () => 503;
+  try {
+    const report = await lintMemoryDirForStaleWithUrls(memDir, repoRoot, {
+      checkUrls: true,
+      fetchHeadStatus: stubFetch,
+      now: new Date('2026-05-05T00:00:00Z'),
+    });
+    const urls = report.hits.filter((h: { check: string }) => h.check === 'url');
+    assert.equal(urls.length, 1);
+    assert.equal(urls[0].status, 'skipped');
+    assert.match(urls[0].detail, /503/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('--check-urls off: URLs are not probed', async () => {
+  const { memDir, repoRoot, cleanup } = tmpMemDirWithRepo();
+  writeMem(
+    memDir,
+    'feedback_url_default.md',
+    'name: u\ndescription: x\ntype: feedback',
+    'See https://example.com/foo.',
+  );
+  let probeCount = 0;
+  const stubFetch = async () => {
+    probeCount++;
+    return 404;
+  };
+  try {
+    const report = await lintMemoryDirForStaleWithUrls(memDir, repoRoot, {
+      checkUrls: false,
+      fetchHeadStatus: stubFetch,
+      now: new Date('2026-05-05T00:00:00Z'),
+    });
+    assert.equal(probeCount, 0, 'fetch must not be called when checkUrls is false');
+    const urls = report.hits.filter((h: { check: string }) => h.check === 'url');
+    assert.equal(urls.length, 0);
+  } finally {
+    cleanup();
   }
 });
