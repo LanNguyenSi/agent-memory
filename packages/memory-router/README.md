@@ -1,26 +1,89 @@
 # memory-router
 
-**Retrieval and policy layer for Claude-Code memory files.** Decides *when* and *which* memories to inject into a Claude-Code session, based on deterministic topic/tool-call matches and a confidence heuristic. Complements [agent-memory-sync](../agent-memory-sync) (which keeps memory files fresh across machines) — the router reads those files and enforces their application at runtime.
+**Deterministic memory injection for Claude Code.** Loads your `~/.claude/projects/*/memory/*.md` files and injects the relevant ones into a session whenever the prompt or a pending tool call matches their declared triggers. The agent cannot accidentally skip a memory.
 
-## Why
+> Most memory tooling loads your notes and hopes the model notices. `memory-router` replaces that judgment with deterministic enforcement: when the trigger fires, the memory is injected, full stop. Critical rules ("never force-push to master", "VPS deploy needs `-f docker-compose.prod.yml`") stop being suggestions and start being part of the system prompt.
 
-Today, Claude-Code memory files in `~/.claude/projects/*/memory/*.md` are loaded at session start, but *applying* a specific memory depends on the agent noticing its relevance. Critical memories (e.g. "never force-push to master", "VPS deploy needs `-f docker-compose.prod.yml`") are silently skipped when the agent doesn't connect the dots.
+## Try it in 60 seconds
 
-memory-router replaces judgment with deterministic enforcement: when the prompt or a pending tool call matches a memory's declared triggers, the memory is injected — the agent cannot accidentally skip it.
+```bash
+git clone https://github.com/LanNguyenSi/agent-memory
+cd agent-memory/packages/memory-router
+npm install && npm run build
 
-## Three Gates
+# Tiny scratch corpus so the demo doesn't touch your real memory dir.
+mkdir -p /tmp/memory-router-demo
+cat > /tmp/memory-router-demo/feedback_force_push.md <<'EOF'
+---
+name: No force-push to shared branches
+description: Force-push on master/main overwrites history
+type: feedback
+topics: [destructive_ops]
+severity: critical
+---
+
+NEVER force-push to master or main. The history is shared; rewriting
+it costs every collaborator a hard reset and loses uncommitted work.
+For local-branch fixes, prefer a fixup commit + interactive rebase
+before push.
+EOF
+
+# Positive: prompt mentions force-push, the topic gate fires, the memory
+# is injected.
+echo '{"prompt":"can I git push --force to master to fix this?"}' \
+  | MEMORY_ROUTER_DIR=/tmp/memory-router-demo \
+    node dist/hooks/user-prompt-submit.js
+
+# Negative: nothing matches, stdout stays empty (Claude's context stays clean).
+echo '{"prompt":"rename foo to bar"}' \
+  | MEMORY_ROUTER_DIR=/tmp/memory-router-demo \
+    node dist/hooks/user-prompt-submit.js
+```
+
+## What a run looks like
+
+The positive prompt prints one line of JSON on stdout:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"**memory-router** — 1 relevant memory applies:\n\n### No force-push to shared branches  _(topic · 1.00)_\nNEVER force-push to master or main. The history is shared; rewriting\nit costs every collaborator a hard reset and loses uncommitted work.\nFor local-branch fixes, prefer a fixup commit + interactive rebase\nbefore push."}}
+```
+
+Claude Code consumes that contract on every prompt and injects `additionalContext` as system context for the model. The negative prompt prints nothing and exits 0: when no gate fires, stdout stays empty so the context window stays clean.
+
+The same scratch corpus works through `memory-router lint` (drift / topics / conflict checks), `memory-router stale --repo-root <path>` (stale path / symbol references), and the MCP server (`memory_search`, `memory_resolve`). The wiring for all of those is below.
+
+## Install
+
+From source while the package is unpublished:
+
+```bash
+git clone https://github.com/LanNguyenSi/agent-memory
+cd agent-memory/packages/memory-router
+npm install && npm run build
+```
+
+The `bin/` entries land in `node_modules/.bin/` and `npm link` exposes them on `PATH`:
+
+| Bin | Purpose |
+|-----|---------|
+| `memory-router` | CLI: `tag`, `index`, `lint`, `stale` |
+| `memory-router-user-prompt-submit` | Claude Code `UserPromptSubmit` hook |
+| `memory-router-pre-tool-use` | Claude Code `PreToolUse` hook |
+| `memory-router-mcp` | MCP server for explicit `memory_search` / `memory_resolve` calls |
+
+## How it works
+
+memory-router runs three gates in parallel, dedupes hits by memory id, keeps the highest-scoring hit per memory, and caps the output at N (default 5).
 
 | Gate | Signal | When it fires |
 |------|--------|---------------|
-| **Topic** | Keyword dictionary → memory `topics:` | Prompt matches `deploy`, `merge`, `rm -rf`, etc. → all memories tagged with that topic |
-| **Tool** | `PreToolUse` hook → memory `triggers.command_pattern` / `triggers.tools` | Before `Bash(git push --force)`, `Bash(docker compose up)`, etc. — matches command regex |
-| **Confidence** | Ambiguity heuristic on prompt | Fallback: short/vague prompts lower the threshold so semantic matches fire as a safety net |
-
-Gates run in parallel; the router dedupes by memory id, keeps the highest-scoring hit per memory, and caps the output at N (default 5).
+| **Topic** | Keyword dictionary mapped to memory `topics:` | Prompt contains `deploy`, `merge`, `rm -rf`, `force-push`, etc., and matches every memory tagged with that topic |
+| **Tool** | `PreToolUse` hook against memory `triggers.command_pattern` and `triggers.tools` | Before `Bash(git push --force)`, `Bash(docker compose up)`, etc., a regex match on the planned command |
+| **Confidence** | Ambiguity heuristic on the prompt + sqlite-vec semantic search | Fallback: short or vague prompts lower the threshold so semantic matches fire as a safety net |
 
 ## Memory Frontmatter Extension
 
-Existing Claude-Code memory files already use YAML frontmatter (`name`, `description`, `type`). memory-router adds four optional fields:
+Existing Claude Code memory files already use YAML frontmatter (`name`, `description`, `type`). memory-router adds four optional fields:
 
 ```yaml
 ---
@@ -42,9 +105,9 @@ verify:                             # stale-marker check on recall
 body markdown here
 ```
 
-All new fields are optional — legacy memories are still loaded and can still fire via Confidence Gate (once wired) or via semantic match.
+All new fields are optional. Legacy memories still load and can fire via the Confidence Gate (once wired) or via semantic match.
 
-### `verify:` — stale-marker on recall
+### `verify:` stale-marker on recall
 
 A memory that names a concrete file, symbol, or flag is making a claim about the current repo state. Memories don't self-update: a file renamed or deleted leaves the memory silently wrong. When a matched memory has `verify:` entries and any `kind: path` entry no longer exists on disk, the router prefixes the memory's injected context with:
 
@@ -54,17 +117,10 @@ A memory that names a concrete file, symbol, or flag is making a claim about the
 > This memory references something that no longer exists. Verify before acting.
 ```
 
-The memory is **not** suppressed — the agent still sees the rule. It just knows to be skeptical.
+The memory is **not** suppressed. The agent still sees the rule, just with the warning that something underneath has changed.
 
-- `kind: 'path'` — checked inline via `fs.statSync`. Relative values resolve against `repoRoot` (default `process.cwd()`) and must stay inside it.
-- `kind: 'symbol' | 'flag'` — accepted in the shape but skipped inline (the hook stays zero-dep and sub-10 ms). Use the `verify_memory_reference` MCP tool from [agent-grounding/grounding-mcp](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) for those.
-
-## Install
-
-```bash
-npm install
-npm run build
-```
+- `kind: 'path'` is checked inline via `fs.statSync`. Relative values resolve against `repoRoot` (default `process.cwd()`) and must stay inside it.
+- `kind: 'symbol' | 'flag'` is accepted in the shape but skipped inline (the hook stays zero-dep and sub-10 ms). Use the `verify_memory_reference` MCP tool from [agent-grounding/grounding-mcp](https://github.com/LanNguyenSi/agent-grounding/tree/master/packages/grounding-mcp) for those, or the proactive `memory-router stale` command described below.
 
 ## Usage
 
@@ -106,7 +162,7 @@ Both binaries consume Claude-Code's hook stdin contract and emit
 { "hookSpecificOutput": { "additionalContext": "<rendered markdown>" } }
 ```
 
-on stdout — Claude Code injects `additionalContext` as system context for the model. When no gate fires, stdout stays empty to keep the model's context clean.
+on stdout, Claude Code injects `additionalContext` as system context for the model. When no gate fires, stdout stays empty to keep the model's context clean.
 
 ### As an MCP server (imperative queries)
 
@@ -134,16 +190,16 @@ Exposes three tools:
 | `memory_resolve(prompt, cwd?, tool?)` | Full router (topic + tool + confidence), same hit shape the UserPromptSubmit hook would inject. Confidence gate only runs when the sync gates miss. |
 | `memory_apply(id)` | Fetch the full body of a single memory by id (filename without extension). `isError: true` when the id doesn't exist. |
 
-All three are stateless and read-only — write tools (`memory_create`, `memory_update`) stay out of scope until the `tag` CLI is proven enough to move under an agent.
+All three are stateless and read-only, write tools (`memory_create`, `memory_update`) stay out of scope until the `tag` CLI is proven enough to move under an agent.
 
-Trust model matches the hook: `MEMORY_ROUTER_DIR` is treated as author-trusted (see [Trust Model](#trust-model)). The MCP server surfaces memory bodies verbatim — any risk from a compromised memory file (ReDoS in a `command_pattern`, misleading body content) is identical to what the hook would inject.
+Trust model matches the hook: `MEMORY_ROUTER_DIR` is treated as author-trusted (see [Trust Model](#trust-model)). The MCP server surfaces memory bodies verbatim, any risk from a compromised memory file (ReDoS in a `command_pattern`, misleading body content) is identical to what the hook would inject.
 
 ### Migrating existing memories
 
-Legacy memory files (`name`/`description`/`type` only) never fire through the router — they're missing `topics:` and `triggers:`. The `memory-router tag` CLI proposes those fields based on a scored keyword match (name 3×, description 2×, body 1×; top 2 topics per file; minimum score 3):
+Legacy memory files (`name`/`description`/`type` only) never fire through the router, they're missing `topics:` and `triggers:`. The `memory-router tag` CLI proposes those fields based on a scored keyword match (name 3×, description 2×, body 1×; top 2 topics per file; minimum score 3):
 
 ```bash
-# Dry-run — prints a diff per file and a stderr hint block for bodies that
+# Dry-run, prints a diff per file and a stderr hint block for bodies that
 # mention dangerous shell commands worth a Tool-Gate trigger.
 memory-router tag ~/.claude/projects/PROJECT/memory
 
@@ -154,7 +210,7 @@ memory-router tag ~/.claude/projects/PROJECT/memory --apply
 memory-router tag ~/.claude/projects/PROJECT/memory --only feedback_stacked_pr_base
 ```
 
-Idempotent — re-running is a no-op on files already tagged. Existing frontmatter is preserved; only `topics` and `severity` are added when missing. `triggers.command_pattern` is never auto-generated (too risky); candidates are printed to stderr for manual review.
+Idempotent, re-running is a no-op on files already tagged. Existing frontmatter is preserved; only `topics` and `severity` are added when missing. `triggers.command_pattern` is never auto-generated (too risky); candidates are printed to stderr for manual review.
 
 ### Building the embedding index
 
@@ -166,10 +222,10 @@ OPENAI_API_KEY=sk-... memory-router index ~/.claude/projects/PROJECT/memory
 
 - Stores embeddings under `<dir>/.memory-router/index.sqlite` via sqlite-vec (cosine distance).
 - Default model: `text-embedding-3-small` (1536 dim). Override with `MEMORY_ROUTER_EMBED_MODEL`.
-- Re-runs are incremental — unchanged files (by mtime) are skipped, removed files are purged.
+- Re-runs are incremental, unchanged files (by mtime) are skipped, removed files are purged.
 - If the key or index are missing, the Confidence Gate silently returns no hits; the Topic and Tool Gates still fire.
 
-The hook never builds the index inline — cold-start latency would block every prompt by seconds. Run `memory-router index` manually or wire it into a cron/agent-memory-sync post-sync step.
+The hook never builds the index inline, cold-start latency would block every prompt by seconds. Run `memory-router index` manually or wire it into a cron/agent-memory-sync post-sync step.
 
 #### Query-embedding cache
 
@@ -178,9 +234,9 @@ Repeated vague prompts (`"mal schauen"`, `"check mal"`) re-pay one OpenAI embedd
 - **Key:** sha256(prompt) prefix (8 bytes, plenty for the LRU cap).
 - **Eviction:** LRU by `accessed_at`, hard cap of 1000 entries. Switching `MEMORY_ROUTER_EMBED_MODEL` lazily evicts entries stored under the previous model on the next put.
 - **Persistence:** survives hook process restarts (the file is the only state).
-- **Observability:** set `MEMORY_ROUTER_DEBUG=1` to see `query cache hit (size=N)` / `query cache miss — embedding (size=N)` lines on stderr without polluting the hook's stdout contract.
+- **Observability:** set `MEMORY_ROUTER_DEBUG=1` to see `query cache hit (size=N)` / `query cache miss, embedding (size=N)` lines on stderr without polluting the hook's stdout contract.
 
-No flag turns the cache off — it's always on when the Confidence Gate is. `memory-router index` does not touch the cache; only switching embed models does.
+No flag turns the cache off, it's always on when the Confidence Gate is. `memory-router index` does not touch the cache; only switching embed models does.
 
 ### Debugging rejected memories
 
@@ -200,11 +256,11 @@ Stdout (the hook contract) is never touched, so the flag is safe to leave on whi
 `MEMORY.md` is the canonical index Claude-Code loads at session start. It drifts: pointers to deleted files, memory files never added to the index, duplicates, or a file that grows past the 200-line truncation cap (lines after 200 are silently dropped from context). The drift linter catches all of these before they cost you a missing recall in a real session:
 
 ```bash
-# Dry-run — exits non-zero on any finding.
+# Dry-run, exits non-zero on any finding.
 memory-router lint ~/.claude/projects/PROJECT/memory --drift
 
 # Auto-apply safe fixes (append missing pointers, remove duplicate entries).
-# Orphan pointers are never auto-deleted — might be intentional while a file
+# Orphan pointers are never auto-deleted, might be intentional while a file
 # is temporarily absent. Invalid frontmatter and duplicate names also need
 # hand-review.
 memory-router lint ~/.claude/projects/PROJECT/memory --drift --fix
@@ -214,13 +270,13 @@ memory-router lint ~/.claude/projects/PROJECT/memory --drift --json
 ```
 
 Checks:
-- **Orphan pointer** — MEMORY.md lists `file.md` but the file no longer exists.
-- **Missing pointer** — a memory file exists in the dir but is not listed in MEMORY.md.
-- **Duplicate entry** — the same filename appears twice in MEMORY.md.
-- **Duplicate name** — two memory files share a frontmatter `name` (case-insensitive).
-- **Length warning** — MEMORY.md > 200 lines (anything past line 200 is truncated by the runtime).
-- **Invalid frontmatter** — missing `name`/`description`/`type`, unknown `type`, or YAML that fails to parse. The runtime loader silently drops such files, so they never fire through any gate.
-- **Description too long** — frontmatter `description` > 150 chars; the same text is used as the MEMORY.md hook, where it would blow the one-line budget.
+- **Orphan pointer**: MEMORY.md lists `file.md` but the file no longer exists.
+- **Missing pointer**: a memory file exists in the dir but is not listed in MEMORY.md.
+- **Duplicate entry**: the same filename appears twice in MEMORY.md.
+- **Duplicate name**: two memory files share a frontmatter `name` (case-insensitive).
+- **Length warning**: MEMORY.md > 200 lines (anything past line 200 is truncated by the runtime).
+- **Invalid frontmatter**: missing `name`/`description`/`type`, unknown `type`, or YAML that fails to parse. The runtime loader silently drops such files, so they never fire through any gate.
+- **Description too long**: frontmatter `description` > 150 chars; the same text is used as the MEMORY.md hook, where it would blow the one-line budget.
 
 Without any check flag `lint` runs drift **and** the `--unknown-topics` frontmatter check; pass `--drift` or `--unknown-topics` to narrow. A third opt-in check, `--conflicts`, finds pairs of `feedback` memories that share a topic and may contradict each other:
 
@@ -230,12 +286,12 @@ memory-router lint ~/.claude/projects/PROJECT/memory --conflicts
 
 The check runs two heuristics: topic overlap among `feedback` memories (INFO level, surface for human glance) and opposite-imperative pairs whose first body lines share substantial subject vocabulary (HIGH, e.g. "ALWAYS amend commits" vs "NEVER amend commits" both tagged `workflow`). Only HIGH findings exit non-zero, so a corpus with normal complementary advice still lets CI stay green. The check is opt-in (off by default) because INFO-level overlap is expected on a mature corpus and would otherwise flood the default `lint` run.
 
-Pre-commit hook snippet — rejects drift before it lands:
+Pre-commit hook snippet, rejects drift before it lands:
 
 ```bash
 # .git/hooks/pre-commit (or a pre-commit framework config)
 memory-router lint ~/.claude/projects/PROJECT/memory --drift --json \
-  || { echo "memory-router drift check failed — run with --fix or resolve manually"; exit 1; }
+  || { echo "memory-router drift check failed, run with --fix or resolve manually"; exit 1; }
 ```
 
 ### Stale memory references
@@ -292,22 +348,24 @@ const hits = resolve({ prompt: 'merge PR 42' }, memories);
 
 ## Status
 
-**v1 — scaffold.**
+**v1, scaffold.**
 
 - ✅ Topic Gate (deterministic keyword → topic map)
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
 - ✅ Confidence Gate (ambiguity heuristic + sqlite-vec semantic search). Runs only when sync gates are silent; fails open if `OPENAI_API_KEY` is missing or the index is absent.
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract
 - ✅ MCP server (`memory_search`, `memory_apply`, `memory_resolve`)
-- 🚧 Embedding pipeline — follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))
+- ✅ Lint surface (`drift`, `unknown-topics`, `conflicts`)
+- ✅ Stale detector (`stale --repo-root <path>` with `verify:` frontmatter contract)
+- 🚧 Embedding pipeline, follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))
 
 ## Trust Model
 
-Memory files under `MEMORY_ROUTER_DIR` are treated as **author-trusted code**. They ship regexes (`triggers.command_pattern`), keyword lists, and markdown bodies that directly shape Claude's context. In the current deployment they live alongside your Claude-Code session (`~/.claude/...`) and are synced via [agent-memory-sync](../agent-memory-sync) — i.e. you wrote them.
+Memory files under `MEMORY_ROUTER_DIR` are treated as **author-trusted code**. They ship regexes (`triggers.command_pattern`), keyword lists, and markdown bodies that directly shape Claude's context. In the current deployment they live alongside your Claude-Code session (`~/.claude/...`) and are synced via [agent-memory-sync](../agent-memory-sync), i.e. you wrote them.
 
 The tool gate defends against **author mistakes**, not a malicious author:
 
-- `command_pattern` is rejected when it exceeds 200 characters or contains an obvious nested-quantifier shape (`(a+)+`, `(a*)*`, etc.) — the two most common ReDoS footguns.
+- `command_pattern` is rejected when it exceeds 200 characters or contains an obvious nested-quantifier shape (`(a+)+`, `(a*)*`, etc.), the two most common ReDoS footguns.
 - No sandbox / `vm` timeout: a subtle pathological pattern would still stall the PreToolUse hook. Don't point `MEMORY_ROUTER_DIR` at untrusted content.
 
 If memory files ever arrive from a shared or remote source, tighten this before deploying: add a regex execution timeout, move matching off the hook hot path, or move to a backtracking-free engine (e.g. `re2`).
