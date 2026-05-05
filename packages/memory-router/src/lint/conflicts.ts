@@ -54,38 +54,89 @@ export interface ConflictReport {
   feedbackCount: number;
 }
 
-// Markers that indicate a positive-polarity directive ("do this"). Order
-// matters for matching priority but not correctness.
-const POSITIVE_PATTERNS = [
+// Markers split by where on the line they're allowed to fire.
+//
+// ALL-CAPS variants ("ALWAYS", "NEVER", "MUST NOT") are rare in
+// descriptive prose and almost always signal a real imperative. Match
+// them anywhere on the first body line.
+//
+// Lowercase variants ("always", "never", "prefer", "avoid") show up in
+// regular sentences too ("Stale branches never reach production"). Match
+// them only against the leading window (the first two tokens of the
+// trimmed line) so mid-sentence usage doesn't fake a directive.
+const ALLCAPS_POSITIVE_PATTERNS = [
   /\bALWAYS\b/,
   /\bMUST(?!\s+NOT)\b/,
   /\bDO\b(?!\s+NOT)/,
-  /\balways\b/,
-  /\bmust(?!\s+not)\b/,
-  /\bprefer\b/i,
-  /\brequire(?:d|s)?\b/i,
 ];
 
-// Markers that indicate a negative-polarity directive ("don't do this").
-const NEGATIVE_PATTERNS = [
+const ALLCAPS_NEGATIVE_PATTERNS = [
   /\bNEVER\b/,
   /\bMUST\s+NOT\b/,
   /\bDO\s+NOT\b/,
   /\bDON'T\b/,
-  /\bnever\b/,
-  /\bmust\s+not\b/,
-  /\bdo\s+not\b/,
-  /\bdon't\b/,
+];
+
+const LOWER_POSITIVE_PATTERNS = [
+  /\balways\b/i,
+  /\bmust(?!\s+not)\b/i,
+  /\bprefer\b/i,
+  /\brequire(?:d|s)?\b/i,
+];
+
+const LOWER_NEGATIVE_PATTERNS = [
+  /\bnever\b/i,
+  /\bmust\s+not\b/i,
+  /\bdo\s+not\b/i,
+  /\bdon't\b/i,
   /\bavoid\b/i,
   /\bskip\b/i,
 ];
 
+// First two whitespace-separated tokens of the trimmed line. Two is
+// enough to cover the canonical leading-directive forms ("ALWAYS X",
+// "You must X", "do not X", "don't X") without sweeping in a third
+// content word that might be a polarity false-positive ("Stale branches
+// never").
+function leadingWindow(text: string): string {
+  return text.trim().split(/\s+/).slice(0, 2).join(' ');
+}
+
 function detectPolarity(text: string): 'positive' | 'negative' | 'mixed' | null {
-  const hasPositive = POSITIVE_PATTERNS.some((re) => re.test(text));
-  const hasNegative = NEGATIVE_PATTERNS.some((re) => re.test(text));
-  if (hasPositive && hasNegative) return 'mixed';
-  if (hasPositive) return 'positive';
-  if (hasNegative) return 'negative';
+  const leading = leadingWindow(text);
+
+  const leadingHasPositive =
+    ALLCAPS_POSITIVE_PATTERNS.some((re) => re.test(leading)) ||
+    LOWER_POSITIVE_PATTERNS.some((re) => re.test(leading));
+  const leadingHasNegative =
+    ALLCAPS_NEGATIVE_PATTERNS.some((re) => re.test(leading)) ||
+    LOWER_NEGATIVE_PATTERNS.some((re) => re.test(leading));
+
+  // ALL-CAPS imperatives still count when they show up later in the
+  // line: "Cut a fresh branch, ALWAYS rebase before push" is a
+  // directive even though "Cut" isn't.
+  const anywhereCapsPositive = ALLCAPS_POSITIVE_PATTERNS.some((re) => re.test(text));
+  const anywhereCapsNegative = ALLCAPS_NEGATIVE_PATTERNS.some((re) => re.test(text));
+
+  // After-leading slice for the descriptive-rest scan: detect mixed when
+  // a leading directive is contradicted by a marker later on the line
+  // ("always run tests but never on prod" is mixed; the leading "always"
+  // sets polarity, the trailing "never" qualifies it).
+  const rest = text.slice(leading.length);
+  const restHasOppositePositive =
+    anywhereCapsPositive || LOWER_POSITIVE_PATTERNS.some((re) => re.test(rest));
+  const restHasOppositeNegative =
+    anywhereCapsNegative || LOWER_NEGATIVE_PATTERNS.some((re) => re.test(rest));
+
+  if (leadingHasPositive && leadingHasNegative) return 'mixed';
+  if (leadingHasPositive) return restHasOppositeNegative ? 'mixed' : 'positive';
+  if (leadingHasNegative) return restHasOppositePositive ? 'mixed' : 'negative';
+
+  // No leading directive. ALL-CAPS can still classify when it shows up
+  // anywhere ("Cut a fresh branch, ALWAYS rebase").
+  if (anywhereCapsPositive && anywhereCapsNegative) return 'mixed';
+  if (anywhereCapsPositive) return 'positive';
+  if (anywhereCapsNegative) return 'negative';
   return null;
 }
 
@@ -147,7 +198,12 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 //   - the surrounding subject vocabulary overlaps (Jaccard >= threshold).
 // The Jaccard floor keeps "ALWAYS amend commits" vs "NEVER deploy on Friday"
 // from being flagged as a conflict just because they share `workflow`.
-const SUBJECT_OVERLAP_THRESHOLD = 0.25;
+//
+// 0.15 is a permissive floor that only works because polarity detection
+// was tightened to leading-window matching: descriptive mid-sentence
+// "never"/"always" no longer fake an opposite-imperative pair, so the
+// Jaccard signal can be looser without flooding HIGH.
+const SUBJECT_OVERLAP_THRESHOLD = 0.15;
 
 interface FeedbackMemory {
   path: string;
