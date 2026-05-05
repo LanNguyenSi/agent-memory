@@ -3,10 +3,104 @@
 // chunking, no metadata beyond (id, mtime) — the memory body itself is
 // re-read from disk when we return a hit. Embeddings are blob-serialized
 // float32 so sqlite-vec can MATCH them directly via `vec0` virtual tables.
+//
+// Schema migration contract:
+//   The `meta` table holds a single `schema_version` row that tracks the
+//   on-disk schema. CURRENT_SCHEMA_VERSION is the version this code expects.
+//   `applyMigrations` runs AFTER the v1 baseline DDL inside `openIndex`, so a
+//   future `ALTER TABLE entries ADD COLUMN …` migration always sees the table
+//   it operates on. New tables introduced after v1 must be created by their
+//   own migration entry, not by adding to the baseline DDL.
+//   Pre-meta files (written before this contract existed) carry no version
+//   row but already contain the v1 tables. We tag them as v1 (the baseline)
+//   and fall through to the migration loop, so any 1→2…N→CURRENT migrations
+//   still run on those files. This also makes fresh DBs and pre-meta DBs
+//   take the exact same code path.
+//   Concurrency: the read-and-migrate sequence runs inside a BEGIN IMMEDIATE
+//   transaction so two processes opening the same DB simultaneously cannot
+//   both decide migrations are needed and double-apply them. better-sqlite3
+//   transactions auto-rollback on exception, so a throwing migration leaves
+//   the on-disk version row untouched.
 
 const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
 const { createHash } = require('node:crypto');
+
+// SCHEMA_VERSION_BASELINE is the version every shipped DB has at minimum:
+// fresh DBs and pre-meta DBs both start here. CURRENT_SCHEMA_VERSION is what
+// this code expects on disk; when CURRENT > BASELINE, every open runs
+// migrations BASELINE→...→CURRENT against existing files.
+const SCHEMA_VERSION_BASELINE = 1;
+const CURRENT_SCHEMA_VERSION = 1;
+
+interface Migration {
+  from: number;
+  to: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  run: (db: any) => void;
+}
+
+// Migrations are applied in order to bring an older DB up to
+// CURRENT_SCHEMA_VERSION. The 0→1 entry is reachable only when a caller
+// explicitly seeds `schema_version=0` (see tests); real pre-meta files take
+// the no-row path in `applyMigrations` and are tagged at BASELINE directly.
+// The entry is kept so the migration framework has at least one registered
+// transition, which is exercised by the rollback test.
+const migrations: Migration[] = [
+  {
+    from: 0,
+    to: 1,
+    run: () => {
+      // v1 is the baseline. The v1 tables (entries, vec, query_cache) are
+      // created idempotently by `openIndex` itself, so this migration has no
+      // schema work to do. Future entries (1→2, ...) own their own DDL.
+    },
+  },
+];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyMigrations(db: any, registered: Migration[] = migrations): void {
+  db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+
+  const selectVersion = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'");
+  const insertVersion = db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?)");
+  const updateVersion = db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'");
+
+  const migrate = db.transaction(() => {
+    const row = selectVersion.get() as { value: string } | undefined;
+    let current: number;
+    if (!row) {
+      // Either a fresh DB or a pre-meta file. Both are tagged at BASELINE so
+      // future BASELINE→N migrations still run on pre-meta files. Inserting
+      // CURRENT here would be a silent skip the day a real migration lands.
+      insertVersion.run(String(SCHEMA_VERSION_BASELINE));
+      current = SCHEMA_VERSION_BASELINE;
+    } else {
+      current = Number(row.value);
+      if (!Number.isInteger(current) || current < 0) {
+        throw new Error(`invalid schema_version ${row.value} in meta table`);
+      }
+    }
+
+    if (current > CURRENT_SCHEMA_VERSION) {
+      throw new Error(
+        `on-disk schema_version ${current} is newer than this code supports (${CURRENT_SCHEMA_VERSION}); upgrade memory-router`,
+      );
+    }
+
+    while (current < CURRENT_SCHEMA_VERSION) {
+      const next = current;
+      const m = registered.find((x) => x.from === next);
+      if (!m) {
+        throw new Error(`no migration registered from schema_version ${next}`);
+      }
+      m.run(db);
+      updateVersion.run(String(m.to));
+      current = m.to;
+    }
+  });
+  migrate.immediate();
+}
 
 // Full sha256 hex (64 chars). A truncated prefix would be small enough that
 // a collision returns the wrong embedding silently — the row is keyed by
@@ -141,6 +235,12 @@ function openIndex(opts: IndexStoreOptions): {
     CREATE INDEX IF NOT EXISTS query_cache_accessed_at_idx
       ON query_cache(accessed_at);
   `);
+
+  // Run after the v1 baseline DDL (entries, vec, query_cache) so a future
+  // migration that does `ALTER TABLE entries ...` always finds the table to
+  // modify. Migrations run inside BEGIN IMMEDIATE so two processes opening
+  // the same DB cannot double-apply.
+  applyMigrations(db);
 
   const cacheModel = opts.cache?.model;
   const cacheCapacity = opts.cache?.capacity ?? 0;
@@ -283,4 +383,7 @@ function openIndex(opts: IndexStoreOptions): {
   };
 }
 
-module.exports = { openIndex };
+// `applyMigrations` and `CURRENT_SCHEMA_VERSION` are exported for tests that
+// need to inject a custom migrations array (e.g. rollback / failure paths).
+// Production callers should only use `openIndex`.
+module.exports = { openIndex, applyMigrations, CURRENT_SCHEMA_VERSION };
