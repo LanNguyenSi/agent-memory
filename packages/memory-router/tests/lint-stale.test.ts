@@ -352,3 +352,200 @@ test('formatStaleReportJson: round-trip', () => {
   const parsed = JSON.parse(json);
   assert.deepEqual(parsed, report);
 });
+
+// Multi-root workspace mode: a ref is STALE only when NO root resolves
+// it. Pinned because dogfood against the real corpus produced 80 STALE
+// hits that were almost all sibling-repo paths in a pandora-style layout.
+test('multi-root: ref present in second root is NOT stale', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-stale-multi-'));
+  const memDir = path.join(root, 'memories');
+  const repoA = path.join(root, 'repoA');
+  const repoB = path.join(root, 'repoB');
+  fs.mkdirSync(memDir);
+  fs.mkdirSync(repoA);
+  fs.mkdirSync(repoB);
+  // File only exists under repoB — single-root scan against repoA would
+  // flag it stale; multi-root must not.
+  fs.mkdirSync(path.join(repoB, 'src'));
+  fs.writeFileSync(path.join(repoB, 'src', 'shared.ts'), 'export {};\n');
+  writeMem(
+    memDir,
+    'feedback_a.md',
+    'name: a\ndescription: x\ntype: feedback\nverify:\n  - kind: path\n    value: src/shared.ts',
+    'body',
+  );
+
+  try {
+    // Regression-pin: legacy single-root form treats it as stale.
+    const single = lintMemoryDirForStale(memDir, repoA);
+    const singleStale = single.hits.filter(
+      (h: { status: string }) => h.status === 'missing',
+    );
+    assert.equal(singleStale.length, 1, 'single-root form: ref stale against repoA only');
+
+    // Multi-root form: not stale because repoB resolves it.
+    const multi = lintMemoryDirForStale(memDir, [repoA, repoB]);
+    const multiStale = multi.hits.filter(
+      (h: { status: string }) => h.status === 'missing',
+    );
+    assert.equal(multiStale.length, 0, 'multi-root: repoB has the file, not stale');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('multi-root: ref missing in ALL roots IS stale, with summary detail', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-stale-multi-'));
+  const memDir = path.join(root, 'memories');
+  const repoA = path.join(root, 'repoA');
+  const repoB = path.join(root, 'repoB');
+  const repoC = path.join(root, 'repoC');
+  fs.mkdirSync(memDir);
+  fs.mkdirSync(repoA);
+  fs.mkdirSync(repoB);
+  fs.mkdirSync(repoC);
+  writeMem(
+    memDir,
+    'feedback_orphan.md',
+    'name: o\ndescription: x\ntype: feedback\nverify:\n  - kind: path\n    value: src/never-existed.ts',
+    'body',
+  );
+
+  try {
+    const report = lintMemoryDirForStale(memDir, [repoA, repoB, repoC]);
+    const stale = report.hits.filter(
+      (h: { status: string }) => h.status === 'missing',
+    );
+    assert.equal(stale.length, 1, 'missing in all roots: stale');
+    assert.match(stale[0].detail, /not found in any of 3 roots/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('multi-root: empty repoRoots array throws upfront', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-stale-empty-'));
+  try {
+    assert.throws(
+      () => lintMemoryDirForStale(dir, []),
+      /at least one repoRoot/,
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('multi-root: symbol resolved in any root means not stale', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-stale-multi-sym-'));
+  const memDir = path.join(root, 'memories');
+  const repoA = path.join(root, 'repoA');
+  const repoB = path.join(root, 'repoB');
+  fs.mkdirSync(memDir);
+  fs.mkdirSync(repoA);
+  fs.mkdirSync(repoB);
+  // git init in BOTH so symbol checks fire (no degraded path).
+  spawnSync('git', ['init', '-q'], { cwd: repoA });
+  spawnSync('git', ['config', 'user.email', 'test@test'], { cwd: repoA });
+  spawnSync('git', ['config', 'user.name', 'test'], { cwd: repoA });
+  spawnSync('git', ['init', '-q'], { cwd: repoB });
+  spawnSync('git', ['config', 'user.email', 'test@test'], { cwd: repoB });
+  spawnSync('git', ['config', 'user.name', 'test'], { cwd: repoB });
+  // Symbol only exists under repoB.
+  fs.writeFileSync(path.join(repoB, 'lib.ts'), 'export function widgetFactory() {}\n');
+  spawnSync('git', ['add', '-A'], { cwd: repoB });
+  spawnSync('git', ['commit', '-m', 's', '-q'], { cwd: repoB });
+  writeMem(
+    memDir,
+    'feedback_sym.md',
+    'name: s\ndescription: x\ntype: feedback\nverify:\n  - kind: symbol\n    value: widgetFactory',
+    'body',
+  );
+
+  try {
+    const report = lintMemoryDirForStale(memDir, [repoA, repoB]);
+    const stale = report.hits.filter(
+      (h: { status: string }) => h.status === 'no-matches',
+    );
+    assert.equal(stale.length, 0, 'symbol present in repoB → not stale');
+    assert.equal(report.symbolCheckDegraded, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('multi-root: symbol-degraded TRUE when every root is non-git', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-stale-multi-sym-allnon-'));
+  const memDir = path.join(root, 'memories');
+  const repoA = path.join(root, 'repoA');
+  const repoB = path.join(root, 'repoB');
+  fs.mkdirSync(memDir);
+  fs.mkdirSync(repoA);
+  fs.mkdirSync(repoB);
+  // Neither root has git initialised → degraded = true.
+  writeMem(
+    memDir,
+    'feedback_sym.md',
+    'name: s\ndescription: x\ntype: feedback\nverify:\n  - kind: symbol\n    value: someSymbol',
+    'body',
+  );
+
+  try {
+    const report = lintMemoryDirForStale(memDir, [repoA, repoB]);
+    assert.equal(
+      report.symbolCheckDegraded,
+      true,
+      'all roots non-git: symbol checks fully degraded',
+    );
+    // The hit must be `skipped`, not `no-matches` (no real check ran).
+    assert.equal(
+      report.hits.filter((h: { status: string }) => h.status === 'skipped').length,
+      1,
+    );
+    assert.equal(
+      report.hits.filter((h: { status: string }) => h.status === 'no-matches').length,
+      0,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('multi-root: symbol-degraded FALSE when at least one root is git', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-stale-multi-sym-deg-'));
+  const memDir = path.join(root, 'memories');
+  const repoA = path.join(root, 'repoA');
+  const repoB = path.join(root, 'repoB');
+  fs.mkdirSync(memDir);
+  fs.mkdirSync(repoA);
+  fs.mkdirSync(repoB);
+  // Only repoA has git initialised.
+  spawnSync('git', ['init', '-q'], { cwd: repoA });
+  spawnSync('git', ['config', 'user.email', 'test@test'], { cwd: repoA });
+  spawnSync('git', ['config', 'user.name', 'test'], { cwd: repoA });
+  fs.writeFileSync(path.join(repoA, 'lib.ts'), 'export function knownFn() {}\n');
+  spawnSync('git', ['add', '-A'], { cwd: repoA });
+  spawnSync('git', ['commit', '-m', 's', '-q'], { cwd: repoA });
+  writeMem(
+    memDir,
+    'feedback_sym.md',
+    'name: s\ndescription: x\ntype: feedback\nverify:\n  - kind: symbol\n    value: knownFn',
+    'body',
+  );
+
+  try {
+    const report = lintMemoryDirForStale(memDir, [repoA, repoB]);
+    // repoA finds it → not stale; degraded must be false because repoA
+    // is a real git repo.
+    assert.equal(
+      report.hits.filter((h: { status: string }) => h.status === 'no-matches').length,
+      0,
+    );
+    assert.equal(
+      report.symbolCheckDegraded,
+      false,
+      'one git root among several keeps symbol checks honest',
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

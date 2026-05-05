@@ -327,6 +327,23 @@ memory-router stale ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo
 memory-router stale ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo --json
 ```
 
+For workspace layouts where one shared corpus references paths in several sibling repos (a pandora-style monorepo of independent packages, an `~/work` folder of microservices, etc.), pass multiple roots. A ref is STALE only when none of the roots resolves it; first hit wins. Mix and match the two flag forms as you like:
+
+```bash
+# Repeated --repo-root: explicit, order-insensitive.
+memory-router stale ~/.claude/projects/PROJECT/memory \
+  --repo-root ~/git/repoA \
+  --repo-root ~/git/repoB \
+  --repo-root ~/git/repoC
+
+# Variadic --repo-roots: terser. Place the <dir> arg BEFORE --repo-roots
+# so the slurp doesn't consume it.
+memory-router stale ~/.claude/projects/PROJECT/memory \
+  --repo-roots ~/git/repoA ~/git/repoB ~/git/repoC
+```
+
+Symbol checks are degraded ("skipped" with a stderr warning) only when EVERY repo root is a non-git path. A single git root among several keeps symbol resolution honest.
+
 By default ONLY refs declared in a memory's `verify:` frontmatter are checked. The contract is the same `MemoryReference[]` shape the runtime side uses (see `src/verify-refs.ts`):
 
 ```yaml
