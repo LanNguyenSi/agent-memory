@@ -292,6 +292,14 @@ memory-router lint ~/.claude/projects/PROJECT/memory --conflicts
 
 The check runs two heuristics: topic overlap among `feedback` memories (INFO level, surface for human glance) and opposite-imperative pairs whose first body lines share substantial subject vocabulary (HIGH, e.g. "ALWAYS amend commits" vs "NEVER amend commits" both tagged `workflow`). Only HIGH findings exit non-zero, so a corpus with normal complementary advice still lets CI stay green. The check is opt-in (off by default) because INFO-level overlap is expected on a mature corpus and would otherwise flood the default `lint` run.
 
+Add `--semantic` to catch paraphrased pairs the regex pass misses, e.g. "always squash before merge" vs "never squash, use fast-forward only": opposite polarity but no shared content tokens, so the Jaccard floor on the regex pass keeps them at INFO. With `--semantic` the linter embeds both memories' name+body and upgrades the pair to HIGH when cosine similarity >= 0.85:
+
+```bash
+OPENAI_API_KEY=sk-... memory-router lint ~/.claude/projects/PROJECT/memory --conflicts --semantic
+```
+
+Reuses the embedding cache the Confidence Gate already maintains in `~/.claude/projects/PROJECT/memory/.memory-router/index.sqlite` (built by `memory-router index`); pairs not yet in the index are embedded on the fly without persisting. When `OPENAI_API_KEY` is unset the semantic step prints a stderr warning and falls back to the regex-only signal, so CI without secrets stays green.
+
 Pre-commit hook snippet, rejects drift before it lands:
 
 ```bash

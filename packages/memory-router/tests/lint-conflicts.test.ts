@@ -5,10 +5,13 @@ const os = require('node:os');
 const fs = require('node:fs');
 const {
   lintMemoryDirForConflicts,
+  lintMemoryDirForConflictsWithSemantic,
   formatConflictReportText,
   __detectPolarity,
   __jaccard,
   __contentTokens,
+  __cosineSimilarity,
+  __SEMANTIC_SIMILARITY_THRESHOLD,
 } = require('../src/lint/conflicts');
 
 function tmpDir(): string {
@@ -267,6 +270,149 @@ test('formatConflictReportText: empty report', () => {
   });
   assert.match(text, /5 feedback memor.* scanned across 12 total file/);
   assert.match(text, /no topic-conflicts detected/);
+});
+
+test('cosineSimilarity: identical vectors = 1, orthogonal = 0, opposite = -1', () => {
+  assert.equal(__cosineSimilarity([1, 0, 0], [1, 0, 0]), 1);
+  assert.equal(__cosineSimilarity([1, 0], [0, 1]), 0);
+  assert.equal(__cosineSimilarity([1, 0], [-1, 0]), -1);
+  assert.equal(__cosineSimilarity([], []), 0);
+  assert.equal(__cosineSimilarity([0, 0], [0, 0]), 0);
+});
+
+test('--semantic upgrades INFO → HIGH when paraphrased pair clears similarity threshold', async () => {
+  const dir = tmpDir();
+  // Two memories with opposite polarity but DISJOINT content vocabulary
+  // — the regex pass keeps them at INFO because Jaccard is 0. The stub
+  // embedder returns identical vectors so cosine sim = 1 ≥ threshold,
+  // which forces the upgrade.
+  writeMem(
+    dir,
+    'feedback_squash_yes.md',
+    'name: squash always\ndescription: one tidy commit\ntype: feedback\ntopics: [workflow]',
+    'ALWAYS squash before merge to keep master tidy.',
+  );
+  writeMem(
+    dir,
+    'feedback_ff_only.md',
+    'name: fast-forward only\ndescription: keep linear history without squash\ntype: feedback\ntopics: [workflow]',
+    'NEVER rewrite history during merge; use fast-forward only.',
+  );
+
+  const stubEmbed = async (texts: string[]): Promise<number[][]> =>
+    texts.map(() => [1, 0, 0]);
+
+  try {
+    const baseReport = lintMemoryDirForConflicts(dir);
+    const baseHigh = baseReport.hits.filter(
+      (h: { severity: string }) => h.severity === 'high',
+    );
+    assert.equal(
+      baseHigh.length,
+      0,
+      'regex-only pass cannot reach HIGH on disjoint subjects',
+    );
+
+    const report = await lintMemoryDirForConflictsWithSemantic(dir, {
+      semantic: true,
+      embedFn: stubEmbed,
+    });
+    const high = report.hits.filter(
+      (h: { severity: string }) => h.severity === 'high',
+    );
+    assert.equal(high.length, 1, '--semantic must upgrade the paraphrased pair');
+    assert.match(high[0].reason, /semantic similarity/);
+    assert.match(high[0].reason, /--semantic/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--semantic does NOT upgrade pairs without opposite polarity', async () => {
+  const dir = tmpDir();
+  // Both memories use positive polarity. Even with a stub embedder
+  // returning sim=1, the pair must stay INFO because polarity isn't
+  // opposite — the embedding alone is too weak a signal.
+  writeMem(
+    dir,
+    'feedback_a.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'ALWAYS run the audit before push.',
+  );
+  writeMem(
+    dir,
+    'feedback_b.md',
+    'name: b\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'ALWAYS document the change in the PR body.',
+  );
+
+  const stubEmbed = async (texts: string[]): Promise<number[][]> =>
+    texts.map(() => [1, 0, 0]);
+
+  try {
+    const report = await lintMemoryDirForConflictsWithSemantic(dir, {
+      semantic: true,
+      embedFn: stubEmbed,
+    });
+    const high = report.hits.filter(
+      (h: { severity: string }) => h.severity === 'high',
+    );
+    assert.equal(high.length, 0, 'same-polarity pairs must not upgrade');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--semantic skips with stderr warning when OPENAI_API_KEY is unset', async () => {
+  const dir = tmpDir();
+  writeMem(
+    dir,
+    'feedback_a.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'ALWAYS squash before merge.',
+  );
+  writeMem(
+    dir,
+    'feedback_b.md',
+    'name: b\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'NEVER rewrite history, use fast-forward only.',
+  );
+
+  // Capture stderr writes triggered by the fail-open path.
+  const captured: string[] = [];
+  const origWrite = process.stderr.write.bind(process.stderr);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (process.stderr as any).write = (chunk: any) => {
+    captured.push(String(chunk));
+    return true;
+  };
+  const prevKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const report = await lintMemoryDirForConflictsWithSemantic(dir, {
+      semantic: true,
+      // No embedFn override — forces the resolveProviderConfig path.
+    });
+    const high = report.hits.filter(
+      (h: { severity: string }) => h.severity === 'high',
+    );
+    assert.equal(high.length, 0, 'fail-open: regex-only signal returned, no upgrade');
+    assert.ok(
+      captured.some((line) =>
+        line.includes('--semantic skipped: OPENAI_API_KEY not set'),
+      ),
+      'must emit the documented stderr line for the skip path',
+    );
+  } finally {
+    process.stderr.write = origWrite;
+    if (prevKey !== undefined) process.env.OPENAI_API_KEY = prevKey;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--semantic threshold constant is 0.85 (regression-pin)', () => {
+  assert.equal(__SEMANTIC_SIMILARITY_THRESHOLD, 0.85);
 });
 
 test('formatConflictReportText: shows both file paths and first-line snippets for HIGH', () => {

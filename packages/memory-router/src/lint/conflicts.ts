@@ -15,9 +15,14 @@
 //      `don't`, `must`, `must not`, ...). When the pair has opposite
 //      polarity AND the surrounding subjects share substantial vocabulary,
 //      elevate to HIGH (probable real conflict).
-//   3. (Future, behind `--semantic`) Embedding-cosine of body+name pairs
-//      sharing a topic. Tracked as a separate task so this PR ships the
-//      regex-only signal first.
+//   3. (Behind `--semantic`) Embedding-cosine of body+name pairs sharing a
+//      topic. Catches paraphrased subjects the regex-only Jaccard step
+//      misses ("always squash before merge" vs "never squash, use
+//      fast-forward only": no shared content tokens, opposite polarity,
+//      but semantically the same subject). Opposite-polarity INFO pairs get
+//      upgraded to HIGH when cosine similarity is above the threshold.
+//      Skips fail-open with a stderr warning when OPENAI_API_KEY is unset
+//      so CI without secrets does not break.
 //
 // Why only `feedback` memories: `project` memories are bound to a moment
 // in time and can legitimately disagree across history (one was true in
@@ -25,7 +30,11 @@
 // `user` memories describe one person and are unlikely to contradict
 // without intent. Restricting to `feedback` keeps false-positive rate low.
 
+const { existsSync } = require('node:fs');
 const { loadMemoriesFromDir } = require('../memory/loader');
+const { resolveProviderConfig, embedBatch } = require('../embed/provider');
+const { openIndex } = require('../embed/index-store');
+const { indexPath, EMBED_DIMENSIONS } = require('../embed/indexer');
 
 export type ConflictSeverity = 'info' | 'high';
 
@@ -165,6 +174,20 @@ function classifyFeedbackMemories(memories: Memory[]): FeedbackMemory[] {
   return out;
 }
 
+// `--semantic` upgrades INFO → HIGH when paraphrased pairs of opposite
+// polarity have body+name embedding cosine similarity above this floor. 0.85
+// is conservative: text-embedding-3-small produces similarities of ~0.7-0.8
+// even for loosely related text on shared topics, so a true paraphrase pair
+// (~0.88-0.95 in observed runs) clears it without dragging in unrelated
+// same-topic advice.
+const SEMANTIC_SIMILARITY_THRESHOLD = 0.85;
+
+export interface ConflictOptions {
+  // Test seam: substitute the embedding call so unit tests don't need
+  // OPENAI_API_KEY or network.
+  embedFn?: (texts: string[]) => Promise<number[][]>;
+}
+
 export function lintMemoryDirForConflicts(dir: string): ConflictReport {
   const memories = loadMemoriesFromDir(dir);
   const feedbackMemories = classifyFeedbackMemories(memories);
@@ -270,12 +293,167 @@ export function formatConflictReportText(report: ConflictReport): string {
   return lines.join('\n') + '\n';
 }
 
+function buildPairEmbedInput(memory: Memory): string {
+  // Match embed/indexer.ts buildEmbedInput: name + description + body.
+  const parts = [memory.frontmatter.name, memory.frontmatter.description, memory.body];
+  return parts.filter(Boolean).join('\n').slice(0, 8000);
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denom === 0) return 0;
+  return dot / denom;
+}
+
+// Async wrapper that runs the regex-only sweep first, then optionally
+// upgrades opposite-polarity INFO pairs to HIGH via embedding cosine.
+// Caller decides whether to enable the semantic pass via opts.semantic
+// or by passing a non-null embedFn (tests).
+export async function lintMemoryDirForConflictsWithSemantic(
+  dir: string,
+  opts: ConflictOptions & { semantic: boolean } = { semantic: false },
+): Promise<ConflictReport> {
+  const baseReport = lintMemoryDirForConflicts(dir);
+  if (!opts.semantic) return baseReport;
+
+  // Find INFO pairs that the regex-only step rejected because either the
+  // first line had no detectable polarity or the Jaccard floor (25%)
+  // wasn't met. Both are reasons a paraphrased pair could slip past.
+  const candidates = baseReport.hits
+    .map((hit, idx) => ({ hit, idx }))
+    .filter(({ hit }) => hit.severity === 'info');
+
+  // Resolve the embedder before doing any further work so a user who
+  // explicitly enabled --semantic always gets a reason for an empty upgrade
+  // pass instead of silent regex-only output. Test override > live provider
+  // config. Fail-open with a one-line stderr warning when neither is
+  // available.
+  const cfg = resolveProviderConfig();
+  if (!opts.embedFn && !cfg) {
+    process.stderr.write(
+      '[memory-router] --semantic skipped: OPENAI_API_KEY not set\n',
+    );
+    return baseReport;
+  }
+
+  // Re-detect polarities on the recorded first lines so we don't lose
+  // information from the sync pass, and only embed pairs where both sides
+  // make a directive (positive vs negative). Pairs without polarity stay
+  // INFO: the embedding alone is not a strong-enough signal to flag two
+  // descriptive memos as a HIGH conflict.
+  const polarityCandidates = candidates.filter(({ hit }) => {
+    const pa = detectPolarity(hit.a.firstLine);
+    const pb = detectPolarity(hit.b.firstLine);
+    return (
+      (pa === 'positive' && pb === 'negative') ||
+      (pa === 'negative' && pb === 'positive')
+    );
+  });
+
+  if (polarityCandidates.length === 0) return baseReport;
+
+  // Reload memories so we can build the embed input from full body+name.
+  // The hits only carry first-line snippets, which is too narrow to embed.
+  const allMemories = loadMemoriesFromDir(dir);
+  const byMemoryId = new Map<string, Memory>(
+    allMemories.map((m: Memory) => [m.id, m]),
+  );
+
+  const neededIds = new Set<string>();
+  for (const { hit } of polarityCandidates) {
+    neededIds.add(hit.a.memoryId);
+    neededIds.add(hit.b.memoryId);
+  }
+
+  const embedByMemoryId = new Map<string, number[]>();
+
+  // Cheap reuse path: if the live index covers any of these memories, pull
+  // their stored embeddings directly. The index is keyed by memory id, so
+  // a partial cover is fine: we only embed the misses below.
+  if (cfg) {
+    const idxPath = indexPath(dir);
+    if (existsSync(idxPath)) {
+      const store = openIndex({ path: idxPath, dimensions: EMBED_DIMENSIONS });
+      try {
+        for (const id of neededIds) {
+          const emb = store.getEmbedding(id);
+          if (emb) embedByMemoryId.set(id, emb);
+        }
+      } finally {
+        store.close();
+      }
+    }
+  }
+
+  // Compute the misses on-the-fly. We do NOT persist these to the index:
+  // the index is a Confidence Gate artifact and `memory-router lint` should
+  // not have side-effects on it. If the user wants persistent embeddings
+  // they run `memory-router index` separately.
+  const missingIds = [...neededIds].filter((id) => !embedByMemoryId.has(id));
+  if (missingIds.length > 0) {
+    const inputs = missingIds.map((id) => {
+      const m = byMemoryId.get(id);
+      return m ? buildPairEmbedInput(m) : '';
+    });
+    const embedFn =
+      opts.embedFn ??
+      ((texts: string[]) =>
+        embedBatch({
+          apiKey: cfg!.apiKey,
+          model: cfg!.model,
+          baseUrl: cfg!.baseUrl,
+          inputs: texts,
+        }));
+    const vectors = await embedFn(inputs);
+    if (vectors.length !== missingIds.length) {
+      // Fail-open: embedder returned a malformed batch. Don't upgrade
+      // anything; the regex pass already gave a useful signal.
+      process.stderr.write(
+        `[memory-router] --semantic skipped: embedder returned ${vectors.length} vectors for ${missingIds.length} inputs\n`,
+      );
+      return baseReport;
+    }
+    missingIds.forEach((id, i) => embedByMemoryId.set(id, vectors[i]));
+  }
+
+  // Walk candidates, upgrade in-place on a copy of the hits array so the
+  // base report stays untouched (callers may compare).
+  const upgradedHits = baseReport.hits.slice();
+  for (const { hit, idx } of polarityCandidates) {
+    const va = embedByMemoryId.get(hit.a.memoryId);
+    const vb = embedByMemoryId.get(hit.b.memoryId);
+    if (!va || !vb) continue;
+    const sim = cosineSimilarity(va, vb);
+    if (sim >= SEMANTIC_SIMILARITY_THRESHOLD) {
+      upgradedHits[idx] = {
+        ...hit,
+        severity: 'high',
+        reason: `opposite imperatives + semantic similarity ${(sim * 100).toFixed(0)}% (--semantic)`,
+      };
+    }
+  }
+
+  return { ...baseReport, hits: upgradedHits };
+}
+
 module.exports = {
   lintMemoryDirForConflicts,
+  lintMemoryDirForConflictsWithSemantic,
   formatConflictReportText,
   // Re-export for tests; private otherwise.
   __detectPolarity: detectPolarity,
   __firstLine: firstLine,
   __jaccard: jaccard,
   __contentTokens: contentTokens,
+  __cosineSimilarity: cosineSimilarity,
+  __SEMANTIC_SIMILARITY_THRESHOLD: SEMANTIC_SIMILARITY_THRESHOLD,
 };
