@@ -16,6 +16,11 @@ const {
   lintMemoryDirForConflicts,
   formatConflictReportText,
 } = require('./lint/conflicts');
+const {
+  lintMemoryDirForStale,
+  formatStaleReportText,
+  formatStaleReportJson,
+} = require('./lint/stale');
 
 interface ParsedArgs {
   cmd: string;
@@ -25,6 +30,10 @@ interface ParsedArgs {
   lintChecks: { drift: boolean; unknownTopics: boolean; conflicts: boolean };
   fix: boolean;
   json: boolean;
+  /** `stale` command: defaults to `process.cwd()` when not given. */
+  repoRoot?: string;
+  /** `stale --scan-body`: also extract refs from memory bodies via regex. */
+  scanBody: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -37,6 +46,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let fix = false;
   let json = false;
 
+  let repoRoot: string | undefined;
+  let scanBody = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true;
@@ -44,6 +55,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === '--unknown-topics') topicsFlag = true;
     else if (a === '--drift') driftFlag = true;
     else if (a === '--conflicts') conflictsFlag = true;
+    else if (a === '--repo-root') repoRoot = argv[++i];
+    else if (a.startsWith('--repo-root=')) repoRoot = a.slice('--repo-root='.length);
+    else if (a === '--scan-body') scanBody = true;
     else if (a === '--fix') fix = true;
     else if (a === '--json') json = true;
     else if (a === '--help' || a === '-h') {
@@ -86,6 +100,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     lintChecks,
     fix,
     json,
+    repoRoot,
+    scanBody,
   };
 }
 
@@ -122,12 +138,30 @@ Commands:
     --json emits a machine-readable report for drift; the topics and
     conflicts checks retain their text format.
 
+  stale <dir> [--repo-root <path>] [--scan-body] [--json]
+    Scan every memory in <dir> for stale references against <repo-root>
+    (defaults to process.cwd()). By default ONLY refs declared in a
+    memory's verify: frontmatter are checked:
+      - path   : verify: kind=path. fs.statSync against
+                 <repo-root>/<value>; missing -> STALE.
+      - symbol : verify: kind=symbol. Resolved via 'git grep -l -w'
+                 from <repo-root>. Zero matches -> STALE candidate. If
+                 <repo-root> is not a git checkout, symbol checks
+                 degrade to "skipped" with a one-time stderr warning.
+    --scan-body additionally extracts refs from memory bodies via a
+    backtick + path-shape regex. Off by default because real corpora
+    contain a lot of backtick'd strings that look like paths but aren't
+    (gh-shorthand, branch names, env-var snippets, cross-repo paths).
+    --json emits a structured report on stdout for CI consumers.
+    Exits 1 when any STALE ref is found, 0 otherwise.
+
 Examples:
   memory-router tag ~/.claude/projects/PROJECT/memory
   memory-router tag ~/.claude/projects/PROJECT/memory --apply
   memory-router index ~/.claude/projects/PROJECT/memory
   memory-router lint ~/.claude/projects/PROJECT/memory
   memory-router lint ~/.claude/projects/PROJECT/memory --drift --fix
+  memory-router stale ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo
 `);
 }
 
@@ -253,10 +287,54 @@ function runLint(
   process.exit(exitCode);
 }
 
+function runStale(dir: string, repoRoot: string, json: boolean, scanBody: boolean): void {
+  const fs = require('node:fs');
+  for (const candidate of [dir, repoRoot]) {
+    let stat;
+    try {
+      stat = fs.statSync(candidate);
+    } catch (err: unknown) {
+      process.stderr.write(`error: cannot read ${candidate}: ${String(err)}\n`);
+      process.exit(1);
+    }
+    if (!stat.isDirectory()) {
+      process.stderr.write(`error: ${candidate} is not a directory\n`);
+      process.exit(1);
+    }
+  }
+
+  let report;
+  try {
+    report = lintMemoryDirForStale(dir, repoRoot, { scanBody });
+  } catch (err: unknown) {
+    process.stderr.write(`error: ${String(err)}\n`);
+    process.exit(1);
+  }
+
+  if (json) {
+    process.stdout.write(formatStaleReportJson(report));
+  } else {
+    process.stdout.write(formatStaleReportText(report));
+  }
+  // 'skipped' (e.g. non-git repoRoot for symbol checks) does not fail the
+  // build; only verifiable failures do. 'malformed' DOES fail because a
+  // broken verify: contract is the author's bug to fix.
+  const realStale = report.hits.some(
+    (h: { status: string }) =>
+      h.status === 'missing' || h.status === 'no-matches' || h.status === 'malformed',
+  );
+  process.exit(realStale ? 1 : 0);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args.cmd !== 'tag' && args.cmd !== 'index' && args.cmd !== 'lint') {
+  if (
+    args.cmd !== 'tag' &&
+    args.cmd !== 'index' &&
+    args.cmd !== 'lint' &&
+    args.cmd !== 'stale'
+  ) {
     printHelp();
     process.exit(args.cmd === '' ? 0 : 1);
   }
@@ -272,6 +350,11 @@ async function main(): Promise<void> {
 
   if (args.cmd === 'lint') {
     runLint(args.dir, args.lintChecks, args.fix, args.json);
+    return;
+  }
+
+  if (args.cmd === 'stale') {
+    runStale(args.dir, args.repoRoot ?? process.cwd(), args.json, args.scanBody);
     return;
   }
 

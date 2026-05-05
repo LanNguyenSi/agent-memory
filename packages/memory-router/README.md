@@ -238,6 +238,48 @@ memory-router lint ~/.claude/projects/PROJECT/memory --drift --json \
   || { echo "memory-router drift check failed — run with --fix or resolve manually"; exit 1; }
 ```
 
+### Stale memory references
+
+Memories age: file paths get renamed, functions get removed, branches get merged and deleted. `memory-router stale` walks every memory in a directory and checks each declared reference against a configured repo root:
+
+```bash
+memory-router stale ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo
+memory-router stale ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo --json
+```
+
+By default ONLY refs declared in a memory's `verify:` frontmatter are checked. The contract is the same `MemoryReference[]` shape the runtime side uses (see `src/verify-refs.ts`):
+
+```yaml
+---
+name: agent-tasks PR-merge paths
+description: ...
+type: feedback
+verify:
+  - kind: path
+    value: backend/src/routes/github.ts
+  - kind: symbol
+    value: pickMergeTargetStatus
+---
+```
+
+Two kinds are checked:
+
+- **Path** refs (`kind: path`) are `fs.statSync`'d against `<repo-root>/<value>`. Missing → STALE.
+- **Symbol** refs (`kind: symbol`) are resolved via `git grep -l -w <value>` from the repo root. Zero matches → STALE candidate. If `<repo-root>` is not a git checkout, symbol checks degrade to "skipped" with a one-time stderr warning rather than crashing.
+
+A malformed `verify:` entry (missing `value`, non-identifier symbol shape, etc.) is reported as `malformed` so you fix the YAML rather than chase a phantom missing file.
+
+The `--scan-body` flag additionally extracts refs from a memory's body via a backtick + path-shape regex (paths like `src/foo.ts`) and a function-call regex (`myFn()`, `Class.method()`). It is OFF by default because real corpora contain a lot of backtick'd strings that look like paths but aren't (gh-shorthand `LanNguyenSi/foo`, branch names `feat/...`, env-var snippets `$XDG_CONFIG_HOME/...`, route templates, cross-repo paths). When `verify:` is present on a memory, body-regex extraction is skipped for that memory even with `--scan-body` on; the explicit contract always wins.
+
+Exits 1 on any STALE / malformed finding, 0 otherwise. `--json` emits a structured report on stdout that CI can consume directly.
+
+**Limitations:**
+
+- Single-repo only. v1 resolves every ref against one `--repo-root`; memories that legitimately reference sibling repos in a workspace will surface as STALE under that one root.
+- Symbol checks require a git repo root. Non-git directories degrade to "skipped" rather than reporting STALE.
+- Date-based and URL-based staleness checks are not yet implemented (filed as follow-ups).
+- `git grep` is not AST-aware: a symbol that survives only in a comment or generated file counts as found.
+
 ### Programmatically
 
 ```typescript
