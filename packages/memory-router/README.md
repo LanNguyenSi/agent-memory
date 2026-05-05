@@ -222,7 +222,13 @@ Checks:
 - **Invalid frontmatter** — missing `name`/`description`/`type`, unknown `type`, or YAML that fails to parse. The runtime loader silently drops such files, so they never fire through any gate.
 - **Description too long** — frontmatter `description` > 150 chars; the same text is used as the MEMORY.md hook, where it would blow the one-line budget.
 
-Without any check flag `lint` runs drift **and** the `--unknown-topics` frontmatter check; pass `--drift` or `--unknown-topics` to narrow.
+Without any check flag `lint` runs drift **and** the `--unknown-topics` frontmatter check; pass `--drift` or `--unknown-topics` to narrow. A third opt-in check, `--conflicts`, finds pairs of `feedback` memories that share a topic and may contradict each other:
+
+```bash
+memory-router lint ~/.claude/projects/PROJECT/memory --conflicts
+```
+
+The check runs two heuristics: topic overlap among `feedback` memories (INFO level, surface for human glance) and opposite-imperative pairs whose first body lines share substantial subject vocabulary (HIGH, e.g. "ALWAYS amend commits" vs "NEVER amend commits" both tagged `workflow`). Only HIGH findings exit non-zero, so a corpus with normal complementary advice still lets CI stay green. The check is opt-in (off by default) because INFO-level overlap is expected on a mature corpus and would otherwise flood the default `lint` run.
 
 Pre-commit hook snippet — rejects drift before it lands:
 
