@@ -42,8 +42,16 @@ const { isAbsolute, join, resolve } = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { loadMemoriesFromDir } = require('../memory/loader');
 
-export type StaleCheckKind = 'path' | 'symbol';
-export type StaleStatus = 'missing' | 'no-matches' | 'skipped' | 'malformed';
+export type StaleCheckKind = 'path' | 'symbol' | 'date' | 'url';
+// `possibly-stale` is INFO-level and does NOT contribute to exit code.
+// Used by the date-staleness heuristic so authors get a soft nudge
+// without breaking CI on every ageing memory.
+export type StaleStatus =
+  | 'missing'
+  | 'no-matches'
+  | 'skipped'
+  | 'malformed'
+  | 'possibly-stale';
 
 export interface StaleHit {
   memoryPath: string;
@@ -69,9 +77,33 @@ export interface StaleOptions {
    * When true, also extract refs from a memory's body via the backtick +
    * path-shape regex. Default: false (only `verify:` frontmatter is
    * checked). Body-regex extraction is too noisy on real corpora to be a
-   * safe default — see the file-level comment block.
+   * safe default, see the file-level comment block.
    */
   scanBody?: boolean;
+  /**
+   * When true, HEAD-request every external URL extracted from each
+   * memory's body and flag 4xx as STALE. Off by default because it's
+   * network-dependent. Network errors and timeouts surface as `skipped`,
+   * never as STALE.
+   */
+  checkUrls?: boolean;
+  /**
+   * Maximum age for a body-only date reference before the memory is
+   * flagged `possibly-stale`. Default 90 days. The check is informational
+   * and never contributes to exit code.
+   */
+  dateMaxAgeDays?: number;
+  /**
+   * Test seam: stub the URL HEAD probe. Returns the HTTP status code
+   * (number) on success, or null when the request failed (network error,
+   * DNS, timeout, etc). Production callers leave this unset and the
+   * built-in `fetch`-based probe is used.
+   */
+  fetchHeadStatus?: (url: string) => Promise<number | null>;
+  /**
+   * Test seam: pin "now" so date-staleness fixtures are deterministic.
+   */
+  now?: Date;
 }
 
 // File extensions that count as a path-shape signal even without a `/`.
@@ -404,6 +436,160 @@ function checkSymbol(
   };
 }
 
+// ISO 8601 calendar dates anywhere in the body. Hyphenated only:
+// `2026-04-23`. We deliberately skip slash and dot date formats because
+// they collide with paths and version strings on real corpora.
+const ISO_DATE_RE = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+
+function extractDatesFromBody(body: string): Date[] {
+  const dates: Date[] = [];
+  let match: RegExpExecArray | null;
+  ISO_DATE_RE.lastIndex = 0;
+  while ((match = ISO_DATE_RE.exec(body)) !== null) {
+    const y = Number(match[1]);
+    const m = Number(match[2]);
+    const d = Number(match[3]);
+    // Reject impossible calendar values (e.g. 2026-13-99) so
+    // version-string-shaped tokens don't pretend to be dates.
+    if (m < 1 || m > 12 || d < 1 || d > 31) continue;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (
+      dt.getUTCFullYear() === y &&
+      dt.getUTCMonth() === m - 1 &&
+      dt.getUTCDate() === d
+    ) {
+      dates.push(dt);
+    }
+  }
+  return dates;
+}
+
+const DEFAULT_DATE_MAX_AGE_DAYS = 90;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+interface DateCheckInput {
+  body: string;
+  updatedAt?: unknown;
+  now: Date;
+  maxAgeDays: number;
+}
+
+// "Possibly stale": every date reference in the body is older than
+// maxAgeDays AND there's no `updatedAt:` in the frontmatter that's
+// newer than the threshold. Memories with no body dates at all are
+// silent (we have nothing to compare against).
+function checkDateStaleness(input: DateCheckInput): PartialHit | null {
+  const bodyDates = extractDatesFromBody(input.body);
+  if (bodyDates.length === 0) return null;
+
+  const newestBody = bodyDates.reduce(
+    (acc, d) => (d > acc ? d : acc),
+    bodyDates[0],
+  );
+  const cutoff = new Date(input.now.getTime() - input.maxAgeDays * MS_PER_DAY);
+  if (newestBody >= cutoff) return null;
+
+  // Frontmatter override: an explicit `updatedAt` newer than the cutoff
+  // suppresses the warning. Accept Date instances and ISO strings; YAML
+  // typically yields one or the other depending on quoting.
+  const updatedAt = parseUpdatedAt(input.updatedAt);
+  if (updatedAt && updatedAt >= cutoff) return null;
+
+  const ageDays = Math.floor(
+    (input.now.getTime() - newestBody.getTime()) / MS_PER_DAY,
+  );
+  return {
+    check: 'date',
+    ref: newestBody.toISOString().slice(0, 10),
+    status: 'possibly-stale',
+    detail: `newest body date is ${ageDays} days old; add an updatedAt: frontmatter or refresh the memory`,
+  };
+}
+
+function parseUpdatedAt(value: unknown): Date | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === 'string' && value.length > 0) {
+    const dt = new Date(value);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+  return null;
+}
+
+// Permissive URL match for body extraction. The conservative form is
+// fine: trailing punctuation common in prose (",", ".", ")", "]", "?",
+// "!", ";") is trimmed so "see https://example.com." doesn't capture
+// the period.
+const URL_RE = /\bhttps?:\/\/[^\s)>\]"'`]+/g;
+const URL_TRAILING_PUNCT_RE = /[.,!?;:)\]]+$/;
+
+function extractUrlsFromBody(body: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(body)) !== null) {
+    const url = match[0].replace(URL_TRAILING_PUNCT_RE, '');
+    if (url.length === 0) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
+// Default URL-HEAD probe. Wraps Node's global fetch with a 5-second
+// timeout. Returns the HTTP status code on response, or null when the
+// request couldn't complete (network error, DNS, timeout). The caller
+// turns null into a `skipped` hit, not STALE: a flaky network must
+// not blame the memory.
+const URL_HEAD_TIMEOUT_MS = 5000;
+
+async function defaultFetchHeadStatus(url: string): Promise<number | null> {
+  try {
+    const res = await fetch(url, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(URL_HEAD_TIMEOUT_MS),
+      redirect: 'follow',
+    });
+    return res.status;
+  } catch {
+    return null;
+  }
+}
+
+async function checkUrl(
+  url: string,
+  fetchFn: (u: string) => Promise<number | null>,
+): Promise<PartialHit | null> {
+  const status = await fetchFn(url);
+  if (status === null) {
+    return {
+      check: 'url',
+      ref: url,
+      status: 'skipped',
+      detail: `HEAD request to ${url} failed (network/timeout); not flagged`,
+    };
+  }
+  if (status >= 400 && status < 500) {
+    return {
+      check: 'url',
+      ref: url,
+      status: 'missing',
+      detail: `HEAD ${url} returned ${status}`,
+    };
+  }
+  // 5xx is treated as skipped: server problem, not a dead link.
+  if (status >= 500) {
+    return {
+      check: 'url',
+      ref: url,
+      status: 'skipped',
+      detail: `HEAD ${url} returned ${status} (server error, not flagged)`,
+    };
+  }
+  return null;
+}
+
 export function lintMemoryDirForStale(
   dir: string,
   repoRoot: string | string[],
@@ -422,6 +608,8 @@ export function lintMemoryDirForStale(
   const hits: StaleHit[] = [];
   let refsChecked = 0;
   const symbolStates: SymbolStateMap = new Map();
+  const now = options.now ?? new Date();
+  const dateMaxAgeDays = options.dateMaxAgeDays ?? DEFAULT_DATE_MAX_AGE_DAYS;
 
   for (const memory of memories) {
     const verifyResult = extractRefsFromVerify(memory.frontmatter.verify);
@@ -471,6 +659,32 @@ export function lintMemoryDirForStale(
         });
       }
     }
+
+    // Date-staleness (Heuristik 3). INFO-only, runs unconditionally:
+    // memories without body dates are silent so this doesn't flood
+    // reports on a corpus that simply doesn't carry dates. Cheap (no
+    // I/O), so no opt-in flag needed. refsChecked increments only when
+    // the check actually evaluated body dates (matching the per-ref
+    // counter semantics of path/symbol).
+    const bodyDates = extractDatesFromBody(memory.body);
+    if (bodyDates.length > 0) {
+      refsChecked++;
+      const dateHit = checkDateStaleness({
+        body: memory.body,
+        updatedAt: memory.frontmatter.updatedAt,
+        now,
+        maxAgeDays: dateMaxAgeDays,
+      });
+      if (dateHit) {
+        hits.push({
+          memoryPath: memory.path,
+          memoryId: memory.id,
+          source: 'body-regex',
+          ...dateHit,
+        });
+      }
+    }
+
   }
 
   // "degraded" means EVERY probed root was non-git. A single git root
@@ -484,6 +698,49 @@ export function lintMemoryDirForStale(
     scannedCount: memories.length,
     refsChecked,
     symbolCheckDegraded,
+  };
+}
+
+// Async wrapper that runs the sync sweep first, then optionally probes
+// every body-extracted URL with a HEAD request and folds the results
+// back in. Keeps the sync API working for the no-network path
+// (path/symbol/date heuristics) while letting --check-urls add a
+// network-dependent check on top.
+export async function lintMemoryDirForStaleWithUrls(
+  dir: string,
+  repoRoot: string | string[],
+  options: StaleOptions = {},
+): Promise<StaleReport> {
+  const baseReport = lintMemoryDirForStale(dir, repoRoot, options);
+  if (!options.checkUrls) return baseReport;
+
+  const fetchHeadStatus = options.fetchHeadStatus ?? defaultFetchHeadStatus;
+  const memories = loadMemoriesFromDir(dir);
+  const newHits: StaleHit[] = baseReport.hits.slice();
+  let extraRefs = 0;
+
+  for (const memory of memories) {
+    const urls = extractUrlsFromBody(memory.body);
+    if (urls.length === 0) continue;
+    const probes = await Promise.all(urls.map((u) => checkUrl(u, fetchHeadStatus)));
+    for (let i = 0; i < urls.length; i++) {
+      extraRefs++;
+      const partial = probes[i];
+      if (partial) {
+        newHits.push({
+          memoryPath: memory.path,
+          memoryId: memory.id,
+          source: 'body-regex',
+          ...partial,
+        });
+      }
+    }
+  }
+
+  return {
+    ...baseReport,
+    hits: newHits,
+    refsChecked: baseReport.refsChecked + extraRefs,
   };
 }
 
@@ -530,10 +787,13 @@ export function formatStaleReportJson(report: StaleReport): string {
 
 module.exports = {
   lintMemoryDirForStale,
+  lintMemoryDirForStaleWithUrls,
   formatStaleReportText,
   formatStaleReportJson,
   // Re-exported for tests; private otherwise.
   __looksLikePath: looksLikePath,
   __extractRefsFromBody: extractRefsFromBody,
   __extractRefsFromVerify: extractRefsFromVerify,
+  __extractDatesFromBody: extractDatesFromBody,
+  __extractUrlsFromBody: extractUrlsFromBody,
 };

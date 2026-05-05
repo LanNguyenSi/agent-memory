@@ -368,7 +368,11 @@ A malformed `verify:` entry (missing `value`, non-identifier symbol shape, etc.)
 
 The `--scan-body` flag additionally extracts refs from a memory's body via a backtick + path-shape regex (paths like `src/foo.ts`) and a function-call regex (`myFn()`, `Class.method()`). It is OFF by default because real corpora contain a lot of backtick'd strings that look like paths but aren't (gh-shorthand `LanNguyenSi/foo`, branch names `feat/...`, env-var snippets `$XDG_CONFIG_HOME/...`, route templates, cross-repo paths). When `verify:` is present on a memory, body-regex extraction is skipped for that memory even with `--scan-body` on; the explicit contract always wins.
 
-Exits 1 on any STALE / malformed finding, 0 otherwise. `--json` emits a structured report on stdout that CI can consume directly.
+A **date-staleness pass** runs unconditionally as INFO. Every memory whose newest ISO 8601 date in the body is older than 90 days AND whose frontmatter has no newer `updatedAt:` is flagged `possibly-stale`. INFO never contributes to exit code, so a slowly-ageing corpus does not break CI; the warning nudges the author to either refresh the memory or stamp `updatedAt: 2026-04-23` when the underlying claim is still current. Memories without body dates are silent.
+
+The **`--check-urls`** flag opt-in HEAD-requests every external URL extracted from each memory's body. Status `4xx` lands the URL as STALE; `5xx` and network errors land it as `skipped` (server / network problem, not a dead link). HEAD calls have a 5-second timeout. Off by default because it's network-dependent.
+
+Exits 1 on any STALE / no-matches / malformed finding, 0 otherwise. `possibly-stale` and `skipped` do not flip the exit code. `--json` emits a structured report on stdout that CI can consume directly.
 
 **Limitations:**
 
