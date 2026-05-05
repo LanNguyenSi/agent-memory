@@ -4,6 +4,12 @@ All notable changes to `@lannguyensi/memory-router` are recorded here.
 Versions follow [semver](https://semver.org/). The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Build now restores `+x` on the four `bin` targets (`memory-router`, `memory-router-user-prompt-submit`, `memory-router-pre-tool-use`, `memory-router-mcp`) via a postbuild `scripts/chmod-bins.mjs` step. `tsc` strips the execute bit on its JS output, and `npm link` (unlike registry installs) does not chmod link targets, so every rebuild used to leave the hooks failing with "Permission denied" until manually fixed.
+
 ## [0.2.0] - 2026-05-05
 
 ### Added
