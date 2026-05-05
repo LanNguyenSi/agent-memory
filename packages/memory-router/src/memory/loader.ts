@@ -1,27 +1,9 @@
 const { readFileSync, readdirSync, statSync } = require('node:fs');
 const { basename, extname, join } = require('node:path');
 const { parse: parseYaml } = require('yaml');
+const { debug: debugWarn } = require('../debug');
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
-
-// MEMORY_ROUTER_DEBUG=1 enables one-liner warnings on stderr for every
-// memory file the loader rejects. stdout is reserved for the hook contract
-// (the user-prompt-submit hook expects exclusively a UserPromptSubmit JSON
-// payload on stdout, see hooks/user-prompt-submit.ts), so debug output must
-// NOT touch stdout. Default off keeps production hooks silent.
-// One-line guarantee: YAML parser errors ship multi-line snippets (the
-// caret-pointer trick) that would otherwise produce 3-4 stderr lines per
-// rejection and break grep/awk filtering. Collapse all whitespace runs to a
-// single space so the output is always one `\n`-terminated line per event.
-function singleLine(msg: string): string {
-  return msg.replace(/\s+/g, ' ').trim();
-}
-
-function debugWarn(msg: string): void {
-  if (process.env.MEMORY_ROUTER_DEBUG === '1') {
-    process.stderr.write(`[memory-router] ${singleLine(msg)}\n`);
-  }
-}
 
 type ParseResult = { ok: true; memory: Memory } | { ok: false; reason: string };
 
