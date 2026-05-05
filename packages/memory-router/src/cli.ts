@@ -33,8 +33,14 @@ interface ParsedArgs {
   semantic: boolean;
   fix: boolean;
   json: boolean;
-  /** `stale` command: defaults to `process.cwd()` when not given. */
-  repoRoot?: string;
+  /**
+   * `stale` command: list of repo roots a path/symbol ref must resolve
+   * against. A ref is STALE only when none of the roots resolves it.
+   * When empty, runStale defaults to `[process.cwd()]`. The CLI accepts
+   * repeated `--repo-root <p>` flags or a variadic `--repo-roots <p1>
+   * <p2> ...` form (terminated by the next flag or end of argv).
+   */
+  repoRoots: string[];
   /** `stale --scan-body`: also extract refs from memory bodies via regex. */
   scanBody: boolean;
 }
@@ -50,7 +56,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let fix = false;
   let json = false;
 
-  let repoRoot: string | undefined;
+  const repoRoots: string[] = [];
   let scanBody = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -60,8 +66,18 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === '--drift') driftFlag = true;
     else if (a === '--conflicts') conflictsFlag = true;
     else if (a === '--semantic') semanticFlag = true;
-    else if (a === '--repo-root') repoRoot = argv[++i];
-    else if (a.startsWith('--repo-root=')) repoRoot = a.slice('--repo-root='.length);
+    else if (a === '--repo-root') repoRoots.push(argv[++i]);
+    else if (a.startsWith('--repo-root=')) {
+      repoRoots.push(a.slice('--repo-root='.length));
+    } else if (a === '--repo-roots') {
+      // Variadic slurp until the next `-`-prefixed token or end of argv.
+      // Convention: positional `<dir>` should appear BEFORE --repo-roots
+      // so the slurp doesn't swallow it. The validation in runStale
+      // catches a missing `<dir>` either way.
+      while (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+        repoRoots.push(argv[++i]);
+      }
+    }
     else if (a === '--scan-body') scanBody = true;
     else if (a === '--fix') fix = true;
     else if (a === '--json') json = true;
@@ -114,7 +130,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     semantic: semanticFlag,
     fix,
     json,
-    repoRoot,
+    repoRoots,
     scanBody,
   };
 }
@@ -161,10 +177,16 @@ Commands:
     --json emits a machine-readable report for drift; the topics and
     conflicts checks retain their text format.
 
-  stale <dir> [--repo-root <path>] [--scan-body] [--json]
-    Scan every memory in <dir> for stale references against <repo-root>
-    (defaults to process.cwd()). By default ONLY refs declared in a
-    memory's verify: frontmatter are checked:
+  stale <dir> [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--scan-body] [--json]
+    Scan every memory in <dir> for stale references against one or more
+    repo roots. Default root list: [process.cwd()]. A ref is STALE only
+    when it resolves against NONE of the roots; first hit wins for the
+    not-stale fast path. Mix and match the two flag forms freely:
+        --repo-root ~/git/repoA --repo-root ~/git/repoB
+        --repo-roots ~/git/repoA ~/git/repoB ~/git/repoC
+    Put '<dir>' BEFORE --repo-roots so the variadic slurp doesn't claim
+    it. By default ONLY refs declared in a memory's verify: frontmatter
+    are checked:
       - path   : verify: kind=path. fs.statSync against
                  <repo-root>/<value>; missing -> STALE.
       - symbol : verify: kind=symbol. Resolved via 'git grep -l -w'
@@ -185,6 +207,7 @@ Examples:
   memory-router lint ~/.claude/projects/PROJECT/memory
   memory-router lint ~/.claude/projects/PROJECT/memory --drift --fix
   memory-router stale ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo
+  memory-router stale ~/.claude/projects/PROJECT/memory --repo-roots ~/git/repoA ~/git/repoB
 `);
 }
 
@@ -313,9 +336,14 @@ async function runLint(
   process.exit(exitCode);
 }
 
-function runStale(dir: string, repoRoot: string, json: boolean, scanBody: boolean): void {
+function runStale(
+  dir: string,
+  repoRoots: string[],
+  json: boolean,
+  scanBody: boolean,
+): void {
   const fs = require('node:fs');
-  for (const candidate of [dir, repoRoot]) {
+  for (const candidate of [dir, ...repoRoots]) {
     let stat;
     try {
       stat = fs.statSync(candidate);
@@ -331,7 +359,7 @@ function runStale(dir: string, repoRoot: string, json: boolean, scanBody: boolea
 
   let report;
   try {
-    report = lintMemoryDirForStale(dir, repoRoot, { scanBody });
+    report = lintMemoryDirForStale(dir, repoRoots, { scanBody });
   } catch (err: unknown) {
     process.stderr.write(`error: ${String(err)}\n`);
     process.exit(1);
@@ -380,7 +408,12 @@ async function main(): Promise<void> {
   }
 
   if (args.cmd === 'stale') {
-    runStale(args.dir, args.repoRoot ?? process.cwd(), args.json, args.scanBody);
+    runStale(
+      args.dir,
+      args.repoRoots.length > 0 ? args.repoRoots : [process.cwd()],
+      args.json,
+      args.scanBody,
+    );
     return;
   }
 

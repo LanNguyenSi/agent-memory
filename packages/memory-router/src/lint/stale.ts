@@ -29,7 +29,13 @@
 //   - Date-based "possibly stale" hints.
 //   - External URL HEAD checks.
 //   - Walking git log for renames.
-//   - Multi-repo / workspace mode (one CLI run, N repo roots).
+//
+// Multi-repo workspace mode (this file): a memory in a shared corpus may
+// reference paths in any of several sibling repos (a pandora-style layout
+// has agent-memory next to project-pilot, agent-relay, codebase-oracle,
+// ...). Pass a list of roots and a ref is STALE only when none of them
+// resolves it. First-hit wins for the not-stale fast path; the report
+// records which root the ref was found in.
 
 const { statSync } = require('node:fs');
 const { isAbsolute, join, resolve } = require('node:path');
@@ -194,7 +200,10 @@ function extractRefsFromVerify(verify: MemoryReference[] | undefined): VerifyExt
 // helpers stay pure.
 type PartialHit = Pick<StaleHit, 'check' | 'ref' | 'status' | 'detail'>;
 
-function checkPath(repoRoot: string, value: string): PartialHit | null {
+// Single-root path check. Returns null when the file exists, otherwise a
+// "missing" PartialHit explaining where it was looked for. Multi-root
+// callers fold the per-root results below.
+function checkPathInRoot(repoRoot: string, value: string): PartialHit | null {
   const full = isAbsolute(value) ? value : join(repoRoot, value);
 
   if (!isAbsolute(value)) {
@@ -209,7 +218,7 @@ function checkPath(repoRoot: string, value: string): PartialHit | null {
         check: 'path',
         ref: value,
         status: 'missing',
-        detail: `path '${value}' escapes repoRoot`,
+        detail: `path '${value}' escapes repoRoot ${repoRoot}`,
       };
     }
   }
@@ -227,17 +236,57 @@ function checkPath(repoRoot: string, value: string): PartialHit | null {
   }
 }
 
-interface SymbolCheckState {
+// Multi-root path check. First root that resolves wins. Otherwise returns
+// a single missing hit summarising every attempt.
+function checkPath(repoRoots: string[], value: string): PartialHit | null {
+  const failures: string[] = [];
+  for (const root of repoRoots) {
+    const partial = checkPathInRoot(root, value);
+    if (partial === null) return null;
+    failures.push(partial.detail);
+  }
+  if (failures.length === 1) {
+    // Single-root case: keep the v1 detail format verbatim so existing
+    // text-format consumers don't break.
+    return {
+      check: 'path',
+      ref: value,
+      status: 'missing',
+      detail: failures[0],
+    };
+  }
+  return {
+    check: 'path',
+    ref: value,
+    status: 'missing',
+    detail: `path '${value}' not found in any of ${repoRoots.length} roots: ${failures.join('; ')}`,
+  };
+}
+
+interface SymbolRootState {
   // Whether we've already determined `git` works against this repoRoot.
   // null = untested, true = works, false = degraded (non-git or missing).
   available: boolean | null;
   warned: boolean;
 }
 
-function checkSymbol(
+// Per-scan symbol-check state: one SymbolRootState per repoRoot, lazily
+// probed. Lookup keyed by root path.
+type SymbolStateMap = Map<string, SymbolRootState>;
+
+function getOrCreateRootState(map: SymbolStateMap, repoRoot: string): SymbolRootState {
+  let state = map.get(repoRoot);
+  if (!state) {
+    state = { available: null, warned: false };
+    map.set(repoRoot, state);
+  }
+  return state;
+}
+
+function checkSymbolInRoot(
   repoRoot: string,
   value: string,
-  state: SymbolCheckState,
+  state: SymbolRootState,
 ): PartialHit | null {
   // Defense for verify:-sourced symbols, which bypass the body-regex
   // shape filter. Refuse anything that isn't an identifier-like token so
@@ -311,15 +360,68 @@ function checkSymbol(
   };
 }
 
+// Multi-root symbol check. A symbol is STALE only when NO root finds it.
+// `skipped` and `malformed` per-root outcomes are folded conservatively:
+// if every root either skipped or had no-matches, prefer `no-matches`
+// when at least one root checked successfully; otherwise prefer the
+// v1-compatible `skipped`. `malformed` short-circuits on the first root.
+function checkSymbol(
+  repoRoots: string[],
+  value: string,
+  states: SymbolStateMap,
+): PartialHit | null {
+  let skippedDetail: string | null = null;
+  let noMatchDetail: string | null = null;
+  for (const root of repoRoots) {
+    const state = getOrCreateRootState(states, root);
+    const partial = checkSymbolInRoot(root, value, state);
+    if (partial === null) return null;
+    if (partial.status === 'malformed') return partial;
+    if (partial.status === 'no-matches') {
+      noMatchDetail = noMatchDetail ?? partial.detail;
+    } else if (partial.status === 'skipped') {
+      skippedDetail = skippedDetail ?? partial.detail;
+    }
+  }
+  if (noMatchDetail !== null) {
+    if (repoRoots.length === 1) {
+      return { check: 'symbol', ref: value, status: 'no-matches', detail: noMatchDetail };
+    }
+    return {
+      check: 'symbol',
+      ref: value,
+      status: 'no-matches',
+      detail: `symbol '${value}' not found in any of ${repoRoots.length} roots`,
+    };
+  }
+  // Every root skipped: surface a single `skipped` entry. Detail names
+  // the first non-git root; the others are degraded the same way.
+  return {
+    check: 'symbol',
+    ref: value,
+    status: 'skipped',
+    detail: skippedDetail ?? `symbol '${value}' could not be checked`,
+  };
+}
+
 export function lintMemoryDirForStale(
   dir: string,
-  repoRoot: string,
+  repoRoot: string | string[],
   options: StaleOptions = {},
 ): StaleReport {
+  // Accept legacy single-string form for backward compat. An empty
+  // array would silently treat every ref as resolved by zero roots
+  // (vacuously stale), so reject upfront with a clear error rather than
+  // a confusing report.
+  const repoRoots: string[] = Array.isArray(repoRoot) ? repoRoot.slice() : [repoRoot];
+  if (repoRoots.length === 0) {
+    throw new Error('lintMemoryDirForStale requires at least one repoRoot');
+  }
+
   const memories = loadMemoriesFromDir(dir);
   const hits: StaleHit[] = [];
   let refsChecked = 0;
-  const symbolState: SymbolCheckState = { available: null, warned: false };
+  const symbolStates: SymbolStateMap = new Map();
 
   for (const memory of memories) {
     const verifyResult = extractRefsFromVerify(memory.frontmatter.verify);
@@ -343,7 +445,7 @@ export function lintMemoryDirForStale(
     }
 
     // verify: refs are always checked. body-regex refs are checked only
-    // when the caller opts in via { scanBody: true } — see the file-level
+    // when the caller opts in via { scanBody: true }: see the file-level
     // comment for why this isn't the default.
     let refs = verifyResult.refs;
     let source: StaleHit['source'] = 'verify';
@@ -356,9 +458,9 @@ export function lintMemoryDirForStale(
       refsChecked++;
       let partial: PartialHit | null = null;
       if (ref.kind === 'path') {
-        partial = checkPath(repoRoot, ref.value);
+        partial = checkPath(repoRoots, ref.value);
       } else if (ref.kind === 'symbol') {
-        partial = checkSymbol(repoRoot, ref.value, symbolState);
+        partial = checkSymbol(repoRoots, ref.value, symbolStates);
       }
       if (partial) {
         hits.push({
@@ -371,11 +473,17 @@ export function lintMemoryDirForStale(
     }
   }
 
+  // "degraded" means EVERY probed root was non-git. A single git root
+  // among several is enough to keep symbol checks honest.
+  const probedStates = [...symbolStates.values()];
+  const symbolCheckDegraded =
+    probedStates.length > 0 && probedStates.every((s) => s.available === false);
+
   return {
     hits,
     scannedCount: memories.length,
     refsChecked,
-    symbolCheckDegraded: symbolState.available === false,
+    symbolCheckDegraded,
   };
 }
 
