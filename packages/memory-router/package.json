@@ -39,7 +39,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/chmod-bins.mjs",
     "typecheck": "tsc -p tsconfig.test.json",
     "lint": "npm run typecheck",
     "format": "prettier --write .",
