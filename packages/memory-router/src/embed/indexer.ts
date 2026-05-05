@@ -3,6 +3,7 @@ const { join } = require('node:path');
 const { loadMemoriesFromDir } = require('../memory/loader');
 const { embedBatch, resolveProviderConfig } = require('./provider');
 const { openIndex } = require('./index-store');
+const { debug } = require('../debug');
 
 // text-embedding-3-small emits 1536-dim vectors. If the model is ever
 // swapped, the index is versioned by directory (re-run `memory-router index`
@@ -17,12 +18,6 @@ const INDEX_FILENAME = 'index.sqlite';
 // once exceeded. 1000 covers the long tail of repeated vague prompts
 // without bloating the sqlite file (~6 MB at 1536 floats × 4 bytes).
 const QUERY_CACHE_CAPACITY = 1000;
-
-function debug(msg: string): void {
-  if (process.env.MEMORY_ROUTER_DEBUG === '1') {
-    process.stderr.write(`memory-router: ${msg}\n`);
-  }
-}
 
 function indexPath(memoryDir: string): string {
   return join(memoryDir, INDEX_SUBDIR, INDEX_FILENAME);

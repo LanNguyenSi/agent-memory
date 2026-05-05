@@ -240,7 +240,7 @@ Repeated vague prompts (`"mal schauen"`, `"check mal"`) re-pay one OpenAI embedd
 - **Key:** sha256(prompt) prefix (8 bytes, plenty for the LRU cap).
 - **Eviction:** LRU by `accessed_at`, hard cap of 1000 entries. Switching `MEMORY_ROUTER_EMBED_MODEL` lazily evicts entries stored under the previous model on the next put.
 - **Persistence:** survives hook process restarts (the file is the only state).
-- **Observability:** set `MEMORY_ROUTER_DEBUG=1` to see `query cache hit (size=N)` / `query cache miss, embedding (size=N)` lines on stderr without polluting the hook's stdout contract.
+- **Observability:** set `MEMORY_ROUTER_DEBUG=1` to see `[memory-router] query cache hit (size=N)` / `[memory-router] query cache miss — embedding (size=N)` lines on stderr without polluting the hook's stdout contract. Same `[memory-router]` prefix as loader rejection warnings, so `grep '^\[memory-router\]'` catches every gated diagnostic.
 
 No flag turns the cache off, it's always on when the Confidence Gate is. `memory-router index` does not touch the cache; only switching embed models does.
 
