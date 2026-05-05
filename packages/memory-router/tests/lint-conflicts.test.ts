@@ -259,6 +259,83 @@ test('descriptive polarity words (mid-sentence) match polarity but Jaccard floor
   }
 });
 
+test('detectPolarity: lowercase markers only fire in the leading window', () => {
+  // Mid-sentence lowercase polarity must not classify the line as a
+  // directive. Pre-PR this returned 'negative'; with leading-window
+  // matching it must be null. Pin so a future regex tightening can't
+  // silently regress.
+  assert.equal(
+    __detectPolarity('Stale branches never reach production once the gate has fired.'),
+    null,
+    'mid-sentence lowercase "never" must not classify as negative',
+  );
+  assert.equal(
+    __detectPolarity('We always rebase before pushing to master.'),
+    'positive',
+    'lowercase "always" at the second token still classifies',
+  );
+  assert.equal(
+    __detectPolarity('Stale branches always work fine actually.'),
+    null,
+    'mid-sentence lowercase "always" beyond the leading window must not classify',
+  );
+});
+
+test('detectPolarity: ALL-CAPS markers fire even mid-sentence', () => {
+  // ALL-CAPS variants are rare in descriptive prose, so they keep the
+  // anywhere-on-line semantics from v1.
+  assert.equal(
+    __detectPolarity('Cut a fresh branch, ALWAYS rebase before push'),
+    'positive',
+  );
+  assert.equal(
+    __detectPolarity('After staging, NEVER force-push to master'),
+    'negative',
+  );
+});
+
+test('detectPolarity: leading directive contradicted later in the line is mixed', () => {
+  // Leading "always" with a trailing "never" is the classic mixed case.
+  assert.equal(
+    __detectPolarity('always run tests but never on prod'),
+    'mixed',
+  );
+  // Symmetric form: leading "never" with a trailing "always".
+  assert.equal(
+    __detectPolarity('never deploy on Friday, always rebase first'),
+    'mixed',
+  );
+});
+
+test('jaccard floor lowered to 0.15: marginal-overlap pairs now reach HIGH', () => {
+  // With the 0.25 floor the canonical-shape pair in this fixture sat at
+  // INFO. Tightened polarity (leading-only) means 0.15 is now safe; the
+  // pair clears it and lands as HIGH. Pins the floor so a future raise
+  // back to 0.25 doesn't silently re-suppress this class of conflict.
+  const dir = tmpDir();
+  writeMem(
+    dir,
+    'feedback_squash_a.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'ALWAYS squash before merge to keep master tidy.',
+  );
+  writeMem(
+    dir,
+    'feedback_squash_b.md',
+    'name: b\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'NEVER rewrite commits during merge to keep linear history.',
+  );
+
+  try {
+    const report = lintMemoryDirForConflicts(dir);
+    const high = report.hits.filter((h: { severity: string }) => h.severity === 'high');
+    assert.equal(high.length, 1, 'lowered floor must catch the squash pair');
+    assert.match(high[0].reason, /opposite imperatives/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('formatConflictReportText: empty report', () => {
   const text = formatConflictReportText({
     hits: [],
