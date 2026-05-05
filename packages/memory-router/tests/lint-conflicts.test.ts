@@ -7,6 +7,7 @@ const {
   lintMemoryDirForConflicts,
   lintMemoryDirForConflictsWithSemantic,
   formatConflictReportText,
+  formatConflictReportJson,
   __detectPolarity,
   __jaccard,
   __contentTokens,
@@ -337,6 +338,112 @@ test('jaccard floor lowered to 0.15: marginal-overlap pairs now reach HIGH', () 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('detectPolarity: extended positive vocabulary', () => {
+  // New v1.1 markers added to surface formal-register imperatives that
+  // memory authors actually use ("mandatory", "compulsory", "mandate"
+  // forms). Pin so a future regex tightening cannot silently drop them.
+  assert.equal(__detectPolarity('Code review is mandatory before merge'), 'positive');
+  assert.equal(__detectPolarity('SOC2 mandates encryption at rest'), 'positive');
+  assert.equal(__detectPolarity('Compulsory tags on every commit'), 'positive');
+  assert.equal(__detectPolarity('Two-factor auth is mandated by IT'), 'positive');
+});
+
+test('detectPolarity: extended negative vocabulary', () => {
+  assert.equal(__detectPolarity('Force-pushes are prohibited on master'), 'negative');
+  assert.equal(__detectPolarity('Forbid console.log in production code'), 'negative');
+  assert.equal(__detectPolarity('console.log is forbidden in production'), 'negative');
+  assert.equal(__detectPolarity('Disallow unsigned commits via branch protection'), 'negative');
+  assert.equal(__detectPolarity('Cannot bypass the merge gate'), 'negative');
+});
+
+test('extended vocabulary: HIGH conflict via mandatory/forbidden pair', () => {
+  // Without the new vocabulary this pair would have polarity null on both
+  // sides and stay INFO. With v1.1 markers it lands HIGH.
+  const dir = tmpDir();
+  writeMem(
+    dir,
+    'feedback_must_review.md',
+    'name: review required\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'Code review is mandatory before any merge to master.',
+  );
+  writeMem(
+    dir,
+    'feedback_no_review.md',
+    'name: review not required\ndescription: x\ntype: feedback\ntopics: [workflow]',
+    'Code review is forbidden on hot-fix branches; merge directly.',
+  );
+
+  try {
+    const report = lintMemoryDirForConflicts(dir);
+    const high = report.hits.filter((h: { severity: string }) => h.severity === 'high');
+    assert.equal(high.length, 1, 'mandatory/forbidden must reach HIGH');
+    assert.match(high[0].reason, /opposite imperatives/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('extended vocabulary tokens are filtered from contentTokens', () => {
+  // The polarity tokens added in v1.1 (mandatory, prohibit, ...) must NOT
+  // count as subject vocabulary. Without filtering they would inflate the
+  // union and dilute Jaccard, hiding HIGH conflicts.
+  const a = __contentTokens('reviews are mandatory before merge to master');
+  const b = __contentTokens('reviews are forbidden before merge to master');
+  // Subject tokens identical (`reviews`, `before`, `merge`, `master`) → 1.0.
+  // If "mandatory"/"forbidden" leaked through, Jaccard would drop.
+  assert.equal(__jaccard(a, b), 1, 'extended polarity tokens are filtered out');
+});
+
+test('formatConflictReportJson: empty report shape', () => {
+  const out = formatConflictReportJson({
+    hits: [],
+    scannedCount: 7,
+    feedbackCount: 3,
+  });
+  // Trailing newline matches text format manners.
+  assert.ok(out.endsWith('\n'), 'json output must end with newline');
+  const parsed = JSON.parse(out);
+  assert.deepEqual(parsed, {
+    scannedCount: 7,
+    feedbackCount: 3,
+    hits: [],
+  });
+});
+
+test('formatConflictReportJson: hits round-trip schema', () => {
+  const report = {
+    hits: [
+      {
+        severity: 'high' as const,
+        topic: 'workflow',
+        reason: 'opposite imperatives (positive/negative) and subject vocabulary overlap 70%',
+        a: { path: '/m/a.md', memoryId: 'a', firstLine: 'ALWAYS amend commits' },
+        b: { path: '/m/b.md', memoryId: 'b', firstLine: 'NEVER amend commits' },
+      },
+      {
+        severity: 'info' as const,
+        topic: 'workflow',
+        reason: 'two feedback memories share this topic',
+        a: { path: '/m/c.md', memoryId: 'c', firstLine: 'Use master as default' },
+        b: { path: '/m/d.md', memoryId: 'd', firstLine: 'Cut a fresh branch off master' },
+      },
+    ],
+    scannedCount: 4,
+    feedbackCount: 4,
+  };
+  const out = formatConflictReportJson(report);
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.scannedCount, 4);
+  assert.equal(parsed.feedbackCount, 4);
+  assert.equal(parsed.hits.length, 2);
+  assert.equal(parsed.hits[0].severity, 'high');
+  assert.equal(parsed.hits[0].topic, 'workflow');
+  assert.equal(parsed.hits[0].a.path, '/m/a.md');
+  assert.equal(parsed.hits[0].a.memoryId, 'a');
+  assert.equal(parsed.hits[0].a.firstLine, 'ALWAYS amend commits');
+  assert.equal(parsed.hits[1].severity, 'info');
 });
 
 test('formatConflictReportText: empty report', () => {

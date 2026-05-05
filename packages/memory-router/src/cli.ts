@@ -16,6 +16,7 @@ const {
   lintMemoryDirForConflicts,
   lintMemoryDirForConflictsWithSemantic,
   formatConflictReportText,
+  formatConflictReportJson,
 } = require('./lint/conflicts');
 const {
   lintMemoryDirForStale,
@@ -88,12 +89,17 @@ function parseArgs(argv: string[]): ParsedArgs {
     conflicts: conflictsFlag,
   };
 
-  // --fix and --json only apply to the drift check today. Surfacing a
-  // silent no-op when someone runs `lint --unknown-topics --fix` is worse
-  // than a loud stderr warning.
-  if ((fix || json) && !lintChecks.drift) {
+  // --fix only applies to drift today; --json applies to drift and
+  // conflicts. Warn loudly when a flag is passed in a no-op context so the
+  // user knows the run silently ignored it.
+  const jsonNoop = json && !lintChecks.drift && !lintChecks.conflicts;
+  const fixNoop = fix && !lintChecks.drift;
+  if (fixNoop || jsonNoop) {
+    const parts: string[] = [];
+    if (fixNoop) parts.push('--fix only applies to --drift');
+    if (jsonNoop) parts.push('--json only applies to --drift / --conflicts');
     process.stderr.write(
-      `warning: ${fix ? '--fix ' : ''}${json ? '--json ' : ''}only affects --drift and is a no-op with --unknown-topics or --conflicts alone\n`,
+      `warning: ${parts.join('; ')}; no-op with --unknown-topics alone\n`,
     );
   }
 
@@ -158,8 +164,10 @@ Commands:
     or any HIGH conflict.
     --fix auto-applies drift fixes where safe (appends missing pointers,
     removes duplicate entries). Orphan pointers are never auto-deleted.
-    --json emits a machine-readable report for drift; the topics and
-    conflicts checks retain their text format.
+    --json emits a machine-readable report for drift and for conflicts;
+    the topics check retains its text format. When --drift --json is set
+    alongside --conflicts, the drift JSON owns stdout and the conflicts
+    JSON is routed to stderr so CI can pipe both fds.
 
   stale <dir> [--repo-root <path>] [--scan-body] [--json]
     Scan every memory in <dir> for stale references against <repo-root>
@@ -298,11 +306,15 @@ async function runLint(
       process.stderr.write(`error: ${String(err)}\n`);
       process.exit(1);
     }
-    // Same JSON convention as topics: route the text format to stderr if
-    // drift owns stdout, so CI sees the conflict signal without corrupting
-    // the drift JSON payload.
-    if (json && checks.drift) process.stderr.write(formatConflictReportText(report));
-    else process.stdout.write(formatConflictReportText(report));
+    // Same routing convention as topics: when --drift owns stdout (with
+    // --json), the conflicts payload goes to stderr so CI sees both signals
+    // without corrupting the drift JSON. Otherwise --json picks the
+    // machine-readable variant on stdout.
+    const conflictsOut = json
+      ? formatConflictReportJson(report)
+      : formatConflictReportText(report);
+    if (json && checks.drift) process.stderr.write(conflictsOut);
+    else process.stdout.write(conflictsOut);
     // Only HIGH-severity conflicts fail the build. INFO-level topic overlap
     // is normal on a mature corpus and shouldn't block CI.
     if (report.hits.some((h: { severity: string }) => h.severity === 'high')) {
