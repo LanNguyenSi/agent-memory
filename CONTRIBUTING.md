@@ -34,3 +34,21 @@ When changing anything under `packages/memory-router/src/hooks/*` or the Gate lo
 ## Style
 
 Match the surrounding code. Prefer small, reviewable diffs.
+
+## Releasing
+
+Each package is published independently under the `@lannguyensi/...` scope. The flow for `memory-router` (other packages will follow the same shape once their workflows land):
+
+1. Bump `packages/memory-router/package.json` version on a release branch.
+2. Add a `## [<version>] - YYYY-MM-DD` entry at the top of `packages/memory-router/CHANGELOG.md` with the user-visible changes.
+3. Open a PR titled `release(memory-router): vX.Y.Z`, get it reviewed and merged.
+4. From `master`, push the version tag **on its own**:
+   ```bash
+   git checkout master && git pull --ff-only
+   git tag memory-router-v0.1.0
+   git push origin memory-router-v0.1.0
+   ```
+   GitHub coalesces a multi-tag push into a single push event, so pushing `t1 t2 t3` in one command fires the workflow only once. Tag pushes must be one-at-a-time.
+5. The `Publish memory-router to npm` workflow runs version + name + native-dep checks, builds, tests, and publishes with `--provenance`. `Release` runs in parallel and creates a GitHub Release using the matching CHANGELOG section.
+
+`NPM_TOKEN` must be configured as a repository secret before the first publish. The publish workflow's preflight step fails loudly if it is missing.

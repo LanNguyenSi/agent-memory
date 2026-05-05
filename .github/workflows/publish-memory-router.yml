@@ -1,0 +1,109 @@
+name: Publish memory-router to npm
+
+# Triggered by pushing a tag matching `memory-router-v*`. The tag's
+# version segment must match `packages/memory-router/package.json` or
+# the workflow fails before publishing.
+#
+# This repo is not an npm workspace (see ci.yml) so the workflow runs
+# every step from inside `packages/memory-router` instead of using
+# `--workspace` flags. agent-grounding's publish-libs.yml is the
+# reference but it relies on workspaces; the shape here is adapted.
+#
+# Push tags ONE AT A TIME. GitHub coalesces a multi-tag push into a
+# single push event, which fires the workflow only once with one
+# arbitrary tag - the others ship without provenance or version checks.
+
+on:
+  push:
+    tags:
+      - "memory-router-v*"
+
+permissions:
+  contents: read
+  # id-token is required for `npm publish --provenance` to mint
+  # signed attestations.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/memory-router
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse tag
+        id: parse
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#memory-router-v}"
+          if [ "$version" = "$tag" ]; then
+            echo "::error::Tag $tag does not match expected pattern memory-router-v<semver>" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing @lannguyensi/memory-router@${version}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/memory-router/package-lock.json
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Preflight, verify NPM_TOKEN secret is set
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is not configured. Add it under Settings -> Secrets and variables -> Actions before tagging a release." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Native-dep smoke
+        # better-sqlite3 + sqlite-vec ship prebuilt binaries that can
+        # silently fall back to source compile on ABI mismatch. Run a
+        # tiny require + call before tests so a broken postinstall
+        # fails loudly at the install boundary, not deep in tests.
+        run: |
+          node -e "const D=require('better-sqlite3');const v=require('sqlite-vec');const db=new D(':memory:');v.load(db);console.log('native deps OK:', db.prepare('SELECT vec_version() AS r').get());db.close();"
+
+      - name: Verify package version matches tag
+        env:
+          TAG_VERSION: ${{ steps.parse.outputs.version }}
+        run: |
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$pkg_version" != "$TAG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match packages/memory-router/package.json ($pkg_version). Update package.json before tagging." >&2
+            exit 1
+          fi
+
+      - name: Verify package name is scoped
+        # Cheap regression-pin: if someone unscopes the package by
+        # accident we want to fail before publishing instead of
+        # quietly creating a different package on npm.
+        run: |
+          pkg_name=$(node -p "require('./package.json').name")
+          if [ "$pkg_name" != "@lannguyensi/memory-router" ]; then
+            echo "::error::package.json name is '$pkg_name', expected '@lannguyensi/memory-router'." >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        # Re-run the full suite as a release-gate, separately from CI.
+        # ci.yml runs on every push to master; this one runs on the
+        # exact commit being published.
+        run: npm test
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance

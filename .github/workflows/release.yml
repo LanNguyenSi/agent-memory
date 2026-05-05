@@ -1,0 +1,80 @@
+name: Release
+
+# Creates a GitHub Release whenever a per-package version tag is pushed.
+# Pulls the matching `## [<version>] - YYYY-MM-DD` section from the
+# package's CHANGELOG.md and uses it as the release body. If no entry
+# exists for the tag's version, the workflow fails before creating the
+# release so we don't ship a tag without notes.
+#
+# Tag pattern is per-package (`memory-router-v*`) so additional packages
+# can be added later by extending the `tags:` filter. Each tagged push
+# also fires `publish-memory-router.yml` which does the actual npm
+# publish; this workflow only manages the GitHub Release surface.
+
+on:
+  push:
+    tags:
+      - "memory-router-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse tag
+        id: parse
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # Strip the trailing `-v<semver>(-<prerelease>)?` to recover
+          # the package name. Mirrors agent-grounding/publish-libs.yml.
+          pkg=$(echo "$tag" | sed -E 's/-v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$//')
+          version="${tag#${pkg}-v}"
+          if [ "$version" = "$tag" ] || [ -z "$pkg" ]; then
+            echo "::error::Tag $tag does not match expected pattern <pkg>-v<semver>" >&2
+            exit 1
+          fi
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog section for this version
+        id: changelog
+        env:
+          PKG: ${{ steps.parse.outputs.pkg }}
+          VERSION: ${{ steps.parse.outputs.version }}
+        run: |
+          changelog="packages/${PKG}/CHANGELOG.md"
+          if [ ! -f "$changelog" ]; then
+            echo "::error::$changelog not found. Add a CHANGELOG.md to the package before tagging." >&2
+            exit 1
+          fi
+          # Extract the lines between `## [<VERSION>]` and the next
+          # `## [` heading (or EOF). Matches agent-grounding's
+          # release.yml pattern.
+          awk -v v="$VERSION" '
+            /^## \[/ {
+              if (found) { exit }
+              if (index($0, "## [" v "]") == 1) { found=1; next }
+            }
+            found { print }
+          ' "$changelog" > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "::error::No CHANGELOG entry for version $VERSION in $changelog. Add a '## [$VERSION] - YYYY-MM-DD' section before tagging." >&2
+            exit 1
+          fi
+          echo "Release notes extracted from $changelog for $PKG@$VERSION ($(wc -l < release_notes.md) lines)."
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.parse.outputs.pkg }} v${{ steps.parse.outputs.version }}
+          body_path: release_notes.md
+          generate_release_notes: false
+          # Mark prerelease automatically if the version segment carries
+          # a `-pre`, `-rc`, `-alpha`, or similar suffix.
+          prerelease: ${{ contains(steps.parse.outputs.version, '-') }}
