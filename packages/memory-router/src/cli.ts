@@ -14,6 +14,7 @@ const {
 } = require('./lint/drift');
 const {
   lintMemoryDirForConflicts,
+  lintMemoryDirForConflictsWithSemantic,
   formatConflictReportText,
 } = require('./lint/conflicts');
 const {
@@ -28,6 +29,8 @@ interface ParsedArgs {
   apply: boolean;
   only?: string;
   lintChecks: { drift: boolean; unknownTopics: boolean; conflicts: boolean };
+  /** `lint --conflicts --semantic`: enable embedding cosine upgrade. */
+  semantic: boolean;
   fix: boolean;
   json: boolean;
   /** `stale` command: defaults to `process.cwd()` when not given. */
@@ -43,6 +46,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let driftFlag = false;
   let topicsFlag = false;
   let conflictsFlag = false;
+  let semanticFlag = false;
   let fix = false;
   let json = false;
 
@@ -55,6 +59,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === '--unknown-topics') topicsFlag = true;
     else if (a === '--drift') driftFlag = true;
     else if (a === '--conflicts') conflictsFlag = true;
+    else if (a === '--semantic') semanticFlag = true;
     else if (a === '--repo-root') repoRoot = argv[++i];
     else if (a.startsWith('--repo-root=')) repoRoot = a.slice('--repo-root='.length);
     else if (a === '--scan-body') scanBody = true;
@@ -92,12 +97,21 @@ function parseArgs(argv: string[]): ParsedArgs {
     );
   }
 
+  // --semantic only makes sense with --conflicts (it upgrades INFO→HIGH on
+  // top of the regex pass). Warn loudly rather than silently ignoring it.
+  if (semanticFlag && !conflictsFlag) {
+    process.stderr.write(
+      'warning: --semantic only applies with --conflicts and is a no-op otherwise\n',
+    );
+  }
+
   return {
     cmd: positional[0] ?? '',
     dir: positional[1],
     apply,
     only,
     lintChecks,
+    semantic: semanticFlag,
     fix,
     json,
     repoRoot,
@@ -119,7 +133,7 @@ Commands:
     semantic matches. Env: OPENAI_API_KEY (required),
     MEMORY_ROUTER_EMBED_MODEL (default: text-embedding-3-small).
 
-  lint <dir> [--drift] [--unknown-topics] [--conflicts] [--fix] [--json]
+  lint <dir> [--drift] [--unknown-topics] [--conflicts] [--semantic] [--fix] [--json]
     Validate memory files and MEMORY.md. Three checks today:
       --drift           MEMORY.md vs. on-disk corpus (orphan/missing
                         pointers, duplicates, 200-line cap, frontmatter,
@@ -130,6 +144,15 @@ Commands:
                         probable contradictions (opposite imperatives in
                         the first body line + subject vocabulary overlap)
                         as HIGH and topic-overlap pairs as INFO. Opt-in.
+      --semantic        Only with --conflicts. For each opposite-polarity
+                        INFO pair the regex pass kept as INFO, embed both
+                        memories' name+body and upgrade to HIGH when
+                        cosine similarity >= 0.85. Reuses the live
+                        index.sqlite (built by 'memory-router index') when
+                        available; otherwise embeds on the fly without
+                        persisting. Skips with a stderr warning when
+                        OPENAI_API_KEY is unset (fail-open: regex signal
+                        still ships, exit code unaffected by the skip).
     When no check flag is given, --drift + --unknown-topics run by default
     (--conflicts stays opt-in). Exits non-zero on any drift/topic finding
     or any HIGH conflict.
@@ -201,12 +224,13 @@ async function runIndex(dir: string): Promise<void> {
   );
 }
 
-function runLint(
+async function runLint(
   dir: string,
   checks: { drift: boolean; unknownTopics: boolean; conflicts: boolean },
+  semantic: boolean,
   fix: boolean,
   json: boolean,
-): void {
+): Promise<void> {
   // The loader silently treats unreadable dirs as empty, which would let a
   // typo'd CI path produce a green build. Stat upfront so the linter exits
   // 1 with a clear error instead.
@@ -267,7 +291,9 @@ function runLint(
   if (checks.conflicts) {
     let report;
     try {
-      report = lintMemoryDirForConflicts(dir);
+      report = semantic
+        ? await lintMemoryDirForConflictsWithSemantic(dir, { semantic: true })
+        : lintMemoryDirForConflicts(dir);
     } catch (err: unknown) {
       process.stderr.write(`error: ${String(err)}\n`);
       process.exit(1);
@@ -349,7 +375,7 @@ async function main(): Promise<void> {
   }
 
   if (args.cmd === 'lint') {
-    runLint(args.dir, args.lintChecks, args.fix, args.json);
+    await runLint(args.dir, args.lintChecks, args.semantic, args.fix, args.json);
     return;
   }
 

@@ -137,6 +137,10 @@ function openIndex(opts: IndexStoreOptions): {
   upsert: (id: string, mtime: number, embedding: number[]) => void;
   remove: (id: string) => void;
   listEntries: () => IndexEntry[];
+  // Pull a stored embedding out by memory id. Returns null when the id is
+  // not in the index. Used by the lint --conflicts --semantic path to reuse
+  // already-computed embeddings instead of re-embedding the whole pair.
+  getEmbedding: (id: string) => number[] | null;
   search: (queryEmbedding: number[], k: number) => SearchHit[];
   // Query-embedding cache. Returns null when the cache is disabled or the
   // entry is missing / stored under a different model. `putCachedQuery`
@@ -217,6 +221,16 @@ function openIndex(opts: IndexStoreOptions): {
 
   function listEntries(): IndexEntry[] {
     return listStmt.all() as IndexEntry[];
+  }
+
+  const selectEmbeddingStmt = db.prepare(
+    'SELECT vec.embedding AS embedding FROM vec JOIN entries ON entries.rowid = vec.rowid WHERE entries.id = ?',
+  );
+
+  function getEmbedding(id: string): number[] | null {
+    const row = selectEmbeddingStmt.get(id) as { embedding: Buffer } | undefined;
+    if (!row) return null;
+    return vecFromBlob(row.embedding);
   }
 
   // Query-embedding cache. Identical prompts (e.g. "kannst du helfen") hit
@@ -375,6 +389,7 @@ function openIndex(opts: IndexStoreOptions): {
     upsert,
     remove,
     listEntries,
+    getEmbedding,
     search,
     getCachedQuery,
     putCachedQuery,
