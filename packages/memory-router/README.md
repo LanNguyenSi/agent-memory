@@ -182,6 +182,19 @@ Repeated vague prompts (`"mal schauen"`, `"check mal"`) re-pay one OpenAI embedd
 
 No flag turns the cache off — it's always on when the Confidence Gate is. `memory-router index` does not touch the cache; only switching embed models does.
 
+### Debugging rejected memories
+
+The loader silently skips memory files with broken YAML frontmatter or missing required fields (`name`, `type`). That is the right default for production hooks (one bad memory must not kill the whole session), but it means a memory author can't tell the file is dead weight without dogfooding.
+
+Set `MEMORY_ROUTER_DEBUG=1` to make the loader print one stderr line per rejected memory, e.g.:
+
+```
+[memory-router] skipped /path/to/feedback_yaml_form_quoting.md: YAML parse error: ...
+[memory-router] skipped /path/to/legacy.md: missing required field 'name'
+```
+
+Stdout (the hook contract) is never touched, so the flag is safe to leave on while a hook is wired into Claude-Code. Each warning is exactly one `\n`-terminated line, even when the underlying YAML error spans multiple lines, so `grep '^\[memory-router\]'` always works.
+
 ### Keep MEMORY.md clean
 
 `MEMORY.md` is the canonical index Claude-Code loads at session start. It drifts: pointers to deleted files, memory files never added to the index, duplicates, or a file that grows past the 200-line truncation cap (lines after 200 are silently dropped from context). The drift linter catches all of these before they cost you a missing recall in a real session:
