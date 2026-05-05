@@ -92,7 +92,7 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
         inputs: batch.map((b) => buildEmbedInput(b.memory)),
       });
       for (let j = 0; j < batch.length; j++) {
-        store.upsert(batch[j].memory.id, batch[j].mtime, vectors[j]);
+        store.upsert(batch[j].memory.id, batch[j].mtime, cfg.model, vectors[j]);
         embedded++;
       }
     }
@@ -131,6 +131,17 @@ async function semanticSearch(
     cache: { model: cfg.model, capacity: QUERY_CACHE_CAPACITY },
   });
   try {
+    // Warn once per process when the index has rows from a different model
+    // (or pre-v2 NULL rows). The cosine result for those rows is
+    // meaningless, so search() filters them out below; the warning tells
+    // the user to run `memory-router index` again to refresh.
+    const stale = store.countEntriesWithStaleModel(cfg.model);
+    if (stale > 0) {
+      process.stderr.write(
+        `[memory-router] embedding index has ${stale} entr(y/ies) under a different model than '${cfg.model}'; run \`memory-router index <dir>\` to rebuild.\n`,
+      );
+    }
+
     let queryVec = store.getCachedQuery(prompt);
     if (queryVec) {
       debug(`query cache hit (size=${store.cacheSize()})`);
@@ -144,7 +155,7 @@ async function semanticSearch(
       });
       store.putCachedQuery(prompt, queryVec);
     }
-    const hits = store.search(queryVec, k);
+    const hits = store.search(queryVec, k, cfg.model);
     const byId = new Map(memories.map((m) => [m.id, m]));
     return hits
       .map((h: { id: string; similarity: number }) => ({

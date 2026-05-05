@@ -484,7 +484,10 @@ export async function lintMemoryDirForConflictsWithSemantic(
       const store = openIndex({ path: idxPath, dimensions: EMBED_DIMENSIONS });
       try {
         for (const id of neededIds) {
-          const emb = store.getEmbedding(id);
+          // Pass cfg.model so cross-model rows (or pre-v2 NULL rows) are
+          // ignored. The matching memories will be embedded fresh below
+          // under the active model.
+          const emb = store.getEmbedding(id, cfg.model);
           if (emb) embedByMemoryId.set(id, emb);
         }
       } finally {

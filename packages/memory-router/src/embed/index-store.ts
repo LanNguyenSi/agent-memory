@@ -7,10 +7,12 @@
 // Schema migration contract:
 //   The `meta` table holds a single `schema_version` row that tracks the
 //   on-disk schema. CURRENT_SCHEMA_VERSION is the version this code expects.
-//   `applyMigrations` runs AFTER the v1 baseline DDL inside `openIndex`, so a
-//   future `ALTER TABLE entries ADD COLUMN …` migration always sees the table
-//   it operates on. New tables introduced after v1 must be created by their
-//   own migration entry, not by adding to the baseline DDL.
+//   `applyMigrations` runs AFTER the v1 baseline DDL (entries, vec) and
+//   BEFORE any prepared statement that references a v>=2 column, so a
+//   migration like `ALTER TABLE entries ADD COLUMN …` always sees the
+//   table it operates on AND the prepared statements always see the
+//   final column set. New tables introduced after v1 must be created by
+//   their own migration entry, not by adding to the baseline DDL.
 //   Pre-meta files (written before this contract existed) carry no version
 //   row but already contain the v1 tables. We tag them as v1 (the baseline)
 //   and fall through to the migration loop, so any 1→2…N→CURRENT migrations
@@ -30,8 +32,13 @@ const { createHash } = require('node:crypto');
 // fresh DBs and pre-meta DBs both start here. CURRENT_SCHEMA_VERSION is what
 // this code expects on disk; when CURRENT > BASELINE, every open runs
 // migrations BASELINE→...→CURRENT against existing files.
+//
+// v2 (2026-05-05): adds `model TEXT` to `entries` so cross-model embedding
+// mixing is detectable. Pre-v2 rows get NULL on the new column; readers
+// that pass an `expectedModel` reject NULL rows (forcing a rebuild), so a
+// silent meaningless-cosine result is no longer possible.
 const SCHEMA_VERSION_BASELINE = 1;
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 interface Migration {
   from: number;
@@ -54,6 +61,26 @@ const migrations: Migration[] = [
       // v1 is the baseline. The v1 tables (entries, vec, query_cache) are
       // created idempotently by `openIndex` itself, so this migration has no
       // schema work to do. Future entries (1→2, ...) own their own DDL.
+    },
+  },
+  {
+    from: 1,
+    to: 2,
+    run: (db) => {
+      // Add `model` column to `entries`. Existing rows get NULL; readers
+      // with `expectedModel` set reject NULL → forces a rebuild so the
+      // user has to deliberately re-embed under a known model. SQLite
+      // doesn't support adding a column with a non-constant default, so
+      // the NULL backfill is the cleanest path.
+      //
+      // Idempotency: a pre-meta file that already has `model` (e.g. one
+      // written by this code, then had its meta table dropped to
+      // simulate an old build) must not double-apply. Probe the column
+      // list and no-op when it's already there.
+      const cols = db.prepare('PRAGMA table_info(entries)').all() as { name: string }[];
+      if (!cols.some((c) => c.name === 'model')) {
+        db.exec('ALTER TABLE entries ADD COLUMN model TEXT');
+      }
     },
   },
 ];
@@ -134,14 +161,22 @@ interface SearchHit {
 }
 
 function openIndex(opts: IndexStoreOptions): {
-  upsert: (id: string, mtime: number, embedding: number[]) => void;
+  // Stores the embedding under `model`. Readers that pass an
+  // `expectedModel` to getEmbedding/search reject rows whose stored model
+  // differs (or is NULL from a pre-v2 file), forcing a rebuild instead of
+  // silently mixing incompatible embedding spaces.
+  upsert: (id: string, mtime: number, model: string, embedding: number[]) => void;
   remove: (id: string) => void;
   listEntries: () => IndexEntry[];
   // Pull a stored embedding out by memory id. Returns null when the id is
-  // not in the index. Used by the lint --conflicts --semantic path to reuse
-  // already-computed embeddings instead of re-embedding the whole pair.
-  getEmbedding: (id: string) => number[] | null;
-  search: (queryEmbedding: number[], k: number) => SearchHit[];
+  // not in the index, or when `expectedModel` is set and the stored row's
+  // model differs (including NULL on a pre-v2 file).
+  getEmbedding: (id: string, expectedModel?: string) => number[] | null;
+  search: (queryEmbedding: number[], k: number, expectedModel?: string) => SearchHit[];
+  // Count of `entries` rows whose `model` is NULL or mismatches the
+  // argument. Surfaces "you ran with model A, the index has model B" so
+  // CLI callers can warn the user without re-running their own probes.
+  countEntriesWithStaleModel: (expectedModel: string) => number;
   // Query-embedding cache. Returns null when the cache is disabled or the
   // entry is missing / stored under a different model. `putCachedQuery`
   // overwrites stale-model rows lazily and enforces the LRU cap.
@@ -176,8 +211,13 @@ function openIndex(opts: IndexStoreOptions): {
       USING vec0(embedding FLOAT[${opts.dimensions}] distance_metric=cosine);
   `);
 
+  // Run migrations BEFORE preparing statements that reference v2 columns.
+  // The query_cache table is created later but applyMigrations only
+  // operates on entries here; it's safe to apply now.
+  applyMigrations(db);
+
   const upsertEntry = db.prepare(
-    'INSERT INTO entries (id, mtime) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET mtime = excluded.mtime',
+    'INSERT INTO entries (id, mtime, model) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET mtime = excluded.mtime, model = excluded.model',
   );
   const selectRowid = db.prepare('SELECT rowid FROM entries WHERE id = ?');
   const deleteVec = db.prepare('DELETE FROM vec WHERE rowid = ?');
@@ -194,8 +234,8 @@ function openIndex(opts: IndexStoreOptions): {
   // reader never observes an entries row whose vec row has been deleted
   // but not yet reinserted. better-sqlite3 transactions are synchronous.
   const upsertTx = db.transaction(
-    (id: string, mtime: number, blob: Buffer) => {
-      upsertEntry.run(id, mtime);
+    (id: string, mtime: number, model: string, blob: Buffer) => {
+      upsertEntry.run(id, mtime, model);
       const row = selectRowid.get(id) as { rowid: number };
       const rowid = BigInt(row.rowid);
       deleteVec.run(rowid);
@@ -203,13 +243,20 @@ function openIndex(opts: IndexStoreOptions): {
     },
   );
 
-  function upsert(id: string, mtime: number, embedding: number[]): void {
-    if (embedding.length !== opts.dimensions) {
+  function upsert(id: string, mtime: number, model: string, embedding: number[]): void {
+    // Validate model first: a v1 caller using the old 3-arg signature
+    // would land `embedding` in this slot and get a confusing TypeError
+    // when we read embedding.length on the actual `embedding` arg below.
+    // The friendly error names the missing arg explicitly.
+    if (typeof model !== 'string' || model.length === 0) {
+      throw new Error('upsert requires a non-empty model name');
+    }
+    if (!Array.isArray(embedding) || embedding.length !== opts.dimensions) {
       throw new Error(
-        `embedding dimension ${embedding.length} != index dimension ${opts.dimensions}`,
+        `embedding dimension ${Array.isArray(embedding) ? embedding.length : 'undefined'} != index dimension ${opts.dimensions}`,
       );
     }
-    upsertTx(id, mtime, toBlob(embedding));
+    upsertTx(id, mtime, model, toBlob(embedding));
   }
 
   function remove(id: string): void {
@@ -224,13 +271,24 @@ function openIndex(opts: IndexStoreOptions): {
   }
 
   const selectEmbeddingStmt = db.prepare(
-    'SELECT vec.embedding AS embedding FROM vec JOIN entries ON entries.rowid = vec.rowid WHERE entries.id = ?',
+    'SELECT entries.model AS model, vec.embedding AS embedding FROM vec JOIN entries ON entries.rowid = vec.rowid WHERE entries.id = ?',
+  );
+  const countStaleModelStmt = db.prepare(
+    'SELECT COUNT(*) AS n FROM entries WHERE model IS NULL OR model != ?',
   );
 
-  function getEmbedding(id: string): number[] | null {
-    const row = selectEmbeddingStmt.get(id) as { embedding: Buffer } | undefined;
+  function getEmbedding(id: string, expectedModel?: string): number[] | null {
+    const row = selectEmbeddingStmt.get(id) as
+      | { model: string | null; embedding: Buffer }
+      | undefined;
     if (!row) return null;
+    if (expectedModel !== undefined && row.model !== expectedModel) return null;
     return vecFromBlob(row.embedding);
+  }
+
+  function countEntriesWithStaleModel(expectedModel: string): number {
+    const row = countStaleModelStmt.get(expectedModel) as { n: number };
+    return row.n;
   }
 
   // Query-embedding cache. Identical prompts (e.g. "kannst du helfen") hit
@@ -249,12 +307,6 @@ function openIndex(opts: IndexStoreOptions): {
     CREATE INDEX IF NOT EXISTS query_cache_accessed_at_idx
       ON query_cache(accessed_at);
   `);
-
-  // Run after the v1 baseline DDL (entries, vec, query_cache) so a future
-  // migration that does `ALTER TABLE entries ...` always finds the table to
-  // modify. Migrations run inside BEGIN IMMEDIATE so two processes opening
-  // the same DB cannot double-apply.
-  applyMigrations(db);
 
   const cacheModel = opts.cache?.model;
   const cacheCapacity = opts.cache?.capacity ?? 0;
@@ -357,7 +409,7 @@ function openIndex(opts: IndexStoreOptions): {
   // 1 - distance/2 maps it back to [0, 1] so callers can compare to a
   // threshold expressed as similarity.
   const searchStmt = db.prepare(`
-    SELECT entries.id AS id, vec.distance AS distance
+    SELECT entries.id AS id, entries.model AS model, vec.distance AS distance
     FROM vec
     JOIN entries ON entries.rowid = vec.rowid
     WHERE vec.embedding MATCH ?
@@ -365,7 +417,11 @@ function openIndex(opts: IndexStoreOptions): {
     ORDER BY distance ASC
   `);
 
-  function search(queryEmbedding: number[], k: number): SearchHit[] {
+  function search(
+    queryEmbedding: number[],
+    k: number,
+    expectedModel?: string,
+  ): SearchHit[] {
     if (queryEmbedding.length !== opts.dimensions) {
       throw new Error(
         `query dimension ${queryEmbedding.length} != index dimension ${opts.dimensions}`,
@@ -373,9 +429,18 @@ function openIndex(opts: IndexStoreOptions): {
     }
     const rows = searchStmt.all(toBlob(queryEmbedding), k) as {
       id: string;
+      model: string | null;
       distance: number;
     }[];
-    return rows.map((r) => ({
+    // Filter rows whose stored model differs from the caller's. Comparing
+    // cosines across embedding spaces is meaningless, so a row from a
+    // different model (or a pre-v2 NULL row) is dropped instead of being
+    // returned with a misleading similarity.
+    const filtered =
+      expectedModel === undefined
+        ? rows
+        : rows.filter((r) => r.model === expectedModel);
+    return filtered.map((r) => ({
       id: r.id,
       similarity: Math.max(0, 1 - r.distance / 2),
     }));
@@ -390,6 +455,7 @@ function openIndex(opts: IndexStoreOptions): {
     remove,
     listEntries,
     getEmbedding,
+    countEntriesWithStaleModel,
     search,
     getCachedQuery,
     putCachedQuery,
