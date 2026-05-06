@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Active development is on `master`. Only the latest published release of each package under `packages/*` (unscoped on npm: `memory-router`, `mw-cli`, `agent-memory-sync`, `memory-digest-cli`, `ice-reflection-engine`, `lava-sprint-timer`) is supported.
+Active development is on `master`. Only the latest published release of each package under `packages/*` (unscoped on npm: `memory-router`, `agent-memory-sync`, `memory-digest-cli`) is supported.
 
 ## Reporting a Vulnerability
 

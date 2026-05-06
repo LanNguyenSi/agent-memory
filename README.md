@@ -59,12 +59,8 @@ Claude Code injects `additionalContext` as system context for the model on every
 | [memory-router](packages/memory-router) | You want Claude Code to actually apply your memory files instead of hoping the model notices them. Topic / tool / confidence gates, lint, stale-reference detector. |
 | [agent-memory-sync](packages/agent-memory-sync) | You run agents on more than one machine and need their memory dirs to converge via a shared git repo. Push / pull / cron / offline queue. |
 | [memory-digest-cli](packages/memory-digest-cli) | You write daily memory logs and want a curated summary instead of re-reading raw markdown. Generates digests from `YYYY-MM-DD.md` files. |
-| [ice-reflection-engine](packages/ice-reflection-engine) | You want to distill those daily logs into structured long-term entries automatically. Pattern + decision extraction, semantic scoring, writes back to `MEMORY.md`. |
-| [mw-cli](packages/mw-cli) | You want frictionless one-shot memory storage from inside a session, without designing a frontmatter contract. Memory Weaver CLI. |
-| [openclaw-skill-memory-weaver](packages/openclaw-skill-memory-weaver) | You're running OpenClaw and want native Memory Weaver Cloud integration instead of bolting on storage yourself. |
-| [lava-sprint-timer](packages/lava-sprint-timer) | You want sprint-shaped sessions that auto-commit their memory logs at the end of each sprint, not at "I remembered to git push" time. |
 
-The packages compose: `agent-memory-sync` keeps memory files in step across machines, `memory-router` decides which ones get injected per prompt, `ice-reflection-engine` and `memory-digest-cli` distill the raw daily logs into long-term entries the router can match against, and `lava-sprint-timer` enforces a regular commit cadence so the sync layer has something fresh to ship.
+The packages compose: `agent-memory-sync` keeps memory files in step across machines, `memory-digest-cli` distills the raw daily logs into curated summaries, and `memory-router` decides which entries get injected per prompt.
 
 ## Status
 

@@ -23,11 +23,8 @@ jobs:
       matrix:
         package:
           - agent-memory-sync
-          - ice-reflection-engine
-          - lava-sprint-timer
           - memory-digest-cli
           - memory-router
-          - mw-cli
     defaults:
       run:
         working-directory: packages/${{ matrix.package }}
@@ -41,14 +38,7 @@ jobs:
           cache-dependency-path: packages/${{ matrix.package }}/package-lock.json
 
       - name: Install
-        # `npm ci` when a lockfile exists, fall back to `npm install`
-        # for packages that haven't been locked yet (mw-cli).
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install --no-audit --no-fund
-          fi
+        run: npm ci
 
       # Native-dep smoke: fail fast on CI when a native addon's ABI doesn't
       # match this runner's Node. memory-router ships better-sqlite3 +
