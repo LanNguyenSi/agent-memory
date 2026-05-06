@@ -8,12 +8,8 @@ body:
       label: Package
       options:
         - agent-memory-sync
-        - ice-reflection-engine
-        - lava-sprint-timer
         - memory-digest-cli
         - memory-router
-        - mw-cli
-        - openclaw-skill-memory-weaver
         - new package
         - other / unsure
     validations:
