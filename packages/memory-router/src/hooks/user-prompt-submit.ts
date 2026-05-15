@@ -4,6 +4,11 @@ const { resolve, resolveConfidence, dedupeAndRank } = require('../router');
 const { renderHitsAsContext } = require('../render');
 const { readStdin } = require('./io');
 
+// Single source of truth for the version reported by the `--version` CLI
+// short-circuit. Bump alongside package.json on release; the
+// cli-version test asserts they stay in sync.
+const PACKAGE_VERSION = '0.2.0';
+
 // Claude Code UserPromptSubmit hook input. The full schema also carries
 // session_id / transcript_path / permission_mode — we only need prompt + cwd.
 // See: https://code.claude.com/docs/en/hooks.md
@@ -13,6 +18,15 @@ interface HookInput {
 }
 
 async function main(): Promise<void> {
+  // CLI short-circuit: print the version and exit before touching stdin.
+  // Tooling that probes installed binaries with `<bin> --version` (e.g.
+  // `harness doctor`'s memory.router.min_version check) otherwise hangs
+  // on `readStdin()` until the 5s probe budget expires.
+  if (process.argv.includes('--version') || process.argv.includes('-v')) {
+    process.stdout.write(`${PACKAGE_VERSION}\n`);
+    return;
+  }
+
   const raw = await readStdin();
   const input: HookInput = raw ? (JSON.parse(raw) as HookInput) : {};
 
