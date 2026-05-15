@@ -6,6 +6,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-15
+
 ### Added
 
 - `memory-router-user-prompt-submit --version` (alias `-v`): fast-exit CLI short-circuit that prints the package version and returns 0 before touching stdin. Tooling that probes installed memory routers (e.g. `harness doctor`'s `memory.router.min_version` check in harness 0.13) otherwise hangs on `readStdin()` until the 5s probe budget expires. A new node:test in `tests/cli-version.test.ts` reads `package.json#version` and asserts the bin's stdout matches, catching drift if the in-source `PACKAGE_VERSION` constant gets out of sync with `package.json` on a release bump.
