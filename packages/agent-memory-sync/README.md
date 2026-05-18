@@ -91,6 +91,92 @@ Options:
   --help                                 Show this message and exit
 ```
 
+#### `agent-memory-sync watch [profile]`
+
+Watch the local workspace and push a snapshot commit per debounce window. Built for backup workflows where every memory edit should land as its own commit in the remote repository, rather than being grouped by a cron tick.
+
+```bash
+agent-memory-sync watch [profile] [OPTIONS]
+
+Options:
+  --debounce-ms <ms>             Aggregate rapid changes within this window
+                                 (default 5000, env AGENT_MEMORY_SYNC_WATCH_DEBOUNCE_MS)
+  --max-runs <count>             Exit after this many snapshots (primarily for tests)
+  --remote <url>                 Override remote Git repository URL
+  --branch <name>                Override branch
+  --repository-subdir <path>     Override remote subdirectory
+  --root-dir <path>              Override workspace root
+  --state-dir <path>             Override local state directory
+  --output <text|json|yaml>      Output format  [default: text]
+  --verbose, --quiet, --no-color
+  --help
+```
+
+A single edit produces a `update <path>` commit; several edits within the debounce window land as a single `update N memories` commit with a bulleted body listing each path. Deletions become `remove <path>`. Push failures (auth, fast-forward conflict, network) surface on stderr with a non-zero exit; the process does not silently swallow errors. `SIGINT` / `SIGTERM` flush any pending debounce before exiting.
+
+##### systemd unit
+
+```ini
+# /etc/systemd/system/agent-memory-sync-watch.service
+[Unit]
+Description=agent-memory-sync watch (continuous memory backup)
+After=network-online.target
+
+[Service]
+Type=simple
+User=lan
+Environment=AGENT_MEMORY_SYNC_REMOTE_URL=git@github.com:you/memory-backup.git
+Environment=AGENT_MEMORY_SYNC_ROOT_DIR=/home/lan/.claude/projects/-home-lan-git-pandora/memory
+Environment=AGENT_MEMORY_SYNC_BRANCH=main
+ExecStart=/usr/local/bin/agent-memory-sync watch --verbose
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+##### Push authentication
+
+`watch` (and `run --mode push`) invoke the system `git` binary; authentication is whatever `git` itself is configured to use, e.g. an SSH key, an OS credential helper, or a `https://x-access-token:$TOKEN@github.com/...` URL.
+
+If you mint short-lived GitHub App installation tokens via a `gh-token.sh`-style helper, point `remoteUrl` at a wrapper script that refreshes the URL before each invocation, or wire it through a credential helper. agent-memory-sync intentionally does not embed token-minting logic.
+
+#### `agent-memory-sync restore <sha> [OPTIONS]`
+
+Restore memory files from a specific snapshot commit. Useful for rolling back a bad edit when paired with `watch` or scheduled `run --mode push`.
+
+```bash
+agent-memory-sync restore <sha> [OPTIONS]
+
+Options:
+  --path <relative>              Restore only this remote-relative path
+                                 (relative to repositorySubdir)
+  --dry-run                      List what would be restored without writing
+  --yes                          Confirm a full-snapshot restore without prompting
+  --remote <url>                 Override remote Git repository URL
+  --branch <name>                Override branch
+  --repository-subdir <path>     Override remote subdirectory
+  --root-dir <path>              Override workspace root
+  --state-dir <path>             Override local state directory
+  --output <text|json|yaml>      Output format  [default: text]
+  --verbose, --quiet, --no-color
+  --help
+```
+
+A full-tree restore requires `--yes` (or `--dry-run` to preview); a single file via `--path MEMORY.md` does not. Files are written byte-identical to their contents at `<sha>`. The command refuses to map a remote path that does not match an entry in `syncPaths`, so a restore cannot scatter files outside the configured workspace. An unknown SHA or a path that did not exist at that commit fails loudly.
+
+```bash
+# Roll back MEMORY.md to a specific commit
+agent-memory-sync restore 7c4d2e1 --path MEMORY.md
+
+# Restore the entire snapshot
+agent-memory-sync restore 7c4d2e1 --yes
+
+# Preview a restore
+agent-memory-sync restore 7c4d2e1 --yes --dry-run
+```
+
 #### `agent-memory-sync config`
 
 Manage tool configuration.

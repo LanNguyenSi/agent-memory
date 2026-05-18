@@ -138,6 +138,51 @@ class GitClient {
     return repoDir;
   }
 
+  fetchRef(repoDir: string, ref: string): void {
+    const result = this.run(["fetch", "origin", ref], repoDir, true);
+    if (result.exitCode !== 0) {
+      throw new CliError(
+        `could not fetch ref '${ref}' from remote. Verify the commit/branch exists and the remote is reachable.`,
+        4
+      );
+    }
+  }
+
+  showAtRef(repoDir: string, ref: string, repoRelativePath: string): string | null {
+    const result = this.run(["show", `${ref}:${repoRelativePath}`], repoDir, true);
+    if (result.exitCode === 0) {
+      return result.stdout;
+    }
+
+    if (/exists on disk, but not in|does not exist|path '.+' does not exist/i.test(result.stderr)) {
+      return null;
+    }
+
+    throw new CliError(
+      `git show failed for '${ref}:${repoRelativePath}'. ${result.stderr.trim() || "Unknown error."}`,
+      4
+    );
+  }
+
+  listTreePaths(repoDir: string, ref: string, subdir: string): string[] {
+    const args = ["ls-tree", "-r", "--name-only", ref];
+    if (subdir) {
+      args.push("--", `${subdir}/`);
+    }
+    const result = this.run(args, repoDir, true);
+    if (result.exitCode !== 0) {
+      throw new CliError(
+        `could not list tree for '${ref}'. ${result.stderr.trim() || "Unknown error."}`,
+        4
+      );
+    }
+
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
   run(args: string[], cwd: string, allowFailure = false): GitCommandResult {
     try {
       const stdout = execFileSync(this.gitBinary, args, {

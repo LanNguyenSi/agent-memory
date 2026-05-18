@@ -1,7 +1,9 @@
 const { Command } = require("commander");
 const { formatErrorMessage, isCliError } = require("./errors");
 const { registerConfigCommand } = require("./commands/config");
+const { registerRestoreCommand } = require("./commands/restore");
 const { registerRunCommand } = require("./commands/run");
+const { registerWatchCommand } = require("./commands/watch");
 
 const program = new Command();
 
@@ -14,6 +16,8 @@ program
 
 registerRunCommand(program);
 registerConfigCommand(program);
+registerWatchCommand(program);
+registerRestoreCommand(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   process.stderr.write(`error: ${formatErrorMessage(error)}\n`);
