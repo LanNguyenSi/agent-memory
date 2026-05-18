@@ -1,6 +1,7 @@
 const { collectLocalSyncFiles, toRepositoryRelativePath } = require("./config");
 const { GitClient } = require("./git-client");
 
+// Structural subset of RunConfig in src/config/loader.ts. Keep in sync if RunConfig drifts.
 interface SnapshotConfig {
   rootDir: string;
   stateDir: string;

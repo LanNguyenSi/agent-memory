@@ -368,6 +368,36 @@ test("restore --dry-run lists targets without writing", () => {
   assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "v2\n");
 });
 
+test("restore --path rejects path-traversal payloads", () => {
+  const root = createSandbox("restore-traversal");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "logs", "2026-05-01.md"), "v1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const snapshotSha = git(["rev-parse", "HEAD"], cloneRemote(remoteDir, root, "rev1")).trim();
+
+  for (const payload of ["logs/../../etc/passwd", "../escape.md", "logs//double"]) {
+    const result = runCli(
+      [
+        "restore",
+        snapshotSha,
+        "--config",
+        configPath,
+        "--path",
+        payload,
+        "--output",
+        "json"
+      ],
+      { expectFailure: true }
+    );
+    assert.notEqual(result.status, 0, `payload '${payload}' should be rejected`);
+    assert.match(result.stderr, /invalid|cannot map/i);
+  }
+});
+
 test("restore rejects an unknown sha with a loud non-zero exit", () => {
   const root = createSandbox("restore-bad-sha");
   const remoteDir = initBareRemote(root);

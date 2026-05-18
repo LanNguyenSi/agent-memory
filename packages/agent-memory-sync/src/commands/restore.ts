@@ -125,11 +125,11 @@ function registerRestoreCommand(program: import("commander").Command): void {
         }
 
         if (options.dryRun) {
-          writeDryRun(`would restore ${remoteRelativePath} → ${absoluteLocalPath} (${content.length} bytes)`, outputOptions);
+          writeDryRun(`would restore ${remoteRelativePath} -> ${absoluteLocalPath} (${content.length} bytes)`, outputOptions);
         } else {
           mkdirSync(path.dirname(absoluteLocalPath), { recursive: true });
           writeFileSync(absoluteLocalPath, content, "utf8");
-          writeInfo(`restored ${remoteRelativePath} → ${absoluteLocalPath}`, outputOptions);
+          writeInfo(`restored ${remoteRelativePath} -> ${absoluteLocalPath}`, outputOptions);
         }
 
         restored.push({
@@ -157,7 +157,8 @@ function registerRestoreCommand(program: import("commander").Command): void {
 
 function normalizeRequestedPath(repositorySubdir: string, requested: string): string {
   const normalized = requested.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
-  if (!normalized || normalized.startsWith("..")) {
+  const segments = normalized.split("/");
+  if (!normalized || segments.includes("..") || segments.includes("")) {
     throw new CliError(`--path value '${requested}' is invalid.`, 2);
   }
 

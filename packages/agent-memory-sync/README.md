@@ -131,10 +131,14 @@ Environment=AGENT_MEMORY_SYNC_BRANCH=main
 ExecStart=/usr/local/bin/agent-memory-sync watch --verbose
 Restart=on-failure
 RestartSec=5s
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop so an expired credential or a permanently rejected push (which `watch` surfaces as a non-zero exit, by design) does not crashloop forever. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting.
 
 ##### Push authentication
 

@@ -160,6 +160,11 @@ function registerWatchCommand(program: import("commander").Command): void {
             : 1;
         process.exitCode = exitCode;
         shouldExit = true;
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+        }
+        void maybeShutdown();
       }
 
       function scheduleFlush(): void {
@@ -268,7 +273,10 @@ function parsePositiveInteger(value: string | undefined, flag: string): number |
 
 function relativeForMessage(absolutePath: string, rootDir: string): string {
   const relative = path.relative(rootDir, absolutePath).replace(/\\/g, "/");
-  return relative || path.basename(absolutePath);
+  if (!relative || relative.startsWith("../")) {
+    return path.basename(absolutePath);
+  }
+  return relative;
 }
 
 module.exports = { registerWatchCommand };
