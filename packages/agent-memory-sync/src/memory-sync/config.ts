@@ -78,7 +78,11 @@ function mapRemotePathToLocalAbsolute(config: RunConfig, remoteRelativePath: str
       (normalizedRemotePath === destination || normalizedRemotePath.startsWith(`${destination}/`))
     ) {
       const relativeSuffix = normalizedRemotePath.slice(destination.length).replace(/^\/+/, "");
-      return path.resolve(absoluteSource, relativeSuffix);
+      const resolved = path.resolve(absoluteSource, relativeSuffix);
+      if (resolved !== absoluteSource && !resolved.startsWith(`${absoluteSource}${path.sep}`)) {
+        return null;
+      }
+      return resolved;
     }
   }
 

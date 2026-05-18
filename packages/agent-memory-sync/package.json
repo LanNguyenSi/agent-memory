@@ -20,6 +20,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "chokidar": "^4.0.3",
     "commander": "^13.1.0",
     "toml": "^3.0.0",
     "yaml": "^2.6.1"
