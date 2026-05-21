@@ -20,8 +20,8 @@ A CLI tool to generate daily memory digests from markdown files. It scans dated 
 ### From source
 
 ```bash
-git clone https://github.com/LanNguyenSi/memory-digest-cli.git
-cd memory-digest-cli
+git clone https://github.com/LanNguyenSi/agent-memory
+cd agent-memory/packages/memory-digest-cli
 npm install
 npm run build
 ```
@@ -30,7 +30,7 @@ npm run build
 
 ```bash
 # Run directly with Node
-node dist/src/main.js generate --help
+node dist/main.js generate --help
 
 # Or use npm scripts
 npm run dev -- generate --help
@@ -42,19 +42,19 @@ Generate a digest from your memory files:
 
 ```bash
 # Basic usage - scan current directory for last 7 days
-node dist/src/main.js generate
+node dist/main.js generate
 
 # Scan specific directory for last 3 days
-node dist/src/main.js generate --dir ./memory --days 3
+node dist/main.js generate --dir ./memory --days 3
 
 # Limit to top 10 insights and output JSON
-node dist/src/main.js generate --dir ./memory --max 10 --json
+node dist/main.js generate --dir ./memory --max 10 --json
 
 # Save to file
-node dist/src/main.js generate --dir ./memory --output digest.md
+node dist/main.js generate --dir ./memory --output digest.md
 
 # Scan subdirectories recursively
-node dist/src/main.js generate --dir ./memory --recursive
+node dist/main.js generate --dir ./memory --recursive
 ```
 
 ## CLI Options

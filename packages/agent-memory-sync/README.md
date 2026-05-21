@@ -5,26 +5,20 @@ A CLI tool that syncs agent memory files across multiple OpenClaw instances via 
 ## Overview
 
 `agent-memory-sync` is a command-line tool built with **typescript** and **commander**.
-It is distributed as a self-contained binary.
+It runs on Node.js 20 or newer.
 
 ## Installation
 
-### Download pre-built binary
-
-Download the latest release from the [releases page](https://github.com/LanNguyenSi/agent-memory-sync/releases).
+Build from source. `agent-memory-sync` is part of the [`agent-memory`](https://github.com/LanNguyenSi/agent-memory) monorepo.
 
 ```bash
-# Linux / macOS
-curl -sSL https://github.com/LanNguyenSi/agent-memory-sync/releases/latest/download/agent-memory-sync-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64 -o /usr/local/bin/agent-memory-sync
-chmod +x /usr/local/bin/agent-memory-sync
+git clone https://github.com/LanNguyenSi/agent-memory
+cd agent-memory/packages/agent-memory-sync
+npm install
+npm run build
 ```
 
-### From source
-
-```bash
-git clone https://github.com/LanNguyenSi/agent-memory-sync.git
-cd agent-memory-sync
-```
+This produces `dist/main.js`. Run it with `node dist/main.js`, or put `agent-memory-sync` on your `PATH` with `npm link`.
 
 ## Quick Start
 
@@ -280,8 +274,8 @@ agent-memory-sync/
 ### Setup
 
 ```bash
-git clone https://github.com/LanNguyenSi/agent-memory-sync.git
-cd agent-memory-sync
+git clone https://github.com/LanNguyenSi/agent-memory
+cd agent-memory/packages/agent-memory-sync
 npm install
 npm run build
 ```
