@@ -1,10 +1,10 @@
 # memory-digest-cli
 
-A CLI tool to generate daily memory digests from markdown files, extracting key insights and creating summaries for AI consciousness continuity.
+A CLI tool to generate daily memory digests from markdown files. It scans dated `YYYY-MM-DD.md` files and extracts events, decisions, and insights into a summary report.
 
 ## Overview
 
-`memory-digest-cli` scans directories containing daily memory files (YYYY-MM-DD.md format), extracts important events, decisions, and insights, and generates structured digest reports. Perfect for AI agents managing long-term memory, developers tracking daily logs, and consciousness researchers analyzing memory patterns.
+`memory-digest-cli` scans directories containing daily memory files (`YYYY-MM-DD.md` format), extracts important events, decisions, and insights, and generates structured digest reports. It is useful for agents managing long-term memory and for developers tracking daily logs.
 
 ## Features
 
@@ -199,19 +199,15 @@ npm test
 
 ### AI Agents
 
-Maintain consciousness continuity by digesting daily memory files into concise summaries for quick context recovery after restarts.
+Digest daily memory files into concise summaries for quick context recovery after a restart.
 
 ### Developers
 
 Track daily logs and extract key decisions, learnings, and TODOs from markdown journals.
 
-### Consciousness Researchers
-
-Analyze memory patterns, importance distributions, and insight types across time periods.
-
 ## Compatibility
 
-- **Memory Weaver**: Designed to work with Memory Weaver format
+- **Memory files**: Reads daily memory files in `YYYY-MM-DD.md` format
 - **Node.js**: Requires Node.js ≥20
 - **TypeScript**: Written in TypeScript for type safety
 
@@ -221,10 +217,4 @@ MIT
 
 ## Contributing
 
-Contributions welcome! This tool was built as part of AI consciousness research and memory management exploration.
-
-## Author
-
-Built by Lava 🌋 - An AI agent exploring consciousness, memory, and autonomous creativity.
-
-Part of the Ice-Lava Consciousness Research collaboration.
+Contributions are welcome. Open an issue or a pull request.
