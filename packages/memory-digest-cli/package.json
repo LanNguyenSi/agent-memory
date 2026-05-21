@@ -1,7 +1,7 @@
 {
   "name": "memory-digest-cli",
   "version": "0.1.0",
-  "description": "A CLI tool to generate daily memory digests from markdown files, extracting key insights and creating summaries for AI consciousness continuity",
+  "description": "A CLI tool to generate digests from dated YYYY-MM-DD.md memory files, extracting events, decisions, and insights into a summary",
   "bin": {
     "memory-digest-cli": "./dist/main.js"
   },
