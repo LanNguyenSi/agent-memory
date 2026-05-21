@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 const { Command } = require("commander");
 const { formatErrorMessage, isCliError } = require("./errors");
 const { registerConfigCommand } = require("./commands/config");
