@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Command } from "commander";
 import { registerConfigCommand } from "./commands/config.js";
 import { registerRunCommand } from "./commands/run.js";
