@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "description": "A CLI tool that syncs agent memory files across multiple OpenClaw instances via a central Git repository. Agents can push/pull their MEMORY.md and daily logs to stay in sync.",
   "bin": {
-    "agent-memory-sync": "./dist/main.js"
+    "agent-memory-sync": "./dist/src/main.js"
   },
   "scripts": {
     "start": "tsx src/main.ts",
     "dev": "tsx watch src/main.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/chmod-bins.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "npm run typecheck",
     "format": "prettier --write .",
