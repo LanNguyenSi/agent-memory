@@ -24,6 +24,8 @@ const {
   formatStaleReportText,
   formatStaleReportJson,
 } = require('./lint/stale');
+const { loadMemoriesFromDir } = require('./memory/loader');
+const { resolve, resolveConfidence, dedupeAndRank } = require('./router');
 
 interface ParsedArgs {
   cmd: string;
@@ -35,6 +37,16 @@ interface ParsedArgs {
   semantic: boolean;
   fix: boolean;
   json: boolean;
+  /**
+   * `test <prompt>`: dry-run a prompt against the corpus and print which
+   * memories would fire. Corpus dir resolution order: --dir flag,
+   * $MEMORY_ROUTER_DIR env, error.
+   */
+  testDir?: string;
+  /** `test --semantic`: also run the async confidence gate. */
+  testSemantic: boolean;
+  /** `test --max-hits <n>`. */
+  testMaxHits: number;
   /**
    * `stale` command: list of repo roots a path/symbol ref must resolve
    * against. A ref is STALE only when none of the roots resolves it.
@@ -63,6 +75,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   const repoRoots: string[] = [];
   let scanBody = false;
   let checkUrls = false;
+  let testDir: string | undefined;
+  let testMaxHits = 5;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true;
@@ -85,6 +99,24 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     else if (a === '--scan-body') scanBody = true;
     else if (a === '--check-urls') checkUrls = true;
+    else if (a === '--dir') testDir = argv[++i];
+    else if (a.startsWith('--dir=')) testDir = a.slice('--dir='.length);
+    else if (a === '--max-hits') {
+      // Refuse to swallow the next flag as a value: `--max-hits --json`
+      // should error rather than silently default and consume --json.
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        process.stderr.write('error: --max-hits requires a positive integer\n');
+        process.exit(1);
+      }
+      const n = Number.parseInt(next, 10);
+      if (!Number.isFinite(n) || n <= 0) {
+        process.stderr.write(`error: --max-hits expects a positive integer, got "${next}"\n`);
+        process.exit(1);
+      }
+      i++;
+      testMaxHits = n;
+    }
     else if (a === '--fix') fix = true;
     else if (a === '--json') json = true;
     else if (a === '--help' || a === '-h') {
@@ -125,8 +157,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
 
   // --semantic only makes sense with --conflicts (it upgrades INFO→HIGH on
-  // top of the regex pass). Warn loudly rather than silently ignoring it.
-  if (semanticFlag && !conflictsFlag) {
+  // top of the regex pass) or with `test` (where it opts the confidence
+  // gate into the dry-run). Warn loudly rather than silently ignoring it
+  // for the lint case; `test` always passes through to runTest.
+  if (semanticFlag && !conflictsFlag && positional[0] !== 'test') {
     process.stderr.write(
       'warning: --semantic only applies with --conflicts and is a no-op otherwise\n',
     );
@@ -144,6 +178,12 @@ function parseArgs(argv: string[]): ParsedArgs {
     repoRoots,
     scanBody,
     checkUrls,
+    testDir,
+    // `test` reuses the existing --semantic flag for the confidence gate
+    // upgrade (other verbs only consult it under --conflicts; semanticFlag
+    // is conceptually "opt in to the semantic pass" across the CLI).
+    testSemantic: semanticFlag,
+    testMaxHits,
   };
 }
 
@@ -191,6 +231,18 @@ Commands:
     alongside --conflicts, the drift JSON owns stdout and the conflicts
     JSON is routed to stderr so CI can pipe both fds.
 
+  test <prompt> [--dir <path>] [--semantic] [--max-hits <n>] [--json]
+    Dry-run a prompt against the live router (the same matcher the
+    UserPromptSubmit hook calls). Prints the memories that would fire,
+    their gate (topic / tool / confidence), score, and description so
+    you can verify a freshly-tagged memory routes the way you intended.
+    Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR env. The
+    sync gates (topic, tool) always run; --semantic also runs the async
+    confidence gate (requires OPENAI_API_KEY; degrades to a stderr
+    warning when missing or on API failure).
+    --max-hits caps how many matches are printed (default 5).
+    --json emits a machine-readable report on stdout.
+
   stale <dir> [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--scan-body] [--check-urls] [--json]
     Scan every memory in <dir> for stale references against one or more
     repo roots. Default root list: [process.cwd()]. A ref is STALE only
@@ -231,6 +283,9 @@ Examples:
   memory-router lint ~/.claude/projects/PROJECT/memory --drift --fix
   memory-router stale ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo
   memory-router stale ~/.claude/projects/PROJECT/memory --repo-roots ~/git/repoA ~/git/repoB
+  memory-router test "rebase the branch onto master" --dir ~/.claude/projects/PROJECT/memory
+  MEMORY_ROUTER_DIR=~/.claude/projects/PROJECT/memory \\
+    memory-router test "rebase the branch" --semantic --json
 `);
 }
 
@@ -410,6 +465,106 @@ async function runStale(
   process.exit(realStale ? 1 : 0);
 }
 
+async function runTest(
+  prompt: string,
+  dir: string,
+  semantic: boolean,
+  maxHits: number,
+  json: boolean,
+): Promise<void> {
+  const fs = require('node:fs');
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: cannot read ${dir}: ${String(err)}\n`);
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
+    process.stderr.write(`error: ${dir} is not a directory\n`);
+    process.exit(1);
+  }
+
+  const memories = loadMemoriesFromDir(dir);
+  const ctx = { prompt, cwd: process.cwd() };
+
+  const syncHits: GateHit[] = resolve(ctx, memories, { maxHits });
+  let allHits: GateHit[] = syncHits;
+
+  if (semantic) {
+    try {
+      const semHits: GateHit[] = await resolveConfidence(ctx, memories, dir, {
+        maxHits,
+      });
+      allHits = dedupeAndRank([...syncHits, ...semHits], maxHits);
+    } catch (err: unknown) {
+      process.stderr.write(
+        `warning: --semantic confidence gate failed, sync hits only: ${String(err)}\n`,
+      );
+    }
+  }
+
+  if (json) {
+    process.stdout.write(formatTestReportJson(allHits, dir, prompt));
+    return;
+  }
+  process.stdout.write(formatTestReportText(allHits, dir, prompt, memories.length));
+}
+
+function formatTestReportText(
+  hits: GateHit[],
+  dir: string,
+  prompt: string,
+  corpusSize: number,
+): string {
+  const lines: string[] = [];
+  lines.push(`prompt: ${prompt}`);
+  lines.push(`corpus: ${dir} (${corpusSize} memorie${corpusSize === 1 ? '' : 's'})`);
+  lines.push('');
+  if (hits.length === 0) {
+    lines.push('no match.');
+    lines.push('');
+    return lines.join('\n');
+  }
+  lines.push(
+    hits.length === 1 ? '1 match:' : `${hits.length} matches:`,
+  );
+  for (const h of hits) {
+    const desc = h.memory.frontmatter.description ?? '';
+    lines.push(
+      `  ${h.gate} · ${h.score.toFixed(2)}  ${h.memory.id}  — ${desc}`,
+    );
+    if (h.reason) lines.push(`      reason: ${h.reason}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+function formatTestReportJson(
+  hits: GateHit[],
+  dir: string,
+  prompt: string,
+): string {
+  return (
+    JSON.stringify(
+      {
+        prompt,
+        dir,
+        hits: hits.map((h) => ({
+          id: h.memory.id,
+          name: h.memory.frontmatter.name,
+          description: h.memory.frontmatter.description ?? null,
+          gate: h.gate,
+          score: h.score,
+          reason: h.reason ?? null,
+        })),
+      },
+      null,
+      2,
+    ) + '\n'
+  );
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -417,11 +572,30 @@ async function main(): Promise<void> {
     args.cmd !== 'tag' &&
     args.cmd !== 'index' &&
     args.cmd !== 'lint' &&
-    args.cmd !== 'stale'
+    args.cmd !== 'stale' &&
+    args.cmd !== 'test'
   ) {
     printHelp();
     process.exit(args.cmd === '' ? 0 : 1);
   }
+
+  if (args.cmd === 'test') {
+    const prompt = args.dir; // for `test`, positional[1] is the prompt
+    if (!prompt) {
+      process.stderr.write('error: test <prompt> is required\n');
+      process.exit(1);
+    }
+    const dir = args.testDir ?? process.env.MEMORY_ROUTER_DIR;
+    if (!dir) {
+      process.stderr.write(
+        'error: --dir <path> or $MEMORY_ROUTER_DIR is required\n',
+      );
+      process.exit(1);
+    }
+    await runTest(prompt, dir, args.testSemantic, args.testMaxHits, args.json);
+    return;
+  }
+
   if (!args.dir) {
     process.stderr.write('error: <dir> is required\n');
     process.exit(1);
