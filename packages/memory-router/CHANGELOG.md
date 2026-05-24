@@ -6,6 +6,18 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-24
+
+### Added
+
+- `memory-router test "<prompt>" [--dir <path>] [--semantic] [--max-hits <n>] [--json]` (#46): new CLI verb that dry-runs the live router (same matcher the UserPromptSubmit hook calls) against a memory corpus and prints which memories would fire, their gate (topic / tool / confidence), score, and description. Replaces the manual JSON-pipe workaround documented in memory `feedback_memory_router_dogfood`. Corpus dir resolution: `--dir` flag, then `$MEMORY_ROUTER_DIR` env; clean error when neither is set. Sync gates always run; `--semantic` opts into the async confidence gate with fail-open on missing `OPENAI_API_KEY` / network error. `--max-hits` caps printed matches; the parser refuses to swallow the next flag as a value, so `--max-hits --json` errors rather than silently consuming `--json`. `--json` emits a parseable report with `{ prompt, dir, hits: [{ id, name, description, gate, score, reason }] }` shape. New `tests/cli-test.test.ts` covers positive topic match against fixture, no-match path, JSON shape, `$MEMORY_ROUTER_DIR` fallback, missing-dir error, missing-prompt error, `--max-hits` swallow guard, `--max-hits` accepts integer (8 tests, all 188 in suite pass). Dogfooded against the real 55-memory corpus at `~/.claude/projects/-home-lan-git-pandora/memory`: positive prompt yields 5 topic matches, negative prompt prints "no match.".
+
+### Changed
+
+- `PACKAGE_VERSION` constant in `src/hooks/user-prompt-submit.ts` bumped to `0.4.0` in lockstep with `package.json` per the cli-version drift guard.
+
+agent-tasks task `1e3a371f`, PR #46.
+
 ## [0.3.0] - 2026-05-15
 
 ### Added
