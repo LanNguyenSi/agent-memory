@@ -241,15 +241,15 @@ What are the trade-offs? What becomes easier or harder?
 - **`--help` text**: updated whenever flags or commands change; treat it as part of the public API
 - **architecture.md**: updated when subsystem structure or data flow changes
 - **ADRs**: written before merging significant decisions, not after
-- **AI_CONTEXT.md**: updated when adding new commands or changing patterns
+- **`.ai/AGENTS.md`**: updated when adding new commands or changing patterns
 
 ## AI Collaboration Guidelines
 
-This project is configured for AI-assisted development. Read `AI_CONTEXT.md` before working on the codebase.
+This project is configured for AI-assisted development. Read `.ai/AGENTS.md` before working on the codebase.
 
 ### For AI Agents
 
-- Read `AI_CONTEXT.md` before starting any task
+- Read `.ai/AGENTS.md` before starting any task
 - Follow the command module pattern exactly - do not invent new file layouts
 - Use the exit code table from architecture.md for all error paths
 - Write `--help` text for every new flag and command
@@ -262,7 +262,7 @@ This project is configured for AI-assisted development. Read `AI_CONTEXT.md` bef
 - Provide the expected `--help` output as part of the specification
 - Review exit code handling and stderr vs stdout routing carefully
 - Run the full test suite after AI-generated changes
-- Update `AI_CONTEXT.md` if new patterns are introduced
+- Update `.ai/AGENTS.md` if new patterns are introduced
 
 ## Communication
 
