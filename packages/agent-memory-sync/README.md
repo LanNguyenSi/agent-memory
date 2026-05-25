@@ -260,7 +260,6 @@ agent-memory-sync/
 │   ├── architecture.md
 │   ├── ways-of-working.md
 │   └── adrs/
-├── AI_CONTEXT.md
 └── README.md
 ```
 
