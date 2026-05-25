@@ -393,6 +393,26 @@ const hits = resolve({ prompt: 'merge PR 42' }, memories);
 
 The package ships JavaScript only (no `.d.ts` yet); types for the public API are tracked as a follow-up.
 
+### Coverage / regression suite
+
+`tests/coverage/real-corpus.test.ts` runs the sync router against a labelled prompt fixture and a synthetic memory corpus. It catches matcher-recall regressions: a scoring-weight change, a typo in a memory's `topics:`, or an overly-broad new memory all show up as failing assertions naming the `(prompt, memory)` pair.
+
+The suite is part of `npm test`. After every prompt is evaluated it emits one TAP-comment line summarising aggregate stats:
+
+```
+# coverage: 93.3% (28/30 prompts matched ≥1) | mean_hits=3.20 | FN=0/76 (0.0%) | FP=0/74 (0.0%)
+```
+
+`FN` counts labelled `expectedMatches` that did not fire, `FP` counts labelled `expectedNoMatches` that did fire. Extras outside both labelled sets are tolerated; the gate is recall, not minimality.
+
+The fixture (`tests/coverage/prompts.fixture.json`) and the corpus (`tests/coverage/corpus/`) are synthetic, never real user prompts or real-corpus memory bodies. To dogfood against a real corpus locally, set `MEMORY_ROUTER_COVERAGE_CORPUS_DIR`:
+
+```bash
+MEMORY_ROUTER_COVERAGE_CORPUS_DIR=~/.claude/projects/-home-lan-git-pandora/memory npm test
+```
+
+Companion verb for one-shot prompt checks: `memory-router test "<prompt>"` (see [Usage](#usage)).
+
 ## Status
 
 **v1, scaffold.**

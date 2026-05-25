@@ -31,6 +31,19 @@ Each package is self-contained, no root install.
 
 When changing anything under `packages/memory-router/src/hooks/*` or the Gate logic, validate against the actual `~/.claude/projects/-home-lan-git-pandora/memory/` directory, not just test fixtures. After `npm run build` in `packages/memory-router/`, pipe a real prompt through the hook with `MEMORY_ROUTER_DIR` pointing at the user's memory dir and verify the positive case emits `hookSpecificOutput.additionalContext` while the negative case exits clean. See [packages/memory-router/README.md](packages/memory-router/README.md) for hook wiring and the trust model.
 
+## Adding a memory to memory-router
+
+When you add a memory to the user's real corpus (or change topics/frontmatter on an existing one), run the coverage suite and decide whether to extend the labelled fixture:
+
+```bash
+cd packages/memory-router
+npm test  # includes tests/coverage/real-corpus.test.ts
+```
+
+The suite emits a `# coverage:` summary line (match-rate, mean hits/prompt, false-negative + false-positive counts). If the new memory's topics overlap with prompts already in `tests/coverage/prompts.fixture.json`, the suite's aggregate numbers shift; that's the regression net working. If the new memory introduces a behaviour not covered, add a labelled prompt to the fixture so future scoring or topic changes can't silently drop it.
+
+The fixture and the corpus under `tests/coverage/corpus/` are **synthetic**. Never paste a real user prompt or a real-corpus memory body in there: they can leak credentials, host names, or session content. For ad-hoc dogfooding against the real corpus, point `MEMORY_ROUTER_COVERAGE_CORPUS_DIR` at the real memory dir locally; that path is uncommitted by design.
+
 ## Style
 
 Match the surrounding code. Prefer small, reviewable diffs.
