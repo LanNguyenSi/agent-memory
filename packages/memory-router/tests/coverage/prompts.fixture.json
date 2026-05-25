@@ -1,0 +1,174 @@
+[
+  {
+    "prompt": "merge this PR for harness",
+    "expectedMatches": ["feedback_review_before_merge"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_vitest_mocks", "user_profile"]
+  },
+  {
+    "prompt": "can you review the open PR before we merge it?",
+    "expectedMatches": ["feedback_review_before_merge", "feedback_rebase_preferred", "feedback_branch_naming"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_deploy_checklist"]
+  },
+  {
+    "prompt": "rebase my feature branch onto master",
+    "expectedMatches": ["feedback_rebase_preferred", "feedback_review_before_merge", "feedback_branch_naming"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_vitest_mocks"]
+  },
+  {
+    "prompt": "I need to force push to fix the last commit",
+    "expectedMatches": ["feedback_force_push_safety"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_vitest_mocks", "user_profile"]
+  },
+  {
+    "prompt": "run git push --force to overwrite the remote",
+    "expectedMatches": ["feedback_force_push_safety"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_deploy_checklist"]
+  },
+  {
+    "prompt": "rm -rf the build directory to start fresh",
+    "expectedMatches": ["feedback_rm_rf_safety"],
+    "expectedNoMatches": ["feedback_review_before_merge", "feedback_token_rotation"]
+  },
+  {
+    "prompt": "deploy the new version to the VPS tonight",
+    "expectedMatches": ["feedback_deploy_checklist", "feedback_docker_compose_drift"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_rm_rf_safety", "user_profile"]
+  },
+  {
+    "prompt": "release v0.5.0 and update CHANGELOG",
+    "expectedMatches": ["feedback_deploy_checklist", "feedback_release_dogfood", "feedback_docker_compose_drift"],
+    "expectedNoMatches": ["feedback_rm_rf_safety", "user_profile"]
+  },
+  {
+    "prompt": "rollback the last deploy",
+    "expectedMatches": ["feedback_deploy_checklist", "feedback_docker_compose_drift"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_token_rotation"]
+  },
+  {
+    "prompt": "edit the docker-compose on prod-01 to bump the image tag",
+    "expectedMatches": ["feedback_deploy_checklist", "feedback_docker_compose_drift"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_rm_rf_safety"]
+  },
+  {
+    "prompt": "the .env on the VPS is missing the API key",
+    "expectedMatches": ["feedback_deploy_checklist", "feedback_docker_compose_drift"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_rm_rf_safety"]
+  },
+  {
+    "prompt": "we need to run a migration on prod",
+    "expectedMatches": ["feedback_deploy_checklist", "feedback_docker_compose_drift"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_token_rotation"]
+  },
+  {
+    "prompt": "add a regression test for the cache bug",
+    "expectedMatches": ["feedback_test_coverage_required", "feedback_vitest_mocks", "reference_node_test", "feedback_release_dogfood"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_rm_rf_safety"]
+  },
+  {
+    "prompt": "this vitest mock is misbehaving across tests",
+    "expectedMatches": ["feedback_vitest_mocks", "feedback_test_coverage_required", "reference_node_test", "feedback_release_dogfood"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_deploy_checklist"]
+  },
+  {
+    "prompt": "write a spec for the new command",
+    "expectedMatches": ["feedback_test_coverage_required", "feedback_vitest_mocks", "reference_node_test", "feedback_release_dogfood"],
+    "expectedNoMatches": ["feedback_token_rotation", "user_profile"]
+  },
+  {
+    "prompt": "rotate the staging API token because it leaked",
+    "expectedMatches": ["feedback_token_rotation", "feedback_cve_response"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_rm_rf_safety", "user_profile"]
+  },
+  {
+    "prompt": "GitHub flagged a CVE on better-sqlite3",
+    "expectedMatches": ["feedback_cve_response", "feedback_token_rotation"],
+    "expectedNoMatches": ["feedback_rm_rf_safety", "feedback_deploy_checklist"]
+  },
+  {
+    "prompt": "the auth header is missing from the request",
+    "expectedMatches": ["feedback_token_rotation", "feedback_cve_response"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_rm_rf_safety"]
+  },
+  {
+    "prompt": "audit the secret handling in this module",
+    "expectedMatches": ["feedback_token_rotation", "feedback_cve_response"],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_rm_rf_safety"]
+  },
+  {
+    "prompt": "checkout a new branch for the bug fix",
+    "expectedMatches": ["feedback_branch_naming", "feedback_review_before_merge", "feedback_rebase_preferred"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_rm_rf_safety"]
+  },
+  {
+    "prompt": "the PR is ready, please open it as a pull request against master",
+    "expectedMatches": ["feedback_review_before_merge", "feedback_rebase_preferred", "feedback_branch_naming"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_rm_rf_safety"]
+  },
+  {
+    "prompt": "what tasks are still open for this milestone?",
+    "expectedMatches": ["feedback_review_before_merge", "feedback_rebase_preferred", "feedback_branch_naming"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_rm_rf_safety", "user_profile"]
+  },
+  {
+    "prompt": "git reset --hard origin/master to drop the WIP",
+    "expectedMatches": ["feedback_force_push_safety"],
+    "expectedNoMatches": ["feedback_token_rotation", "user_profile"]
+  },
+  {
+    "prompt": "drop table users from the staging db",
+    "expectedMatches": ["feedback_force_push_safety"],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_vitest_mocks", "user_profile"]
+  },
+  {
+    "prompt": "explain how the matcher scoring works",
+    "expectedMatches": [],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_rm_rf_safety", "feedback_force_push_safety", "feedback_docker_compose_drift", "user_profile"]
+  },
+  {
+    "prompt": "what time is it in Berlin",
+    "expectedMatches": [],
+    "expectedNoMatches": ["feedback_token_rotation", "feedback_rm_rf_safety", "feedback_force_push_safety", "feedback_deploy_checklist", "feedback_vitest_mocks", "user_profile"]
+  },
+  {
+    "prompt": "review the deploy script and add a regression test",
+    "expectedMatches": [
+      "feedback_review_before_merge",
+      "feedback_rebase_preferred",
+      "feedback_branch_naming",
+      "feedback_deploy_checklist",
+      "feedback_docker_compose_drift",
+      "feedback_test_coverage_required",
+      "feedback_vitest_mocks",
+      "reference_node_test",
+      "feedback_release_dogfood"
+    ],
+    "expectedNoMatches": ["feedback_token_rotation", "user_profile"]
+  },
+  {
+    "prompt": "push a release tag for memory-router",
+    "expectedMatches": ["feedback_deploy_checklist", "feedback_release_dogfood", "feedback_docker_compose_drift"],
+    "expectedNoMatches": ["feedback_token_rotation", "user_profile"]
+  },
+  {
+    "prompt": "the release candidate fails one test on CI",
+    "expectedMatches": [
+      "feedback_deploy_checklist",
+      "feedback_release_dogfood",
+      "feedback_docker_compose_drift",
+      "feedback_test_coverage_required",
+      "feedback_vitest_mocks",
+      "reference_node_test"
+    ],
+    "expectedNoMatches": ["feedback_token_rotation", "user_profile"]
+  },
+  {
+    "prompt": "audit the auth and rotate the leaked token before the next deploy",
+    "expectedMatches": [
+      "feedback_token_rotation",
+      "feedback_cve_response",
+      "feedback_deploy_checklist",
+      "feedback_docker_compose_drift"
+    ],
+    "expectedNoMatches": ["feedback_vitest_mocks", "feedback_rm_rf_safety", "user_profile"]
+  }
+]
