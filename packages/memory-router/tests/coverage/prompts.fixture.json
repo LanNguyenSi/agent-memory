@@ -1,6 +1,6 @@
 [
   {
-    "prompt": "merge this PR for harness",
+    "prompt": "merge this PR for the billing module",
     "expectedMatches": ["feedback_review_before_merge"],
     "expectedNoMatches": ["feedback_token_rotation", "feedback_vitest_mocks", "user_profile"]
   },
