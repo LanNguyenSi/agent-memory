@@ -62,6 +62,16 @@ Claude Code injects `additionalContext` as system context for the model on every
 
 The packages compose: `agent-memory-sync` keeps memory files in step across machines, `memory-digest-cli` distills the raw daily logs into curated summaries, and `memory-router` decides which entries get injected per prompt.
 
+## Repo layout
+
+`agent-memory` is a folder of independent packages, not an npm workspaces / pnpm / lerna monorepo. There is no root `package.json`, no workspace manifest, and no shared root `node_modules`. Each package under `packages/` carries its own `package.json`, install, build, test, and version, so the install pattern is the same for any of them:
+
+```bash
+cd packages/<name> && npm install && npm run build
+```
+
+If you only care about one package, work in its directory; nothing at the root needs to be set up first.
+
 ## Status
 
 Experimental. memory-router is the most production-shaped surface (hook contract, MCP server, lint, stale detector, schema-versioned sqlite index). The other packages cover working but earlier-stage workflows: see each package README for current capabilities.
