@@ -68,6 +68,30 @@ test("digest should respect max insights limit", () => {
   );
 });
 
+test("digest should not crash when no insights are extracted", () => {
+  const digest = generateDigest([]);
+
+  assert.strictEqual(
+    digest.summary.totalInsights,
+    0,
+    "Should report zero insights",
+  );
+  assert.ok(
+    digest.period.start instanceof Date &&
+      !Number.isNaN(digest.period.start.getTime()),
+    "Period start should be a valid Date",
+  );
+  assert.ok(
+    digest.period.end instanceof Date &&
+      !Number.isNaN(digest.period.end.getTime()),
+    "Period end should be a valid Date",
+  );
+
+  // formatDigestMarkdown calls period.start.toISOString(), which threw a
+  // RangeError before the fix when the period dates were invalid.
+  assert.doesNotThrow(() => formatDigestMarkdown(digest));
+});
+
 test("markdown formatter should create valid output", () => {
   const insights: ExtractedInsight[] = [
     {

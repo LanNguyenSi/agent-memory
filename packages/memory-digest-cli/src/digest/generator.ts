@@ -39,10 +39,13 @@ export function generateDigest(
     byType[insight.type] = (byType[insight.type] || 0) + 1;
   }
 
-  // Calculate period
+  // Calculate period. When there are no insights, dates is empty and
+  // Math.min/Math.max would yield Infinity/-Infinity, producing Invalid Dates
+  // that later throw RangeError on toISOString(). Fall back to now instead.
   const dates = selectedInsights.map((i) => i.date.getTime());
-  const start = new Date(Math.min(...dates));
-  const end = new Date(Math.max(...dates));
+  const now = Date.now();
+  const start = new Date(dates.length ? Math.min(...dates) : now);
+  const end = new Date(dates.length ? Math.max(...dates) : now);
 
   // Calculate average importance
   const averageImportance =
