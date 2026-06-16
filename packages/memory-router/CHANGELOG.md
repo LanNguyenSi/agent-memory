@@ -6,6 +6,24 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-16
+
+**Coverage suite and security hardening.**
+
+### Added
+
+- `tests/coverage/` false-negative regression suite (PR #50): structured set of labelled prompts that exercise the router's pass/fail boundary so regressions in gate logic surface as test failures rather than silent behaviour drift.
+
+### Security
+
+- `tsx` bumped to `^4.22.4` (PR #55): clears two transitive `esbuild` advisories GHSA-gv7w-rqvm-qjhr and GHSA-g7r4-m6w7-qqqr.
+- `hono` bumped to `^4.12.23` (PR #53): clears 4 MEDIUM CVEs in the dev dependency.
+- `qs` bumped to `6.15.2` (PR #48): patches CVE-2026-8723.
+
+### Tests
+
+- Scrubbed a real repository name from one labelled prompt in the coverage fixture.
+
 ## [0.4.0] - 2026-05-24
 
 ### Added
