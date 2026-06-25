@@ -4,6 +4,31 @@
 
 > Most agent infrastructure assumes the model carries the context. It doesn't: the moment a session ends, the context window evaporates and the next run is a blank slate. agent-memory is the durable substrate underneath. Persist what you learned, sync it across machines, and let a routing layer decide which memories matter for the next prompt.
 
+## How it works
+
+`memory-router` turns every prompt into a gated lookup over your markdown memory dir: matches are injected as `additionalContext`, misses leave the context window untouched.
+
+```mermaid
+flowchart TD
+    cc["Claude Code"] -->|"UserPromptSubmit / PreToolUse"| hook["hooks/user-prompt-submit.ts<br/>hooks/pre-tool-use.ts"]
+    mcpc["MCP client"] --> mcp["mcp/server.ts"]
+    hook --> router["router.ts"]
+    mcp --> router
+
+    subgraph corpus["Memory dir · markdown"]
+        files["*.md memories"]
+    end
+    sync["agent-memory-sync<br/>cross-machine git sync"] --> files
+    digest["memory-digest-cli<br/>daily-log digests"] --> files
+
+    router --> loader["memory/loader.ts"]
+    files --> loader
+    loader --> store[("sqlite-vec index<br/>embed/indexer.ts · embed/index-store.ts")]
+    store --> gates{"gates<br/>topic · tool · confidence"}
+    gates -->|match| render["render.ts<br/>additionalContext JSON injected"]
+    gates -->|no match| empty["empty stdout<br/>context stays clean"]
+```
+
 ## Try it in 60 seconds
 
 The flagship package is [`memory-router`](packages/memory-router): a deterministic memory-injection layer for Claude Code. Drive it once and the rest of the suite makes more sense.
