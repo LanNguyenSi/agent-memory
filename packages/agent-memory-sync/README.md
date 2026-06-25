@@ -2,6 +2,8 @@
 
 A CLI tool that syncs agent memory files across multiple OpenClaw instances via a central Git repository. It supports push, pull, full sync, inline conflict handling, offline queueing, cron-compatible scheduling, and dry-run previews.
 
+> **Internal tool: not published to npm.** This CLI is used from source within this repo and is intentionally not a published package (`private: true`); this repo publishes only `@lannguyensi/memory-router`. Build and run it from the monorepo rather than installing from npm.
+
 ## Overview
 
 `agent-memory-sync` is a command-line tool built with **typescript** and **commander**.

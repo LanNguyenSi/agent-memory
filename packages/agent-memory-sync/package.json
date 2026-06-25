@@ -2,6 +2,8 @@
   "name": "agent-memory-sync",
   "version": "0.1.0",
   "description": "A CLI tool that syncs agent memory files across multiple OpenClaw instances via a central Git repository. Agents can push/pull their MEMORY.md and daily logs to stay in sync.",
+  "private": true,
+  "//": "Internal/local CLI, intentionally NOT published to npm (no consumers; this repo publishes only @lannguyensi/memory-router). Posture recorded for agent-tasks 9723a709.",
   "bin": {
     "agent-memory-sync": "./dist/src/main.js"
   },

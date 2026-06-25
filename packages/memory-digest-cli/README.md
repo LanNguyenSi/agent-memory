@@ -2,6 +2,8 @@
 
 A CLI tool to generate daily memory digests from markdown files. It scans dated `YYYY-MM-DD.md` files and extracts events, decisions, and insights into a summary report.
 
+> **Internal tool: not published to npm.** This CLI is used from source within this repo and is intentionally not a published package (`private: true`); this repo publishes only `@lannguyensi/memory-router`. Build and run it from the monorepo rather than installing from npm.
+
 ## Overview
 
 `memory-digest-cli` scans directories containing daily memory files (`YYYY-MM-DD.md` format), extracts important events, decisions, and insights, and generates structured digest reports. It is useful for agents managing long-term memory and for developers tracking daily logs.
