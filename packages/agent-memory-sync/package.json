@@ -15,8 +15,8 @@
     "lint": "npm run typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --test --experimental-strip-types tests/**/*.test.ts",
-    "test:coverage": "node --test --experimental-strip-types --experimental-test-coverage tests/**/*.test.ts"
+    "test": "node --import tsx --test 'tests/**/*.test.ts'",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-exclude='tests/**' --test-coverage-lines=86 --test-coverage-branches=65 --test-coverage-functions=86 'tests/**/*.test.ts'"
   },
   "engines": {
     "node": ">=20"

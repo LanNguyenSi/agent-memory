@@ -59,5 +59,9 @@ jobs:
       - name: Lint
         run: npm run lint --if-present
 
-      - name: Test
-        run: npm test --if-present
+      - name: Test + coverage gate
+        # test:coverage runs the suite under node --test --experimental-test-coverage
+        # with --test-coverage-{lines,branches,functions} thresholds, so coverage
+        # regressions fail the build. Previously CI ran plain `npm test` (no
+        # coverage) and the declared thresholds were never evaluated.
+        run: npm run test:coverage --if-present
