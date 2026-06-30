@@ -16,7 +16,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "tsx --test tests/*.test.ts",
-    "test:coverage": "tsx --test --experimental-test-coverage tests/*.test.ts"
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude='tests/**' --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=92 tests/*.test.ts"
   },
   "engines": {
     "node": ">=20"

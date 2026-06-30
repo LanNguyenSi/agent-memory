@@ -45,7 +45,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "pretest": "npm run build",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "test": "node --import tsx --test 'tests/**/*.test.ts'",
+    "pretest:coverage": "npm run build",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-exclude='tests/**' --test-coverage-exclude='dist/**' --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=80 'tests/**/*.test.ts'"
   },
   "engines": {
     "node": ">=22"
