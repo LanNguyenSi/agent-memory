@@ -88,6 +88,30 @@ test("parseCron: invalid — range with start > end throws CliError", () => {
   assert.throws(() => validateCronExpression("5-3 * * * *"), /invalid/);
 });
 
+test("parseCron: invalid — step */0 is rejected (guards the infinite-loop hang)", () => {
+  // Regression guard. Formerly '*/0' passed parseInteger for min=0 fields
+  // (minute/hour/dayOfWeek), then fillRange(result, min, max, 0) looped forever
+  // (cursor += 0), hanging the sync daemon on a typo'd cron string. The step is
+  // now validated as an integer >= 1, independent of the field range. If the
+  // guard is removed this assertion never returns — the call hangs (bounded only
+  // by the CI job timeout), which still fails the run rather than passing.
+  assert.throws(() => validateCronExpression("*/0 * * * *"), /must be a positive integer/);
+});
+
+test("parseCron: step larger than the field range is valid (step is range-independent)", () => {
+  // '*/90' on minutes: the step exceeds max=59, so only minute 0 matches — this
+  // is valid, not an error. Formerly parseInteger(stepToken, 0, 59) rejected any
+  // step > 59; the fix decouples the step from the field's min/max on purpose.
+  assert.doesNotThrow(() => validateCronExpression("*/90 * * * *"));
+});
+
+test("parseCron: single-value step form 'a/n' (e.g. 5/2) throws — lone-value step unsupported", () => {
+  // Standard cron reads 5/2 as 5-max/2, but this parser routes the lone range
+  // token through parseRange, whose missing end token fails parseInteger. Pin the
+  // current behavior: it throws (rather than silently misbehaving or hanging).
+  assert.throws(() => validateCronExpression("5/2 * * * *"), /outside the allowed range/);
+});
+
 test("parseCron: invalid — non-numeric field value throws CliError", () => {
   assert.throws(() => validateCronExpression("* * * * abc"), /outside the allowed range/);
 });

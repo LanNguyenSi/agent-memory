@@ -9,6 +9,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Command } from "commander";
 import { registerGenerateCommand } from "../src/commands/generate.js";
 
@@ -35,11 +38,11 @@ test("registerGenerateCommand: registers a subcommand named 'generate'", () => {
   assert.equal(generateCmd.name(), "generate");
 });
 
-test("registerGenerateCommand: subcommand has a non-empty description", () => {
+test("registerGenerateCommand: subcommand has the expected description", () => {
   const { generateCmd } = buildProgram();
-  assert.ok(
-    generateCmd.description().length > 0,
-    "description should not be empty"
+  assert.equal(
+    generateCmd.description(),
+    "Generate a memory digest from markdown files"
   );
 });
 
@@ -153,4 +156,168 @@ test("generate: all non-default flags can be passed together", async () => {
   assert.equal(capturedOptions!.max, "200");
   assert.equal(capturedOptions!.recursive, true);
   assert.equal(capturedOptions!.json, true);
+});
+
+// ─── real-action integration tests ──────────────────────────────────────────
+//
+// The tests above all replace the action handler with a spy, so the real
+// action body in generate.ts (scan → extract → generate → format →
+// write/print, plus the catch/process.exit path) is never exercised. The
+// tests below run the REAL action registered by registerGenerateCommand
+// against real temp-dir fixtures on disk.
+//
+// The scanner only matches files literally named `YYYY-MM-DD.md` and filters
+// by the date encoded in the filename (not mtime), so fixtures must use
+// today's date computed at test-run time -- a hardcoded date would drift out
+// of the default 7-day window and start failing later.
+
+function todayFileName(): string {
+  return `${new Date().toISOString().slice(0, 10)}.md`;
+}
+
+// Sentinel thrown by the stubbed process.exit so the real action's async
+// control flow stops exactly where the real process.exit would have
+// terminated the process, without actually killing the test runner.
+class ProcessExitSentinel extends Error {
+  code: number | undefined;
+  constructor(code: number | undefined) {
+    super(`process.exit called with code ${code}`);
+    this.code = code;
+  }
+}
+
+// Runs `fn` with console.log/console.error/process.exit stubbed out, and
+// returns what was captured. console.log calls are recorded (the action's
+// stdout print branch uses it); console.error is silenced (the action logs
+// progress and error messages through it); process.exit is replaced with a
+// spy that records the exit code and throws ProcessExitSentinel so the
+// action's control flow halts the same way a real process.exit would, then
+// swallows that specific sentinel so the test doesn't fail on it.
+async function withStubbedIO(
+  fn: () => Promise<void>
+): Promise<{ logs: unknown[][]; exitCode: number | undefined; exitCalled: boolean }> {
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalExit = process.exit;
+
+  const logs: unknown[][] = [];
+  let exitCode: number | undefined;
+  let exitCalled = false;
+
+  console.log = (...args: unknown[]) => {
+    logs.push(args);
+  };
+  console.error = () => {};
+  process.exit = ((code?: number) => {
+    exitCalled = true;
+    exitCode = code;
+    throw new ProcessExitSentinel(code);
+  }) as typeof process.exit;
+
+  try {
+    await fn();
+  } catch (error) {
+    if (!(error instanceof ProcessExitSentinel)) {
+      throw error;
+    }
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    process.exit = originalExit;
+  }
+
+  return { logs, exitCode, exitCalled };
+}
+
+test("generate: real action writes a markdown digest to --output", async () => {
+  const { program } = buildProgram();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "generate-real-md-"));
+  await fs.writeFile(
+    path.join(tmpDir, todayFileName()),
+    "# Today\n\n- Decided to adopt the new digest format\n- Fixed a bug in the extractor\n",
+    "utf-8"
+  );
+  const outFile = path.join(tmpDir, "out.md");
+
+  const { exitCalled } = await withStubbedIO(async () => {
+    await program.parseAsync(["generate", "--dir", tmpDir, "--output", outFile], {
+      from: "user",
+    });
+  });
+
+  assert.equal(exitCalled, false, "process.exit must not be called on success");
+  const content = await fs.readFile(outFile, "utf-8");
+  assert.ok(content.length > 0, "output file should be non-empty");
+});
+
+test("generate: real action writes valid JSON to --output with --json (and parses --days/--max)", async () => {
+  const { program } = buildProgram();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "generate-real-json-"));
+  await fs.writeFile(
+    path.join(tmpDir, todayFileName()),
+    "# Today\n\n- Learned something new\n- Shipped a fix\n",
+    "utf-8"
+  );
+  const outFile = path.join(tmpDir, "out.json");
+
+  const { exitCalled } = await withStubbedIO(async () => {
+    await program.parseAsync(
+      [
+        "generate",
+        "--dir", tmpDir,
+        "--output", outFile,
+        "--json",
+        "--days", "30",
+        "--max", "5",
+      ],
+      { from: "user" }
+    );
+  });
+
+  assert.equal(exitCalled, false, "process.exit must not be called on success");
+  const content = await fs.readFile(outFile, "utf-8");
+  assert.doesNotThrow(() => JSON.parse(content), "written file must be valid JSON");
+});
+
+test("generate: real action prints the digest to stdout when --output is omitted", async () => {
+  const { program } = buildProgram();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "generate-real-stdout-"));
+  await fs.writeFile(
+    path.join(tmpDir, todayFileName()),
+    "# Today\n\n- Did a thing worth remembering\n",
+    "utf-8"
+  );
+
+  const { logs, exitCalled } = await withStubbedIO(async () => {
+    await program.parseAsync(["generate", "--dir", tmpDir], { from: "user" });
+  });
+
+  assert.equal(exitCalled, false, "process.exit must not be called on success");
+  assert.equal(logs.length, 1, "console.log should be called exactly once with the digest");
+  assert.ok(
+    typeof logs[0][0] === "string" && logs[0][0].length > 0,
+    "printed digest should be a non-empty string"
+  );
+});
+
+test("generate: real action calls process.exit(1) when --output cannot be written", async () => {
+  const { program } = buildProgram();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "generate-real-exit-"));
+  await fs.writeFile(
+    path.join(tmpDir, todayFileName()),
+    "# Today\n\n- A note\n",
+    "utf-8"
+  );
+  // Parent directory of the output path does not exist, so fs.writeFile
+  // rejects with ENOENT and the action's catch block must run.
+  const badOutput = path.join(tmpDir, "does-not-exist-subdir", "out.md");
+
+  const { exitCode, exitCalled } = await withStubbedIO(async () => {
+    await program.parseAsync(["generate", "--dir", tmpDir, "--output", badOutput], {
+      from: "user",
+    });
+  });
+
+  assert.equal(exitCalled, true, "process.exit should have been called");
+  assert.equal(exitCode, 1, "process.exit should be called with code 1");
 });

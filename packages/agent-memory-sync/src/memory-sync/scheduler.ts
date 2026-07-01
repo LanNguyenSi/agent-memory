@@ -65,7 +65,7 @@ function parsePart(value: string, min: number, max: number): Set<number> {
     const stepMatch = /^(\*|\d+(?:-\d+)?)\/(\d+)$/.exec(segment);
     if (stepMatch) {
       const [, rangeToken, stepToken] = stepMatch;
-      const step = parseInteger(stepToken, min, max);
+      const step = parseStep(stepToken);
       if (rangeToken === "*") {
         fillRange(result, min, max, step);
       } else {
@@ -105,6 +105,20 @@ function parseInteger(value: string, min: number, max: number): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
     throw new CliError(`cron value '${value}' is outside the allowed range ${min}-${max}.`, 2);
+  }
+  return parsed;
+}
+
+// A step must be a positive integer, validated independently of the field's
+// min/max. Fields with min=0 (minute/hour/dayOfWeek) formerly accepted step=0
+// via parseInteger, and fillRange(..., 0) then looped forever (cursor += 0),
+// hanging the sync daemon on a typo'd cron string like '*/0 * * * *'. There is
+// deliberately no upper bound: a step larger than the range simply collapses to
+// the start value, which fillRange handles in a single terminating iteration.
+function parseStep(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new CliError(`cron step '${value}' must be a positive integer (>= 1).`, 2);
   }
   return parsed;
 }
