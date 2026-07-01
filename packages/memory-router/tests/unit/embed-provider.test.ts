@@ -240,6 +240,78 @@ test('embedBatch: res.text() failure in non-ok path falls back to "<no body>"', 
   }
 });
 
+test('embedBatch: omitted timeoutMs wires the DEFAULT_TIMEOUT_MS (5000) into AbortSignal.timeout', async () => {
+  // Not just "an abort throws" — pin that the 5000ms default is the value passed
+  // to AbortSignal.timeout and that its signal reaches fetch. Spies over the real
+  // AbortSignal.timeout (call-through so fetch's init stays well-formed) and fetch.
+  const origFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+  const origTimeout = AbortSignal.timeout;
+  let capturedTimeoutArg: number | undefined;
+  let capturedSignal: AbortSignal | undefined;
+
+  try {
+    (AbortSignal as { timeout: (ms: number) => AbortSignal }).timeout = (ms: number) => {
+      capturedTimeoutArg = ms;
+      return origTimeout.call(AbortSignal, ms);
+    };
+    (globalThis as { fetch: typeof fetch }).fetch = (async (_url: string, init?: RequestInit) => {
+      capturedSignal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ data: [] }),
+        text: async () => '',
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    await embedBatch({ apiKey: 'k', model: 'm', inputs: ['x'] }); // timeoutMs omitted
+
+    assert.equal(capturedTimeoutArg, 5000, 'default embed timeout must be 5000ms');
+    assert.ok(capturedSignal instanceof AbortSignal, 'the timeout signal must be wired to fetch');
+  } finally {
+    AbortSignal.timeout = origTimeout;
+    if (origFetch) {
+      (globalThis as { fetch: typeof fetch }).fetch = origFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  }
+});
+
+test('embedBatch: explicit timeoutMs overrides the default', async () => {
+  // Pins both sides of the `opts.timeoutMs ?? DEFAULT_TIMEOUT_MS` branch so a
+  // mutation collapsing it to a constant fails.
+  const origFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+  const origTimeout = AbortSignal.timeout;
+  let capturedTimeoutArg: number | undefined;
+
+  try {
+    (AbortSignal as { timeout: (ms: number) => AbortSignal }).timeout = (ms: number) => {
+      capturedTimeoutArg = ms;
+      return origTimeout.call(AbortSignal, ms);
+    };
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ data: [] }),
+      text: async () => '',
+    } as unknown as Response)) as unknown as typeof fetch;
+
+    await embedBatch({ apiKey: 'k', model: 'm', inputs: ['x'], timeoutMs: 1234 });
+
+    assert.equal(capturedTimeoutArg, 1234, 'explicit timeoutMs must win over the default');
+  } finally {
+    AbortSignal.timeout = origTimeout;
+    if (origFetch) {
+      (globalThis as { fetch: typeof fetch }).fetch = origFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  }
+});
+
 // ─── resolveProviderConfig ───────────────────────────────────────────────────
 
 test('resolveProviderConfig: OPENAI_API_KEY missing → returns null', () => {
