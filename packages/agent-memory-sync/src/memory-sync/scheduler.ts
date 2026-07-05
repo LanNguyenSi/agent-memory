@@ -68,9 +68,17 @@ function parsePart(value: string, min: number, max: number): Set<number> {
       const step = parseStep(stepToken);
       if (rangeToken === "*") {
         fillRange(result, min, max, step);
-      } else {
+      } else if (rangeToken.includes("-")) {
         const [start, end] = parseRange(rangeToken, min, max);
         fillRange(result, start, end, step);
+      } else {
+        // Lone-value step form 'a/n' (e.g. '5/2'). Standard (Vixie) cron reads
+        // this as 'a-max/n': start at a and step through the rest of the
+        // field's range. Without this branch the lone token fell through to
+        // parseRange, whose missing end token failed parseInteger(undefined, …)
+        // with a misleading "'undefined' … outside range" error.
+        const start = parseInteger(rangeToken, min, max);
+        fillRange(result, start, max, step);
       }
       continue;
     }
