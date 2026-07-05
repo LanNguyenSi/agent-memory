@@ -105,11 +105,29 @@ test("parseCron: step larger than the field range is valid (step is range-indepe
   assert.doesNotThrow(() => validateCronExpression("*/90 * * * *"));
 });
 
-test("parseCron: single-value step form 'a/n' (e.g. 5/2) throws — lone-value step unsupported", () => {
-  // Standard cron reads 5/2 as 5-max/2, but this parser routes the lone range
-  // token through parseRange, whose missing end token fails parseInteger. Pin the
-  // current behavior: it throws (rather than silently misbehaving or hanging).
-  assert.throws(() => validateCronExpression("5/2 * * * *"), /outside the allowed range/);
+test("parseCron: single-value step form 'a/n' (e.g. 5/2) is valid — treated as a-max/n", () => {
+  // Standard (Vixie) cron reads 5/2 on minutes as 5-59/2: start at 5, step by 2
+  // through the rest of the field's range. Formerly the lone range token fell
+  // through to parseRange, whose missing end token failed parseInteger with a
+  // misleading "'undefined' … outside range" error.
+  assert.doesNotThrow(() => validateCronExpression("5/2 * * * *"));
+});
+
+test("parseCron: single-value step form '5/2' on minutes yields {5,7,9,…,59}", () => {
+  // cursor starts at :06 (after minute+1 from :05); next match in {5,7,9,…,59} is 7.
+  const ref = new Date(2026, 0, 15, 10, 5, 0, 0);
+  const tick = nextScheduleTick("5/2 * * * *", ref);
+  const runAt = new Date(tick.runAt);
+  assert.equal(runAt.getMinutes(), 7);
+});
+
+test("parseCron: single-value step form '20/10' on hours yields only {20} (step exceeds field max)", () => {
+  // Hour field range is 0-23; 20/10 yields {20} only, since 20+10=30 exceeds max=23.
+  const ref = new Date(2026, 0, 15, 10, 0, 0, 0);
+  const tick = nextScheduleTick("0 20/10 * * *", ref);
+  const runAt = new Date(tick.runAt);
+  assert.equal(runAt.getHours(), 20);
+  assert.equal(runAt.getMinutes(), 0);
 });
 
 test("parseCron: invalid — non-numeric field value throws CliError", () => {
