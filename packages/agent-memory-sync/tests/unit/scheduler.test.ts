@@ -130,6 +130,13 @@ test("parseCron: single-value step form '20/10' on hours yields only {20} (step 
   assert.equal(runAt.getMinutes(), 0);
 });
 
+test("parseCron: single-value step form '5/0' is rejected (guards the infinite-loop hang)", () => {
+  // Defense-in-depth for the new lone-value branch: it must go through the same
+  // parseStep guard as '*/0' and 'a-b/n' rather than accepting step=0 and
+  // hanging fillRange(result, start, max, 0) forever.
+  assert.throws(() => validateCronExpression("5/0 * * * *"), /must be a positive integer/);
+});
+
 test("parseCron: invalid — non-numeric field value throws CliError", () => {
   assert.throws(() => validateCronExpression("* * * * abc"), /outside the allowed range/);
 });
