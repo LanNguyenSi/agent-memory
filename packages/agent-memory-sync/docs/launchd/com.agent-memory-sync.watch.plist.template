@@ -5,6 +5,12 @@
   (#systemd-unit), for running `agent-memory-sync watch` continuously as a
   per-user LaunchAgent (debounced push on every memory edit).
 
+  REQUIRED companion, not optional: `watch` only pushes on local edits and
+  never pulls — install com.agent-memory-sync.sync.plist.template alongside
+  this one too, or a machine that reconnects after being offline will not
+  pick up changes made elsewhere until its own next local edit. See that
+  template's header and docs/machine-setup.md for the full reasoning.
+
   Install (see docs/machine-setup.md for the full walkthrough):
     1. Copy this file to ~/Library/LaunchAgents/com.agent-memory-sync.watch.<profile>.plist
        (the filename does not have to match Label, but keeping them aligned
@@ -40,18 +46,24 @@
                           the log paths below)
 
   KeepAlive / ThrottleInterval, and why:
-    `watch` is designed to run forever and only exits on SIGINT/SIGTERM
-    (graceful, e.g. `launchctl bootout`) or on a real failure — an expired
-    credential, a rejected push, a filesystem error — which it surfaces as a
-    non-zero exit "by design" (see README.md #systemd-unit). KeepAlive's
-    SuccessfulExit=false mirrors that: launchd respawns on a crash (non-zero
-    exit) but does not respawn after a clean shutdown. ThrottleInterval caps
-    the respawn rate so a persistently failing cause (bad ssh key, remote
-    permanently unreachable in a way the reachability precheck cannot help
-    with, e.g. auth failure past the connectivity check) does not spin the
-    CPU in a restart loop — this is launchd's rough equivalent of systemd's
-    StartLimitIntervalSec/StartLimitBurst pairing, just as a single minimum
-    gap between attempts rather than a burst counter.
+    `watch` does NOT use the reachability precheck (src/memory-sync/
+    reachability.ts) — that precheck only covers `run`'s pull/push/sync. Any
+    network failure during `watch` — the mini being unreachable, an expired
+    credential, a rejected push, a filesystem error — surfaces as a
+    non-zero exit "by design" (see README.md #systemd-unit) with no
+    precheck softening it. KeepAlive's SuccessfulExit=false mirrors that:
+    launchd respawns on a crash (non-zero exit) but does not respawn after a
+    clean shutdown. ThrottleInterval caps the respawn rate so a
+    persistently failing cause (mini down, bad ssh key, permanently
+    rejected push) does not spin the CPU in a restart loop — this is
+    launchd's rough equivalent of systemd's StartLimitIntervalSec/
+    StartLimitBurst pairing, just as a single minimum gap between attempts
+    rather than a burst counter.
+
+    Because `watch` alone gives no offline queueing here, pair this job
+    with the periodic-sync companion,
+    com.agent-memory-sync.sync.plist.template — see its header and
+    docs/machine-setup.md for why that companion is required, not optional.
 -->
 <plist version="1.0">
 <dict>

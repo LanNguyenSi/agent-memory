@@ -65,7 +65,10 @@ function classifyRemote(remoteUrl: string): ClassifiedRemote {
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(remoteUrl)) {
     if (remoteUrl.startsWith("ssh://")) {
       const host = extractSshUrlHost(remoteUrl);
-      return host ? { kind: "ssh", host } : { kind: "unsupported" };
+      if (!host || isUnsafeSshHost(host)) {
+        return { kind: "unsupported" };
+      }
+      return { kind: "ssh", host };
     }
 
     if (remoteUrl.startsWith("file://")) {
@@ -77,10 +80,28 @@ function classifyRemote(remoteUrl: string): ClassifiedRemote {
 
   const scpHost = extractScpLikeHost(remoteUrl);
   if (scpHost) {
+    if (isUnsafeSshHost(scpHost)) {
+      return { kind: "unsupported" };
+    }
     return { kind: "ssh", host: scpHost };
   }
 
   return { kind: "local", path: remoteUrl };
+}
+
+// A "host" starting with '-' is not a hostname to the ssh client we spawn —
+// ssh reads a leading-dash token as an *option* (e.g. "-oProxyCommand=<cmd>"
+// runs an arbitrary command). A remoteUrl crafted as
+// "-oProxyCommand=...:repo.git" (scp-like) or "ssh://-oProxyCommand=.../repo"
+// would otherwise splice an attacker-controlled flag into
+// execFileSync("ssh", [..., host, "true"]) — the same option-injection
+// class CVE-2017-1000117 hardened git's own scp-like remote parsing
+// against. Callers must never build an ssh argv from such a host; treating
+// it as "unsupported" here means the precheck is skipped entirely (no ssh
+// process is ever spawned) and the real `git` operation downstream applies
+// its own hardening.
+function isUnsafeSshHost(host: string): boolean {
+  return host.startsWith("-");
 }
 
 // Builds the default `ssh -o BatchMode=yes -o ConnectTimeout=<n> <host> true`

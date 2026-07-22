@@ -14,6 +14,28 @@ const {
   writeText
 } = require("../helpers/cli.ts");
 
+// Asserts that `notes` was produced by the actual reachability precheck
+// (src/memory-sync/reachability.ts) taking the local-path-missing branch for
+// exactly `offlineRemoteDir` — not merely that some note contains the word
+// "unreachable". Matching on that single word alone would not distinguish
+// the precheck's early-return path from the pre-existing catch-all fallback
+// (which uses "unavailable", not "unreachable" — a one-word difference that
+// is itself a fragile signal). This checks two independent, specific pieces
+// of evidence that only reachability.ts's checkRemoteReachable() produces
+// together: the wrapper phrase pull.ts/push.ts add, AND the exact
+// `local remote path '<path>' does not exist` reason string, with the
+// literal offline path baked in — reverting the precheck wiring (e.g.
+// deleting the early-return in performPull/performPush while leaving
+// reachability.ts untouched) would make this assertion fail even though a
+// generic /unreachable/-only match might still accidentally pass.
+function assertUnreachablePrecheckNote(notesText: string, offlineRemoteDir: string): void {
+  assert.match(notesText, /remote unreachable \(/);
+  assert.match(
+    notesText,
+    new RegExp(`local remote path '${offlineRemoteDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}' does not exist`)
+  );
+}
+
 function createConfig(workspaceRoot: string, remoteDir: string) {
   return {
     rootDir: workspaceRoot,
@@ -147,7 +169,7 @@ test("pull skips cleanly (exit 0) when the remote is unreachable, leaving local 
   assert.equal(payload.runs[0].kind, "pull");
   assert.equal(payload.runs[0].status, "skipped");
   assert.deepEqual(payload.runs[0].appliedFiles, []);
-  assert.match(payload.runs[0].notes.join(" "), /unreachable/);
+  assertUnreachablePrecheckNote(payload.runs[0].notes.join(" "), offlineRemoteDir);
   assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "untouched\n");
 });
 
@@ -166,7 +188,7 @@ test("push queues repeatedly while the remote stays unreachable, keeping earlier
   const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
   const firstPayload = JSON.parse(firstRun.stdout);
   assert.equal(firstPayload.runs[0].status, "queued");
-  assert.match(firstPayload.runs[0].notes.join(" "), /unreachable/);
+  assertUnreachablePrecheckNote(firstPayload.runs[0].notes.join(" "), offlineRemoteDir);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
   const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
@@ -205,7 +227,7 @@ test("dry-run push previews an unreachable remote without hanging or touching th
   const payload = JSON.parse(result.stdout);
 
   assert.equal(payload.runs[0].status, "dry-run");
-  assert.match(payload.runs[0].notes.join(" "), /unreachable/);
+  assertUnreachablePrecheckNote(payload.runs[0].notes.join(" "), offlineRemoteDir);
 
   // stateStore.ensure() always creates the queue directory, but a dry-run
   // must not enqueue anything into it.
@@ -233,6 +255,6 @@ test("default sync mode against an unreachable remote skips the pull and queues 
   assert.equal(payload.runs[0].kind, "sync");
   assert.equal(payload.runs[0].status, "queued");
   assert.ok(payload.runs[0].queuedSnapshotId);
-  assert.match(payload.runs[0].notes.join(" "), /unreachable/);
+  assertUnreachablePrecheckNote(payload.runs[0].notes.join(" "), offlineRemoteDir);
   assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "sync me\n");
 });

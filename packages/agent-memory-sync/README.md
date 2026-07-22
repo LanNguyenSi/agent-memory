@@ -148,9 +148,16 @@ that precheck covers `run`'s `pull`/`push`/`sync` (and queue replay) only.
 A network failure during `watch` still surfaces as the non-zero exit
 described above, by the same design as any other push failure; this keeps
 `watch`'s existing fail-loud/let-the-supervisor-restart contract intact
-rather than silently swallowing a bad edit's push. If you want offline
-queueing for the continuous case too, drive it from a scheduled
-`run --mode push` (which does queue) instead of relying on `watch` alone.
+rather than silently swallowing a bad edit's push.
+
+`watch` also never pulls — it is edge-triggered on local changes only, so a
+machine that was offline while changes landed elsewhere will not pick them
+up until its own next local edit. For that reason, a periodic
+`run --mode sync` (which does queue, and does skip cleanly when the remote
+is unreachable) running alongside `watch` is a **required** part of any
+fallback-machine setup, not an optional extra — see
+[docs/machine-setup.md](docs/machine-setup.md) for the launchd/systemd
+companion jobs.
 
 ##### Push authentication
 

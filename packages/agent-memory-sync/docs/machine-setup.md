@@ -6,14 +6,39 @@ This document wires together the pieces already documented individually
 
 - **Mac mini** — single source of truth. Hosts the bare git repository every
   other machine syncs against.
-- **MacBook** (and any further machines) — fallbacks. They pull on connect
-  and push debounced snapshots via `watch`; if the mini is unreachable, pulls
-  and pushes skip/queue cleanly instead of failing loudly (see the
-  reachability precheck in `src/memory-sync/reachability.ts`).
+- **MacBook** (and any further machines) — fallbacks. They push debounced
+  snapshots via `watch` and pull periodically via a scheduled `run --mode
+  sync` (see below — **both are required**, not just `watch`).
 - Conflict strategy is `inline-markers` everywhere — concurrent edits that
   aren't a clean append merge land as `<<<<<<< local` / `>>>>>>> remote`
   markers in the file for a human to resolve, rather than silently picking a
   winner.
+- **Reachability precheck coverage — read this before assuming `watch` is
+  covered too.** Only `run`'s `pull`/`push`/`sync` (and its queue replay) go
+  through the fast reachability precheck in
+  `src/memory-sync/reachability.ts`: an unreachable mini is a clean no-op —
+  one note, exit `0`, no `git ls-remote` hang, queue left untouched. `watch`
+  does **not** use this precheck at all. A network failure during `watch`
+  (unreachable mini or an auth/push failure) always surfaces as the
+  documented non-zero exit ("by design", README.md `#systemd-unit`), and
+  launchd/systemd restarts it per the KeepAlive/Restart config below. This
+  is intentional — see the README.md note right after the systemd unit for
+  why `watch`'s fail-loud contract was left as-is — but it means `watch`
+  alone gives you neither offline queueing nor a "did the last edit actually
+  reach the mini" recovery path; that's what the periodic `run --mode sync`
+  job in (b)/(c) below is for.
+- **`watch` is edge-triggered and does not pull — this is why the periodic
+  sync job is required, not optional.** `watch` only commits+pushes when
+  *this* machine's local files change; it never reads from the remote. If
+  the mini (or another machine) pushes changes while this machine was
+  offline or simply not editing anything, those changes only reach this
+  machine's local files on the next successful `pull`/`sync` — `watch`'s
+  file-watcher has no signal to trigger that, since nothing changed here.
+  Without the periodic sync job, a MacBook that reconnects after being
+  offline overnight silently sits on stale memory until either a human runs
+  `run --mode pull` manually, or a fresh unrelated local edit through `watch`
+  happens to succeed and paper over it. Both `watch` **and** the periodic
+  sync job must be running on every fallback machine.
 
 Machine-specific values (paths, SSH alias) are committed as profile files
 under `profiles/`: `profiles/macbook.json`, `profiles/mac-mini.json`, and a
@@ -31,14 +56,20 @@ machine that already has the `mini` SSH host alias configured):
 ssh mini 'mkdir -p ~/memory-sync && git init --bare --initial-branch=main ~/memory-sync/pandora-memory.git'
 ```
 
-This creates the empty bare repository that `remoteUrl` in every profile
-points at (`mini:~/memory-sync/pandora-memory.git`). Nothing else is
-required server-side — `agent-memory-sync` pushes plain commits over
-ordinary `git push`/`git fetch`/`git ls-remote`; there is no server-side
-hook or service to install.
+This creates the empty bare repository every other machine's `remoteUrl`
+points at over ssh (`mini:~/memory-sync/pandora-memory.git` in
+macbook.json/linux.example.json — see the scp-like syntax note there). The
+mini's own profile (mac-mini.json) points `remoteUrl` at the same
+repository's plain local filesystem path instead
+(`/Users/lannguyensi/memory-sync/pandora-memory.git`), since it runs on the
+mini itself and doesn't need to loop back through ssh to reach its own
+bare repo — see that profile's `"//"` field for the full reasoning. Nothing
+else is required server-side — `agent-memory-sync` pushes plain commits
+over ordinary `git push`/`git fetch`/`git ls-remote`; there is no
+server-side hook or service to install.
 
 Prerequisite: an SSH host alias named `mini` in `~/.ssh/config` on every
-client machine, e.g.:
+*other* client machine (the mini does not need an alias for itself), e.g.:
 
 ```
 Host mini
@@ -48,8 +79,9 @@ Host mini
 ```
 
 Verify it works (this is exactly the probe the reachability precheck runs
-internally, so a manual pass here means `pull`/`push`/`watch` will see the
-mini as reachable too):
+internally, so a manual pass here means `run`'s `pull`/`push`/`sync` will see
+the mini as reachable too — `watch` does not run this precheck at all, see
+the coverage note above):
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=5 mini true && echo reachable
@@ -81,32 +113,46 @@ still runs against the right `rootDir`/`remoteUrl` from the config file, but
 its queue/base-snapshot bookkeeping would be shared with whatever else uses
 that machine's `default` profile, which is almost never what you want.
 
-For the continuous debounced-push daemon, use `watch` with a launchd
-(macOS) or systemd (Linux) unit instead of a one-off `run`:
+For the continuous fallback setup, **two** jobs are required on every
+fallback machine — `watch` (push on local edit) **and** a periodic
+`run --mode sync` (pull, so changes made elsewhere actually arrive here).
+See the "edge-triggered" note above for why skipping the second one leaves
+a real gap, not a nice-to-have:
 
-- **macOS (MacBook, Mac mini)**: copy
-  `docs/launchd/com.agent-memory-sync.watch.plist.template` to
-  `~/Library/LaunchAgents/com.agent-memory-sync.watch.<profile>.plist`, fill
-  in the `__PLACEHOLDER__`s (absolute paths — no `~`/`$HOME` expansion
-  inside a plist), then:
+- **macOS (MacBook, Mac mini)**: copy both
+  `docs/launchd/com.agent-memory-sync.watch.plist.template` and
+  `docs/launchd/com.agent-memory-sync.sync.plist.template` to
+  `~/Library/LaunchAgents/com.agent-memory-sync.{watch,sync}.<profile>.plist`,
+  fill in the `__PLACEHOLDER__`s in both (absolute paths — no `~`/`$HOME`
+  expansion inside a plist), then load both:
 
   ```bash
   launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.agent-memory-sync.watch.<profile>.plist
+  launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.agent-memory-sync.sync.<profile>.plist
+
   launchctl print gui/$UID/com.agent-memory-sync.watch.<profile>   # status
+  launchctl print gui/$UID/com.agent-memory-sync.sync.<profile>    # status
   tail -f ~/Library/Logs/agent-memory-sync/watch.<profile>.err.log # logs
+  tail -f ~/Library/Logs/agent-memory-sync/sync.<profile>.err.log  # logs
+
   launchctl bootout gui/$UID/com.agent-memory-sync.watch.<profile> # stop
+  launchctl bootout gui/$UID/com.agent-memory-sync.sync.<profile>  # stop
   ```
 
-  Full placeholder reference and the KeepAlive/ThrottleInterval rationale
-  are in the template's header comment.
+  Full placeholder reference, the KeepAlive/ThrottleInterval rationale (for
+  `watch`), and the StartInterval rationale (for the sync companion) are in
+  each template's own header comment.
 
-- **Linux**: use the systemd unit in README.md (`#systemd-unit`) with
-  `Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/<name>.json`
+- **Linux**: use the systemd `watch` unit in README.md (`#systemd-unit`)
+  with `Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/<name>.json`
   added alongside its existing `Environment=` lines, and
   `ExecStart=... watch <profile-name> --verbose` (positional profile name,
-  same reasoning as above). See (c) below for a full Linux walkthrough.
+  same reasoning as above) — **plus** a systemd timer + oneshot service
+  pair for the periodic sync companion, systemd's equivalent of launchd's
+  StartInterval. See (c) below for the full Linux walkthrough including
+  both units.
 
-Whichever mechanism starts `watch`, a fresh machine should also run one
+Whichever mechanism starts these, a fresh machine should also run one
 `agent-memory-sync run <profile> --config <profile file> --mode pull` before
 first use, so it starts from the mini's current state rather than pushing an
 empty/stale local workspace as if it were authoritative.
@@ -129,7 +175,8 @@ empty/stale local workspace as if it were authoritative.
    ```bash
    agent-memory-sync run <profile-name> --config profiles/linux.json --mode pull
    ```
-5. Install the systemd unit from README.md (`#systemd-unit`), adjusting:
+5. Install the `watch` systemd unit from README.md (`#systemd-unit`),
+   adjusting:
    - `Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/linux.json`
    - `ExecStart=/usr/local/bin/agent-memory-sync watch <profile-name> --verbose`
      (positional profile name — same reasoning as (b) above; the unit's
@@ -137,6 +184,48 @@ empty/stale local workspace as if it were authoritative.
    Then `systemctl --user daemon-reload && systemctl --user enable --now
    agent-memory-sync-watch.service` (or as a system unit under `/etc/systemd`
    as written, with `User=` set to whichever account should own it).
+
+6. **Required, not optional** (see the "edge-triggered" note in (b) above):
+   install a periodic sync timer alongside `watch` — `watch` only pushes on
+   local edits and never pulls, so without this a Linux fallback machine
+   would silently sit on stale memory after being offline. This is
+   systemd's equivalent of the macOS launchd `sync` template's
+   `StartInterval`: a `.timer` unit firing a `oneshot` `.service`, rather
+   than a second persistent daemon process.
+
+   ```ini
+   # /etc/systemd/system/agent-memory-sync-sync.service
+   [Unit]
+   Description=agent-memory-sync periodic sync (pull + push)
+   After=network-online.target
+
+   [Service]
+   Type=oneshot
+   User=lan
+   Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/linux.json
+   ExecStart=/usr/local/bin/agent-memory-sync run <profile-name> --mode sync
+   ```
+
+   ```ini
+   # /etc/systemd/system/agent-memory-sync-sync.timer
+   [Unit]
+   Description=Run agent-memory-sync sync periodically
+
+   [Timer]
+   OnBootSec=2min
+   OnUnitActiveSec=15min
+   Persistent=true
+
+   [Install]
+   WantedBy=timers.target
+   ```
+
+   `Persistent=true` catches up a missed tick (e.g. the machine was off)
+   shortly after boot instead of waiting a full interval. A tick that fires
+   while the mini is unreachable is a fast, clean no-op — same reachability
+   precheck `run` always uses — so a short 15-minute interval is safe; it
+   will not pile up overlapping ssh attempts or spam logs. Install with:
+   `systemctl daemon-reload && systemctl enable --now agent-memory-sync-sync.timer`.
 
 ## d) Restore / rollback
 

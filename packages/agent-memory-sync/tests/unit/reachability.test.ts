@@ -72,6 +72,56 @@ test("classifyRemote: https:// URL has no dedicated probe and is classified unsu
   assert.deepEqual(result, { kind: "unsupported" });
 });
 
+// ─── classifyRemote / deriveProbeCommand: dash-prefixed host guard ──────────
+//
+// A "host" that begins with '-' is not a hostname to the ssh client we
+// spawn — ssh parses a leading-dash token as an *option*. A scp-like remote
+// like "-oProxyCommand=id:repo.git" (extracted host "-oProxyCommand=id")
+// would, if ever handed to `execFileSync("ssh", [..., host, "true"])`,
+// splice an attacker-controlled `-oProxyCommand=<arbitrary command>` flag
+// into the ssh invocation — the same option-injection class as
+// CVE-2017-1000117 (which hardened git's own scp-like remote parsing
+// against exactly this). Our precheck must never build that argv in the
+// first place; classifyRemote/deriveProbeCommand must treat such remotes as
+// "unsupported" (precheck skipped) rather than "ssh", regardless of which
+// syntax form (scp-like or ssh://) carries the dash-prefixed host — the
+// real `git` operation downstream applies its own hardening and handles it
+// safely from there.
+
+test("classifyRemote: scp-like host beginning with '-' is unsupported, not ssh (option-injection guard)", () => {
+  const result = classifyRemote("-oProxyCommand=id:repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+test("classifyRemote: scp-like 'user@-host' with a dash-prefixed host (after stripping the user) is unsupported", () => {
+  const result = classifyRemote("user@-oProxyCommand=id:repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+test("classifyRemote: ssh:// URL with a dash-prefixed hostname is unsupported, not ssh", () => {
+  const result = classifyRemote("ssh://-oProxyCommand=id/repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+test("deriveProbeCommand: never builds an ssh argv for a dash-prefixed host (scp-like or ssh://)", () => {
+  assert.equal(deriveProbeCommand("-oProxyCommand=id:repo.git", 4000), null);
+  assert.equal(deriveProbeCommand("ssh://-oProxyCommand=id/repo.git", 4000), null);
+});
+
+test("checkRemoteReachable: a dash-prefixed-host remote never spawns ssh — skips the precheck instead", () => {
+  // No reachabilityCheckCommand override: if the dash-prefixed host were
+  // still classified as ssh, this would spawn a real `ssh -oProxyCommand=id
+  // ...` process. Classified unsupported instead, it takes the
+  // no-dedicated-probe skip path and never spawns anything.
+  const result = checkRemoteReachable({
+    remoteUrl: "-oProxyCommand=id:repo.git",
+    reachabilityTimeoutMs: DEFAULT_REACHABILITY_TIMEOUT_MS,
+    reachabilityCheckCommand: null
+  });
+  assert.equal(result.reachable, true);
+  assert.match(result.reason, /no dedicated/);
+});
+
 // ─── deriveProbeCommand ───────────────────────────────────────────────────────
 
 test("deriveProbeCommand: builds a BatchMode/ConnectTimeout ssh probe for scp-like remotes", () => {
