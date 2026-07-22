@@ -29,6 +29,7 @@ interface RunOptions {
   schedule?: string;
   maxRuns?: string;
   conflictStrategy?: "inline-markers" | "local-wins" | "remote-wins";
+  reachabilityTimeoutMs?: string;
 }
 
 function registerRunCommand(program: import("commander").Command): void {
@@ -48,6 +49,10 @@ function registerRunCommand(program: import("commander").Command): void {
     .option(
       "--conflict-strategy <strategy>",
       "Conflict strategy: inline-markers, local-wins, remote-wins"
+    )
+    .option(
+      "--reachability-timeout-ms <ms>",
+      "Timeout for the remote reachability precheck before pull/push (default 4000, env AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS)"
     )
     .option("--dry-run", "Preview without making changes", false)
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
@@ -70,7 +75,11 @@ function registerRunCommand(program: import("commander").Command): void {
           repositorySubdir: options.repositorySubdir,
           stateDir: options.stateDir,
           schedule: options.schedule,
-          conflictStrategy: options.conflictStrategy
+          conflictStrategy: options.conflictStrategy,
+          reachabilityTimeoutMs: parseOptionalInteger(
+            options.reachabilityTimeoutMs,
+            "--reachability-timeout-ms"
+          ) ?? undefined
         })
       );
 

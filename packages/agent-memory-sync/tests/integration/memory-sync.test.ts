@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { readdirSync } = require("node:fs");
 const path = require("node:path");
 const {
   cloneRemote,
@@ -121,4 +122,117 @@ test("offline push queues a snapshot and replays it after the remote returns", (
 
   const inspectionDir = cloneRemote(actualRemoteDir, root, "replayed");
   assert.equal(readText(path.join(inspectionDir, "shared", "MEMORY.md")), "queued change\n");
+});
+
+test("pull skips cleanly (exit 0) when the remote is unreachable, leaving local files untouched", () => {
+  const root = createSandbox("pull-unreachable");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "untouched\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, offlineRemoteDir),
+    // Keep the precheck itself fast in CI regardless of the default; this
+    // remote is a local path though, so reachability is a plain fs check
+    // (no spawn, no real timeout wait either way).
+    reachabilityTimeoutMs: 500
+  });
+
+  // runCli() throws on a non-zero exit unless expectFailure is set — a plain
+  // successful call here is itself the exit-0 assertion.
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(payload.runs[0].kind, "pull");
+  assert.equal(payload.runs[0].status, "skipped");
+  assert.deepEqual(payload.runs[0].appliedFiles, []);
+  assert.match(payload.runs[0].notes.join(" "), /unreachable/);
+  assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "untouched\n");
+});
+
+test("push queues repeatedly while the remote stays unreachable, keeping earlier queued snapshots", () => {
+  const root = createSandbox("push-repeat-unreachable");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, offlineRemoteDir),
+    reachabilityTimeoutMs: 500
+  });
+
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const firstPayload = JSON.parse(firstRun.stdout);
+  assert.equal(firstPayload.runs[0].status, "queued");
+  assert.match(firstPayload.runs[0].notes.join(" "), /unreachable/);
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const secondPayload = JSON.parse(secondRun.stdout);
+  assert.equal(secondPayload.runs[0].status, "queued");
+  assert.notEqual(secondPayload.runs[0].queuedSnapshotId, firstPayload.runs[0].queuedSnapshotId);
+
+  const queueDir = path.join(workspaceRoot, ".agent-memory-sync", "default", "queue");
+  const queuedEntries = readdirSync(queueDir);
+  assert.equal(queuedEntries.length, 2, `expected both queued snapshots to persist, found: ${queuedEntries.join(", ")}`);
+});
+
+test("dry-run push previews an unreachable remote without hanging or touching the queue", () => {
+  const root = createSandbox("push-dry-run-unreachable");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "preview me\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, offlineRemoteDir),
+    reachabilityTimeoutMs: 500
+  });
+
+  const result = runCli([
+    "run",
+    "default",
+    "--config",
+    configPath,
+    "--mode",
+    "push",
+    "--dry-run",
+    "--output",
+    "json"
+  ]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(payload.runs[0].status, "dry-run");
+  assert.match(payload.runs[0].notes.join(" "), /unreachable/);
+
+  // stateStore.ensure() always creates the queue directory, but a dry-run
+  // must not enqueue anything into it.
+  const queueDir = path.join(workspaceRoot, ".agent-memory-sync", "default", "queue");
+  assert.deepEqual(readdirSync(queueDir), []);
+});
+
+test("default sync mode against an unreachable remote skips the pull and queues the push, cleanly", () => {
+  const root = createSandbox("sync-unreachable");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "sync me\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, offlineRemoteDir),
+    reachabilityTimeoutMs: 500
+  });
+
+  // No --mode flag: exercises the default "sync" mode (pull then push).
+  const result = runCli(["run", "default", "--config", configPath, "--output", "json"]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(payload.mode, "sync");
+  assert.equal(payload.runs[0].kind, "sync");
+  assert.equal(payload.runs[0].status, "queued");
+  assert.ok(payload.runs[0].queuedSnapshotId);
+  assert.match(payload.runs[0].notes.join(" "), /unreachable/);
+  assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "sync me\n");
 });

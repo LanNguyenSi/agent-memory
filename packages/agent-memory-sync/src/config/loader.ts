@@ -2,6 +2,7 @@ const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("
 const { homedir, hostname } = require("node:os");
 const path = require("node:path");
 const { CliError } = require("../errors");
+const { DEFAULT_REACHABILITY_TIMEOUT_MS } = require("../memory-sync/reachability");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -29,6 +30,8 @@ interface UserConfig {
   conflictStrategy?: ConflictStrategy;
   syncPaths?: SyncPathConfig[];
   gitBinary?: string;
+  reachabilityTimeoutMs?: number;
+  reachabilityCheckCommand?: string[] | null;
 }
 
 interface LoadedConfig {
@@ -52,6 +55,8 @@ interface RunConfig extends UserConfig {
   syncPaths: SyncPathConfig[];
   gitBinary: string;
   mode: RunMode;
+  reachabilityTimeoutMs: number;
+  reachabilityCheckCommand: string[] | null;
 }
 
 interface RunConfigOverrides {
@@ -70,6 +75,8 @@ interface RunConfigOverrides {
   syncPaths?: SyncPathConfig[];
   gitBinary?: string;
   mode?: RunMode;
+  reachabilityTimeoutMs?: number;
+  reachabilityCheckCommand?: string[] | null;
 }
 
 const DEFAULT_SYNC_PATHS: SyncPathConfig[] = [
@@ -89,7 +96,9 @@ const DEFAULTS: Omit<RunConfig, "repositorySubdir" | "stateDir" | "remoteUrl" | 
   schedule: null,
   conflictStrategy: "inline-markers",
   syncPaths: DEFAULT_SYNC_PATHS,
-  gitBinary: "git"
+  gitBinary: "git",
+  reachabilityTimeoutMs: DEFAULT_REACHABILITY_TIMEOUT_MS,
+  reachabilityCheckCommand: null
 };
 
 function defaultConfigPath(): string {
@@ -147,7 +156,13 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
     schedule: merged.schedule || null,
     conflictStrategy: validateConflictStrategy(merged.conflictStrategy),
     syncPaths: normalizeSyncPathConfigList(merged.syncPaths),
-    gitBinary: merged.gitBinary || "git"
+    gitBinary: merged.gitBinary || "git",
+    reachabilityTimeoutMs: validatePositiveInteger(
+      merged.reachabilityTimeoutMs,
+      "reachabilityTimeoutMs",
+      DEFAULT_REACHABILITY_TIMEOUT_MS
+    ),
+    reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand)
   };
 }
 
@@ -217,7 +232,9 @@ function listConfigKeys(): string[] {
     "schedule",
     "conflictStrategy",
     "syncPaths",
-    "gitBinary"
+    "gitBinary",
+    "reachabilityTimeoutMs",
+    "reachabilityCheckCommand"
   ];
 }
 
@@ -280,6 +297,18 @@ function readEnvConfig(): UserConfig {
   if (env.AGENT_MEMORY_SYNC_GIT_BINARY) {
     config.gitBinary = env.AGENT_MEMORY_SYNC_GIT_BINARY;
   }
+  if (env.AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS) {
+    config.reachabilityTimeoutMs = validatePositiveInteger(
+      Number(env.AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS),
+      "AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS",
+      DEFAULT_REACHABILITY_TIMEOUT_MS
+    );
+  }
+  if (env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND) {
+    config.reachabilityCheckCommand = normalizeReachabilityCheckCommand(
+      JSON.parse(env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND) as string[]
+    );
+  }
 
   return config;
 }
@@ -309,12 +338,21 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
     syncPaths: "syncPaths",
     files: "syncPaths",
     git_binary: "gitBinary",
-    gitBinary: "gitBinary"
+    gitBinary: "gitBinary",
+    reachability_timeout_ms: "reachabilityTimeoutMs",
+    reachabilityTimeoutMs: "reachabilityTimeoutMs",
+    reachability_check_command: "reachabilityCheckCommand",
+    reachabilityCheckCommand: "reachabilityCheckCommand"
   };
 
   for (const [key, value] of Object.entries(raw)) {
     const normalizedKey = aliasMap[key];
     if (!normalizedKey) {
+      continue;
+    }
+
+    if (normalizedKey === "reachabilityCheckCommand") {
+      normalized.reachabilityCheckCommand = normalizeReachabilityCheckCommand(value as string[] | null);
       continue;
     }
 
@@ -385,6 +423,33 @@ function validateConflictStrategy(value?: ConflictStrategy): ConflictStrategy {
   );
 }
 
+function validatePositiveInteger(value: number | undefined, key: string, fallback: number): number {
+  if (typeof value === "undefined") {
+    return fallback;
+  }
+
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    throw new CliError(`config key '${key}' must be a positive integer (milliseconds).`, 3);
+  }
+
+  return value;
+}
+
+function normalizeReachabilityCheckCommand(value?: string[] | null): string[] | null {
+  if (!value) {
+    return null;
+  }
+
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry)) {
+    throw new CliError(
+      "config key 'reachabilityCheckCommand' must be a non-empty array of non-empty strings (argv form).",
+      3
+    );
+  }
+
+  return value.length > 0 ? value : null;
+}
+
 function validateConfigKey(key: string): void {
   if (!listConfigKeys().includes(key)) {
     throw new CliError(
@@ -408,6 +473,12 @@ function parseConfigValue(key: string, value: string): unknown {
       return validateOutputFormat(value as OutputFormat);
     case "conflictStrategy":
       return validateConflictStrategy(value as ConflictStrategy);
+    case "reachabilityTimeoutMs":
+      return validatePositiveInteger(Number(value), "reachabilityTimeoutMs", DEFAULT_REACHABILITY_TIMEOUT_MS);
+    case "reachabilityCheckCommand":
+      return value === "null"
+        ? null
+        : normalizeReachabilityCheckCommand(JSON.parse(value) as string[]);
     default:
       return value;
   }

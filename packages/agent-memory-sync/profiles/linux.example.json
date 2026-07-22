@@ -1,0 +1,42 @@
+{
+  "//": [
+    "Profile TEMPLATE for a third (Linux) machine — copy to e.g. linux.json,",
+    "fill in the placeholders, and drop the '.example' suffix. Pair with the",
+    "systemd unit documented in README.md (#systemd-unit) rather than the",
+    "launchd template (docs/launchd/), which is macOS-only.",
+    "",
+    "Fill in:",
+    "  <linux-hostname>   short, stable name for this machine, e.g. 'thinkpad'",
+    "  <linux-username>   the OS user agent-memory-sync runs as",
+    "  <repo-path>        absolute path to this machine's checkout of the",
+    "                     agent-memory-sync-adjacent workspace, matching",
+    "                     whatever Claude Code encoded into its memory slug",
+    "                     (see the namespace-divergence note in macbook.json",
+    "                     / mac-mini.json — every machine's slug embeds its",
+    "                     own absolute path and OS username, so copy the",
+    "                     slug straight out of `ls ~/.claude/projects/` on",
+    "                     THIS machine rather than guessing it).",
+    "",
+    "rootDir uses a resolved absolute path, not '~': agent-memory-sync's",
+    "config loader does not perform shell-style tilde expansion — see",
+    "src/config/loader.ts resolveRunConfig().",
+    "",
+    "Activation: pass BOTH --config (this file) and the profile name",
+    "positionally, e.g.:",
+    "  agent-memory-sync run <linux-hostname> --config profiles/linux.json",
+    "The CLI's [profile] positional argument always defaults to 'default'",
+    "and overrides this file's 'profile' field when omitted."
+  ],
+  "profile": "<linux-hostname>",
+  "rootDir": "/home/<linux-username>/.claude/projects/<claude-code-slug-for-this-machine>/memory",
+  "remoteUrl": "mini:~/memory-sync/pandora-memory.git",
+  "branch": "main",
+  "repositorySubdir": "<linux-hostname>",
+  "conflictStrategy": "inline-markers",
+  "reachabilityTimeoutMs": 5000,
+  "syncPaths": [
+    { "source": "MEMORY.md", "destination": "MEMORY.md", "kind": "file" },
+    { "source": "daily", "destination": "daily", "kind": "directory" },
+    { "source": "logs", "destination": "logs", "kind": "directory" }
+  ]
+}
