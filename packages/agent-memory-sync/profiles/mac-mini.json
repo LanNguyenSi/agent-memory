@@ -37,7 +37,7 @@
     "safe for it to differ (or coincide) across machines — it does differ",
     "here: 'mac-mini' vs. macbook.json's 'macbook'.",
     "",
-    "syncPaths is a single directory entry covering the ENTIRE rootDir",
+    "syncPaths' FIRST entry is a directory entry covering the ENTIRE rootDir",
     "(source '.'), so every file agent-memory-sync finds there is synced —",
     "the real Claude Code memory directory holds ~236 flat .md files with no",
     "daily/ or logs/ subdirectories; the previous syncPaths (a literal",
@@ -48,7 +48,10 @@
     "needs a real path segment, not '.' — verified empirically, see the",
     "implementer's task notes / git history for this fix). A single",
     "directory root also naturally covers any future subdirectories without",
-    "further changes.",
+    "further changes. The SECOND entry (absolute source",
+    "~/.harness/machine-state -> destination 'machine-state') carries this",
+    "machine's toolchain snapshot for cross-machine parity checks — see",
+    "docs/machine-setup.md section e) for the payload convention.",
     "",
     "The directory walk skips hidden files/dot-directories (.DS_Store, ._*",
     "AppleDouble shadows, .git, ...) by design — see isHiddenEntryName in",
@@ -113,6 +116,7 @@
   "conflictStrategy": "inline-markers",
   "reachabilityTimeoutMs": 5000,
   "syncPaths": [
-    { "source": ".", "destination": "memory", "kind": "directory" }
+    { "source": ".", "destination": "memory", "kind": "directory" },
+    { "source": "/Users/lannguyensi/.harness/machine-state", "destination": "machine-state", "kind": "directory" }
   ]
 }

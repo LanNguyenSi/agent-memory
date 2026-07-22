@@ -305,3 +305,57 @@ machine's files under the same `pandora/memory/` tree — `git show
 top-level directories there (e.g. both `pandora/` and something else) is a
 sign `repositorySubdir` has diverged again — see the shared remote tree
 bullet at the top of this document.
+
+## e) machine-state payload (toolchain snapshots)
+
+Every committed profile (`profiles/mac-mini.json`, `profiles/macbook.json`)
+carries a **second, independent** `syncPaths` entry alongside the `memory`
+one described at the top of this document:
+
+```json
+{ "source": "/Users/<user>/.harness/machine-state", "destination": "machine-state", "kind": "directory" }
+```
+
+Unlike the `memory` entry, `source` here is an **absolute path outside
+`rootDir`** — `~/.harness/machine-state`, not anywhere under the Claude Code
+memory directory — pointing at a per-machine toolchain-snapshot directory
+maintained by the (upcoming) harness companion `session-start
+toolchain-parity`. `resolveWorkspacePath` in `src/memory-sync/config.ts`
+treats an absolute `source` as-is instead of resolving it against `rootDir`,
+so this entry syncs on its own schedule independent of the memory tree; both
+entries still land under the same shared `pandora/` remote tree
+(`repositorySubdir`), just under different top-level destinations
+(`pandora/memory/...` vs. `pandora/machine-state/...`).
+
+**Payload convention — one file per machine, owner-writes-only.** Each
+machine writes exactly one JSON file under its own `machine-state/`,
+named after its own profile (`machine-state/mac-mini.json`,
+`machine-state/macbook.json`, ...). A machine never writes to another
+machine's file — this makes write conflicts on this path structurally
+impossible (`inline-markers` conflict resolution is never invoked here in
+practice, unlike the `memory` tree where concurrent edits are expected). The
+consumer is the harness companion `session-start toolchain-parity`, which
+reads every machine's file under `machine-state/` to compare toolchain
+versions across machines at session start.
+
+**Peer freshness depends on the periodic `run --mode sync`/`pull` job, not
+`watch`.** Same caveat as the `memory` tree (see the "edge-triggered" note
+in (b) above): `watch` only commits+pushes *this* machine's own
+`machine-state/<profile>.json` on local change; it never pulls, so a peer's
+updated snapshot only reaches this machine on the next successful
+pull/sync. A consumer reading `machine-state/` locally is therefore reading
+whatever the last periodic sync pulled, not necessarily each peer's very
+latest write.
+
+**The local `~/.harness/machine-state` directory does not need to pre-exist.**
+`collectLocalSyncFiles` (`src/memory-sync/config.ts`) skips a non-required
+`syncPaths` entry whose `source` does not exist locally yet instead of
+failing `push`/`pull`/`watch` — so a fresh machine that has not written a
+snapshot yet simply syncs nothing for this entry until it does. Conversely,
+`pull`'s writer creates the directory on demand
+(`mkdirSync(path.dirname(...), { recursive: true })` in
+`src/memory-sync/pull.ts`, i.e. `mkdir -p` semantics) the first time a
+peer's snapshot is pulled down, so no manual `mkdir` step is required during
+machine setup either — though the harness companion consuming these files
+may still create the directory itself on first run if it expects it to
+exist ahead of any sync.
