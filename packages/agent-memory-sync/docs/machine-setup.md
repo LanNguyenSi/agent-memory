@@ -9,6 +9,20 @@ This document wires together the pieces already documented individually
 - **MacBook** (and any further machines) — fallbacks. They push debounced
   snapshots via `watch` and pull periodically via a scheduled `run --mode
   sync` (see below — **both are required**, not just `watch`).
+- **All machines share ONE remote tree, via `repositorySubdir` — not via the
+  profile name.** Every committed profile (`profiles/*.json`) sets
+  `"repositorySubdir": "pandora"`, identically. This is the only config
+  field that determines where in the bare repo a machine's files land (see
+  `toRepositoryRelativePath` in `src/memory-sync/config.ts`); the `"profile"`
+  field is a completely separate, purely local setting (see (b) below). An
+  earlier version of these profiles set `repositorySubdir` to a
+  per-machine value (mirroring the profile name) — that made every machine
+  write to its own top-level tree in the bare repo and none of them ever
+  saw each other's pushes, caught by a live cross-machine E2E test
+  (`pull` reporting `applied=0`). `syncPaths` in every profile is a single
+  `source: "."` directory entry with `destination: "memory"`, so the whole
+  `rootDir` (flat `.md` files, no fixed subdirectory layout) syncs to
+  `pandora/memory/...` in the bare repo, including any file added later.
 - Conflict strategy is `inline-markers` everywhere — concurrent edits that
   aren't a clean append merge land as `<<<<<<< local` / `>>>>>>> remote`
   markers in the file for a human to resolve, rather than silently picking a
@@ -112,6 +126,22 @@ silently falls back to the `default` profile's state directory — the sync
 still runs against the right `rootDir`/`remoteUrl` from the config file, but
 its queue/base-snapshot bookkeeping would be shared with whatever else uses
 that machine's `default` profile, which is almost never what you want.
+
+**What the profile name actually controls — and what it does not.** The
+`"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) only
+labels this one machine's own `stateDir` (queue/base/tmp bookkeeping —
+every committed profile also points `stateDir` at a machine-specific
+absolute path outside `rootDir`; see any profile's `"//"` field for why).
+It has **no effect on the remote** and is safe to differ, or even coincide,
+across machines. The field that must be identical everywhere for machines to
+actually see each other's changes is `repositorySubdir` — see the shared
+remote tree bullet at the top of this document. Committing a profile with
+a machine-specific `repositorySubdir` (as an earlier version of these
+profiles did, by analogy with the machine-specific profile name) silently
+partitions the bare repo into disjoint per-machine trees instead of sharing
+one — there is no error, no warning, `push` reports `status: "applied"`
+normally on each machine, and only a subsequent `pull` on another machine
+reveals the problem (`applied: []`/`appliedFiles.length === 0`).
 
 For the continuous fallback setup, **two** jobs are required on every
 fallback machine — `watch` (push on local edit) **and** a periodic
@@ -238,8 +268,11 @@ is `agent-memory-sync restore`:
 # directly against the bare repo)
 agent-memory-sync restore <sha> --config profiles/<name>.json --dry-run
 
-# Roll back a single file
-agent-memory-sync restore <sha> --config profiles/<name>.json --path MEMORY.md
+# Roll back a single file — --path is relative to repositorySubdir, and
+# every profile's syncPaths destination is "memory" (see the shared remote
+# tree bullet at the top of this document), so the path is memory/<file>,
+# not just the bare filename:
+agent-memory-sync restore <sha> --config profiles/<name>.json --path memory/MEMORY.md
 
 # Roll back the entire synced tree (requires --yes)
 agent-memory-sync restore <sha> --config profiles/<name>.json --yes
@@ -252,3 +285,11 @@ is a one-shot, on-demand command; it does not go through the reachability
 precheck the way `pull`/`push`/`sync` do; an unreachable remote during
 `restore` fails loudly rather than skipping, since a restore you asked for
 that silently did nothing would be worse than a clear error.
+
+Inspecting the bare repo directly (e.g. `ssh mini`, `cd
+~/memory-sync/pandora-memory.git`, `git log`/`git show`) shows every
+machine's files under the same `pandora/memory/` tree — `git show
+<sha>:pandora/memory/MEMORY.md`, for example. Seeing two or more different
+top-level directories there (e.g. both `pandora/` and something else) is a
+sign `repositorySubdir` has diverged again — see the shared remote tree
+bullet at the top of this document.
