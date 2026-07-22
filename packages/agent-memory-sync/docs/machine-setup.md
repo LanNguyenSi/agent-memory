@@ -49,7 +49,14 @@ This document wires together the pieces already documented individually
   job in (b)/(c) below is for.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
-  *this* machine's local files change; it never reads from the remote. If
+  *this* machine's local files change; it never reads from the remote.
+  Its push is also a whole-subtree MIRROR of this machine's local tree
+  under `repositorySubdir` (`commitAndPushSnapshot` in
+  `src/memory-sync/snapshot.ts`): any remote file that is missing locally —
+  e.g. a peer's file this machine has not pulled yet — is DELETED from the
+  remote by that push, and differing files are overwritten with the local
+  version (no 3-way merge). Keeping the periodic pull-before-push
+  `run --mode sync` job tight is what keeps that window small. If
   the mini (or another machine) pushes changes while this machine was
   offline or simply not editing anything, those changes only reach this
   machine's local files on the next successful `pull`/`sync` — `watch`'s
@@ -331,21 +338,36 @@ entries still land under the same shared `pandora/` remote tree
 machine writes exactly one JSON file under its own `machine-state/`,
 named after its own profile (`machine-state/mac-mini.json`,
 `machine-state/macbook.json`, ...). A machine never writes to another
-machine's file — this makes write conflicts on this path structurally
+machine's file — this makes *content* conflicts on this path structurally
 impossible (`inline-markers` conflict resolution is never invoked here in
-practice, unlike the `memory` tree where concurrent edits are expected). The
-consumer is the harness companion `session-start toolchain-parity`, which
-reads every machine's file under `machine-state/` to compare toolchain
-versions across machines at session start.
+practice, unlike the `memory` tree where concurrent edits are expected).
+It does NOT protect a peer's file from the mirror-push deletion described
+below. Only `<profile>.json` belongs in `~/.harness/machine-state`, and
+never any secret: the whole directory is mirrored into a shared, committed
+remote, so every file dropped there ends up in git history on every peer.
+The consumer is the harness companion `session-start toolchain-parity`,
+which reads every machine's file under `machine-state/` to compare
+toolchain versions across machines at session start.
 
-**Peer freshness depends on the periodic `run --mode sync`/`pull` job, not
-`watch`.** Same caveat as the `memory` tree (see the "edge-triggered" note
-in (b) above): `watch` only commits+pushes *this* machine's own
-`machine-state/<profile>.json` on local change; it never pulls, so a peer's
-updated snapshot only reaches this machine on the next successful
-pull/sync. A consumer reading `machine-state/` locally is therefore reading
-whatever the last periodic sync pulled, not necessarily each peer's very
-latest write.
+**Propagation runs through the periodic `run --mode sync` job, not
+`watch` — and an un-synced machine's `watch` push can DELETE peers'
+snapshot files from the remote.** Same mechanics as the `memory` tree (see
+the "edge-triggered" note near the top of this document): `watch` never
+pulls, and its push is a whole-subtree mirror of this machine's local tree.
+Because owner-writes-only means a machine's local `machine-state/` holds
+only its *own* file until a pull has imported the peers', a `watch` tick
+from a machine that has not yet pulled a peer's snapshot removes that
+peer's `machine-state/<peer>.json` from the shared remote (verified
+empirically during review). This is the default outcome at bootstrap and
+in the window between a peer's first push and this machine's next pull;
+it self-heals on the owner's next local write+push, and the periodic
+pull-before-push `run --mode sync` job keeps the window short. A consumer
+reading `machine-state/` locally is reading whatever the last successful
+sync pulled, not necessarily each peer's very latest write. One more edge:
+`watch` only detects the *first-ever* write into `machine-state/` if the
+parent directory (`~/.harness`) already existed when `watch` started;
+on a truly fresh machine the first snapshot travels only via the periodic
+sync or after a `watch` restart.
 
 **The local `~/.harness/machine-state` directory does not need to pre-exist.**
 `collectLocalSyncFiles` (`src/memory-sync/config.ts`) skips a non-required
