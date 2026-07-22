@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd equivalent of the systemd unit documented in README.md
+  (#systemd-unit), for running `agent-memory-sync watch` continuously as a
+  per-user LaunchAgent (debounced push on every memory edit).
+
+  REQUIRED companion, not optional: `watch` only pushes on local edits and
+  never pulls — install com.agent-memory-sync.sync.plist.template alongside
+  this one too, or a machine that reconnects after being offline will not
+  pick up changes made elsewhere until its own next local edit. See that
+  template's header and docs/machine-setup.md for the full reasoning.
+
+  Install (see docs/machine-setup.md for the full walkthrough):
+    1. Copy this file to ~/Library/LaunchAgents/com.agent-memory-sync.watch.<profile>.plist
+       (the filename does not have to match Label, but keeping them aligned
+       avoids confusion — rename both together if you run watch for more
+       than one profile on the same machine).
+    2. Replace every __PLACEHOLDER__ below with an actual, absolute value —
+       no shell expansion (~, $HOME, ...) happens inside a plist.
+    3. Load it:
+         launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.agent-memory-sync.watch.<profile>.plist
+    4. Check status / recent log tail:
+         launchctl print gui/$UID/com.agent-memory-sync.watch.<profile>
+         tail -f ~/Library/Logs/agent-memory-sync/watch.<profile>.err.log
+    5. Unload (stop and remove from launchd, does not delete the plist file):
+         launchctl bootout gui/$UID/com.agent-memory-sync.watch.<profile>
+
+  Placeholders:
+    __PROFILE_NAME__     the profile positional argument, e.g. macbook
+                          (must match the "profile" field inside the config
+                          file below — see the Activation note in
+                          profiles/macbook.json / profiles/mac-mini.json for
+                          why both are required)
+    __CONFIG_PATH__      absolute path to the machine's profile json, e.g.
+                          /Users/lan/git/pandora/agent-memory/packages/agent-memory-sync/profiles/macbook.json
+    __NODE_BIN__         absolute path to node, e.g. /usr/local/bin/node or
+                          /opt/homebrew/bin/node (`which node`)
+    __MAIN_JS__           absolute path to the built entrypoint, e.g.
+                          /Users/lan/git/pandora/agent-memory/packages/agent-memory-sync/dist/src/main.js
+                          (run `npm run build` in the package first)
+    __PACKAGE_DIR__       absolute path to the agent-memory-sync package
+                          checkout, e.g.
+                          /Users/lan/git/pandora/agent-memory/packages/agent-memory-sync
+    __USER_HOME__          your home directory, e.g. /Users/lan (used only for
+                          the log paths below)
+
+  KeepAlive / ThrottleInterval, and why:
+    `watch` does NOT use the reachability precheck (src/memory-sync/
+    reachability.ts) — that precheck only covers `run`'s pull/push/sync. Any
+    network failure during `watch` — the mini being unreachable, an expired
+    credential, a rejected push, a filesystem error — surfaces as a
+    non-zero exit "by design" (see README.md #systemd-unit) with no
+    precheck softening it. KeepAlive's SuccessfulExit=false mirrors that:
+    launchd respawns on a crash (non-zero exit) but does not respawn after a
+    clean shutdown. ThrottleInterval caps the respawn rate so a
+    persistently failing cause (mini down, bad ssh key, permanently
+    rejected push) does not spin the CPU in a restart loop — this is
+    launchd's rough equivalent of systemd's StartLimitIntervalSec/
+    StartLimitBurst pairing, just as a single minimum gap between attempts
+    rather than a burst counter.
+
+    Because `watch` alone gives no offline queueing here, pair this job
+    with the periodic-sync companion,
+    com.agent-memory-sync.sync.plist.template — see its header and
+    docs/machine-setup.md for why that companion is required, not optional.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agent-memory-sync.watch.__PROFILE_NAME__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE_BIN__</string>
+        <string>__MAIN_JS__</string>
+        <string>watch</string>
+        <string>__PROFILE_NAME__</string>
+        <string>--config</string>
+        <string>__CONFIG_PATH__</string>
+        <string>--verbose</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PACKAGE_DIR__</string>
+
+    <!-- git/ssh must be resolvable; launchd does not inherit your shell's
+         PATH. Covers Apple Silicon Homebrew, Intel Homebrew, and system
+         paths — trim to what you actually need. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Minimum seconds between respawns; see the KeepAlive/ThrottleInterval
+         note above the plist header for why 30s. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__USER_HOME__/Library/Logs/agent-memory-sync/watch.__PROFILE_NAME__.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__USER_HOME__/Library/Logs/agent-memory-sync/watch.__PROFILE_NAME__.err.log</string>
+</dict>
+</plist>

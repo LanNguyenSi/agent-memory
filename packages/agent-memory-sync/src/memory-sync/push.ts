@@ -4,13 +4,14 @@ const {
 } = require("./config");
 const { GitClient } = require("./git-client");
 const { mergeText } = require("./merge");
+const { checkRemoteReachable } = require("./reachability");
 const { StateStore } = require("./state-store");
 
 interface PushOptions {
   dryRun: boolean;
 }
 
-async function performPush(config: {
+interface PushConfig {
   profile: string;
   stateDir: string;
   rootDir: string;
@@ -19,13 +20,17 @@ async function performPush(config: {
   remoteUrl: string;
   branch: string;
   gitBinary: string;
+  reachabilityTimeoutMs?: number;
+  reachabilityCheckCommand?: string[] | null;
   syncPaths: Array<{
     source: string;
     destination?: string;
     kind?: "file" | "directory";
     required?: boolean;
   }>;
-}, options: PushOptions) {
+}
+
+async function performPush(config: PushConfig, options: PushOptions) {
   const stateStore = new StateStore(config.stateDir, config.profile);
   stateStore.ensure();
 
@@ -54,8 +59,40 @@ async function performPush(config: {
     }
   ];
 
+  // Fast precheck before any network operation (push, and — since queued
+  // snapshots are replayed inside the same working copy below — queue
+  // replay too). An unreachable remote must not hang on `git ls-remote`; it
+  // short-circuits into the same "queued" outcome the catch-block below
+  // produces for a real git failure, just without paying for the hang.
+  const reachability = checkRemoteReachable(config);
+
   if (options.dryRun) {
+    if (!reachability.reachable) {
+      return {
+        kind: "push",
+        status: "dry-run",
+        remoteHeadBefore: null,
+        remoteHeadAfter: null,
+        appliedFiles: unique(Object.keys(snapshots[snapshots.length - 1]?.localFiles || {})),
+        mergedFiles: [],
+        conflictFiles: [],
+        queuedSnapshotId: null,
+        notes: [
+          `remote unreachable (${reachability.reason}); this run would enqueue a snapshot instead of pushing immediately`
+        ]
+      };
+    }
+
     return previewPush(config, snapshots);
+  }
+
+  if (!reachability.reachable) {
+    return enqueueCurrentSnapshot(
+      stateStore,
+      currentLocalMap,
+      currentBaseMap,
+      `remote unreachable (${reachability.reason}); stored the current local snapshot for replay on the next successful run`
+    );
   }
 
   let queuedSnapshotId: string | null = null;
@@ -107,25 +144,41 @@ async function performPush(config: {
       notes: queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []
     };
   } catch (error) {
-    queuedSnapshotId = stateStore.enqueueSnapshot({
-      localFiles: currentLocalMap,
-      baseFiles: currentBaseMap
-    });
-
-    return {
-      kind: "push",
-      status: "queued",
-      remoteHeadBefore: null,
-      remoteHeadAfter: null,
-      appliedFiles: Object.keys(currentLocalMap).sort(),
-      mergedFiles: [],
-      conflictFiles: [],
-      queuedSnapshotId,
-      notes: [
-        "remote unavailable; stored the current local snapshot for replay on the next successful run"
-      ]
-    };
+    return enqueueCurrentSnapshot(
+      stateStore,
+      currentLocalMap,
+      currentBaseMap,
+      "remote unavailable; stored the current local snapshot for replay on the next successful run"
+    );
   }
+}
+
+// Shared by the reachability-precheck skip path and the catch-all fallback
+// below: stash the current local state as a new queued snapshot (existing
+// queued snapshots are left untouched — they are only cleared after a
+// successful push) and report a clean "queued" result.
+function enqueueCurrentSnapshot(
+  stateStore: InstanceType<typeof StateStore>,
+  currentLocalMap: Record<string, string>,
+  currentBaseMap: Record<string, string | null>,
+  note: string
+) {
+  const queuedSnapshotId = stateStore.enqueueSnapshot({
+    localFiles: currentLocalMap,
+    baseFiles: currentBaseMap
+  });
+
+  return {
+    kind: "push",
+    status: "queued",
+    remoteHeadBefore: null,
+    remoteHeadAfter: null,
+    appliedFiles: Object.keys(currentLocalMap).sort(),
+    mergedFiles: [],
+    conflictFiles: [],
+    queuedSnapshotId,
+    notes: [note]
+  };
 }
 
 function previewPush(

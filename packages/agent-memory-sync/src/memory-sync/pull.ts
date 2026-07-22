@@ -7,13 +7,14 @@ const {
 } = require("./config");
 const { GitClient } = require("./git-client");
 const { mergeText } = require("./merge");
+const { checkRemoteReachable } = require("./reachability");
 const { StateStore } = require("./state-store");
 
 interface PullOptions {
   dryRun: boolean;
 }
 
-async function performPull(config: {
+interface PullConfig {
   profile: string;
   stateDir: string;
   rootDir: string;
@@ -22,15 +23,37 @@ async function performPull(config: {
   remoteUrl: string;
   branch: string;
   gitBinary: string;
+  reachabilityTimeoutMs?: number;
+  reachabilityCheckCommand?: string[] | null;
   syncPaths: Array<{
     source: string;
     destination?: string;
     kind?: "file" | "directory";
     required?: boolean;
   }>;
-}, options: PullOptions) {
+}
+
+async function performPull(config: PullConfig, options: PullOptions) {
   const stateStore = new StateStore(config.stateDir, config.profile);
   stateStore.ensure();
+
+  // Fast precheck before the network operation. An unreachable remote must
+  // not hang on `git ls-remote`/`fetch`; it short-circuits into a clean,
+  // no-op "skipped" result that leaves local files and state untouched.
+  const reachability = checkRemoteReachable(config);
+  if (!reachability.reachable) {
+    return {
+      kind: "pull",
+      status: "skipped",
+      remoteHeadBefore: null,
+      remoteHeadAfter: null,
+      appliedFiles: [],
+      mergedFiles: [],
+      conflictFiles: [],
+      deletedFiles: [],
+      notes: [`remote unreachable (${reachability.reason}); skipped pull, local files unchanged`]
+    };
+  }
 
   const gitClient = new GitClient(config.gitBinary);
   const workingCopy = gitClient.prepareWorkingCopy(

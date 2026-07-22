@@ -79,6 +79,8 @@ Options:
   --schedule "<cron expression>"         Run on a 5-field cron-compatible schedule
   --max-runs <count>                     Limit scheduled runs
   --conflict-strategy <strategy>         inline-markers, local-wins, remote-wins
+  --reachability-timeout-ms <ms>         Timeout for the remote reachability precheck before
+                                         pull/push  [default: 4000]
   --dry-run                              Show what would happen without making changes
   --output <text|json|yaml>              Output format  [default: text]
   --verbose                              Enable verbose diagnostics
@@ -135,6 +137,27 @@ WantedBy=multi-user.target
 ```
 
 The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop so an expired credential or a permanently rejected push (which `watch` surfaces as a non-zero exit, by design) does not crashloop forever. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting.
+
+macOS equivalent (LaunchAgent instead of systemd): see
+[`docs/launchd/com.agent-memory-sync.watch.plist.template`](docs/launchd/com.agent-memory-sync.watch.plist.template)
+and [docs/machine-setup.md](docs/machine-setup.md).
+
+Note `watch` pushes directly per debounce window and does not run the
+reachability precheck described under [Sync behavior](#sync-behavior) —
+that precheck covers `run`'s `pull`/`push`/`sync` (and queue replay) only.
+A network failure during `watch` still surfaces as the non-zero exit
+described above, by the same design as any other push failure; this keeps
+`watch`'s existing fail-loud/let-the-supervisor-restart contract intact
+rather than silently swallowing a bad edit's push.
+
+`watch` also never pulls — it is edge-triggered on local changes only, so a
+machine that was offline while changes landed elsewhere will not pick them
+up until its own next local edit. For that reason, a periodic
+`run --mode sync` (which does queue, and does skip cleanly when the remote
+is unreachable) running alongside `watch` is a **required** part of any
+fallback-machine setup, not an optional extra — see
+[docs/machine-setup.md](docs/machine-setup.md) for the launchd/systemd
+companion jobs.
 
 ##### Push authentication
 
@@ -222,12 +245,18 @@ The `--config` flag overrides the default path.
   "conflictStrategy": "inline-markers",
   "outputFormat": "text",
   "verbose": false,
+  "reachabilityTimeoutMs": 4000,
   "syncPaths": [
     { "source": "MEMORY.md", "destination": "MEMORY.md", "kind": "file" },
     { "source": "logs", "destination": "logs", "kind": "directory" }
   ]
 }
 ```
+
+For a real multi-machine setup (Mac mini as source of truth, MacBook/Linux
+as fallbacks) see the committed profiles under [`profiles/`](profiles/) and
+[docs/machine-setup.md](docs/machine-setup.md) instead of hand-writing a
+config file from scratch.
 
 ### Environment Variables
 
@@ -244,7 +273,18 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
 ### Sync behavior
 
 - `sync` runs `pull` first and then `push`
-- failed pushes are queued locally in `stateDir/queue` and replayed on the next successful push
+- before any pull/push network operation (including replaying a queue), a fast reachability
+  precheck runs first: for ssh/scp-style remotes it derives an
+  `ssh -o BatchMode=yes -o ConnectTimeout=<n>` probe against the remote host; for a local
+  filesystem remote it's a plain existence check; other transports (https, git://) have no
+  dedicated probe and are assumed reachable. If the remote is unreachable, the command is a
+  clean no-op — one clear note in the output, exit code `0`, no hang, and the queue (if any)
+  is left untouched. Tune the timeout with `--reachability-timeout-ms` / `reachabilityTimeoutMs`
+  (default 4000ms), or fully override the probe with `reachabilityCheckCommand` (an argv array;
+  config file / `AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND` only, no CLI flag — same pattern
+  as `syncPaths`)
+- failed pushes (including ones skipped by the reachability precheck) are queued locally in
+  `stateDir/queue` and replayed on the next successful push
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers
 - `--dry-run` previews the result without changing local files or the remote repository
 
@@ -255,12 +295,16 @@ agent-memory-sync/
 ├── src/
 │   ├── commands/         # One file per subcommand
 │   ├── config/           # Config loading and validation
+│   ├── memory-sync/      # Pull/push/watch/reachability/merge/state
 │   └── main.ts
 ├── tests/
 │   └── ...               # Test files mirroring src/
+├── profiles/              # Committed per-machine configs (mac mini, MacBook, Linux template)
 ├── docs/
 │   ├── architecture.md
 │   ├── ways-of-working.md
+│   ├── machine-setup.md   # Multi-machine bootstrap, activation, restore/rollback
+│   ├── launchd/            # macOS LaunchAgent template for `watch`
 │   └── adrs/
 └── README.md
 ```

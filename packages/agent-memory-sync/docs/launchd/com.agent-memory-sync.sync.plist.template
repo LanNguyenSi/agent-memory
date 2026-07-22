@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd companion to com.agent-memory-sync.watch.plist.template:
+  periodic `agent-memory-sync run <profile> --mode sync`, one-shot per tick.
+
+  REQUIRED, not optional — why: `watch` (the other template) only
+  commits+pushes when *this* machine's local files change; it never pulls.
+  If the mini (or another machine) pushes changes while this machine was
+  offline — or simply wasn't being edited on — those changes only reach
+  this machine's local files on the next successful `pull`/`sync`. `watch`'s
+  file-watcher has no signal to trigger that, since nothing changed here.
+  Without this companion job, a MacBook that reconnects after being offline
+  overnight silently sits on stale memory until a human runs `run --mode
+  pull` by hand, or an unrelated local edit happens to trigger `watch` and
+  paper over it. Install both templates on every fallback machine.
+
+  Install (see docs/machine-setup.md for the full walkthrough — same
+  pattern as the watch template):
+    1. Copy this file to ~/Library/LaunchAgents/com.agent-memory-sync.sync.<profile>.plist
+    2. Replace every __PLACEHOLDER__ below with an actual, absolute value —
+       no shell expansion (~, $HOME, ...) happens inside a plist.
+    3. Load it:
+         launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.agent-memory-sync.sync.<profile>.plist
+    4. Check status / recent log tail:
+         launchctl print gui/$UID/com.agent-memory-sync.sync.<profile>
+         tail -f ~/Library/Logs/agent-memory-sync/sync.<profile>.err.log
+    5. Unload:
+         launchctl bootout gui/$UID/com.agent-memory-sync.sync.<profile>
+
+  Placeholders: same meanings as in com.agent-memory-sync.watch.plist.template
+  (__PROFILE_NAME__, __CONFIG_PATH__, __NODE_BIN__, __MAIN_JS__,
+  __PACKAGE_DIR__, __USER_HOME__) — see that file's header for the full
+  reference; both templates should point at the same profile/config.
+
+  Why StartInterval, not KeepAlive, and not the CLI's own --schedule:
+    This is a periodic *tick*, not a supervised daemon — StartInterval
+    (fires every N seconds, one short-lived process per tick) is launchd's
+    native primitive for exactly that, and is what a systemd .timer +
+    oneshot .service pair covers on Linux (see docs/machine-setup.md
+    section (c)). Using it instead of a second permanently-resident
+    `agent-memory-sync run --schedule ...` process (the CLI does support
+    --schedule as an in-process cron loop, e.g. for platforms without a
+    native OS scheduler) avoids running two long-lived node processes
+    side by side with `watch`, and lets launchd itself own the timing —
+    it accounts for the machine having been asleep, so a MacBook closed
+    overnight still runs a sync promptly after waking rather than only
+    after an in-process timer would next have fired.
+    RunAtLoad=true additionally runs one sync immediately when the job is
+    loaded, so a freshly activated machine does not wait a full interval
+    for its first pull.
+    A tick that fires while the mini is still unreachable is a fast, clean
+    no-op — `run --mode sync`'s own reachability precheck (default 4s
+    bound; see src/memory-sync/reachability.ts) means this never hangs or
+    piles up overlapping ssh attempts.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agent-memory-sync.sync.__PROFILE_NAME__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE_BIN__</string>
+        <string>__MAIN_JS__</string>
+        <string>run</string>
+        <string>__PROFILE_NAME__</string>
+        <string>--config</string>
+        <string>__CONFIG_PATH__</string>
+        <string>--mode</string>
+        <string>sync</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PACKAGE_DIR__</string>
+
+    <!-- git/ssh must be resolvable; launchd does not inherit your shell's
+         PATH. Covers Apple Silicon Homebrew, Intel Homebrew, and system
+         paths — trim to what you actually need. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Seconds between ticks. 900 = 15 minutes; each tick is a short-lived
+         one-shot `run --mode sync`, not a supervised daemon, so there is no
+         KeepAlive dict here (see the StartInterval rationale above). -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__USER_HOME__/Library/Logs/agent-memory-sync/sync.__PROFILE_NAME__.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__USER_HOME__/Library/Logs/agent-memory-sync/sync.__PROFILE_NAME__.err.log</string>
+</dict>
+</plist>
