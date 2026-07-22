@@ -126,19 +126,33 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   );
 });
 
-test("profiles/macbook.json and profiles/mac-mini.json declare the same repositorySubdir", () => {
+test("profiles/macbook.json, profiles/mac-mini.json, and profiles/linux.example.json all declare the same repositorySubdir", () => {
   // A narrower, faster companion to the end-to-end test above: pins the
   // specific config field that caused the divergence directly against the
-  // committed files, independent of any CLI/git plumbing.
-  const macbookSettings = JSON.parse(readText(path.join(PROFILES_DIR, "macbook.json")));
-  const miniSettings = JSON.parse(readText(path.join(PROFILES_DIR, "mac-mini.json")));
-
-  assert.ok(macbookSettings.repositorySubdir, "profiles/macbook.json must set repositorySubdir explicitly");
-  assert.equal(
-    macbookSettings.repositorySubdir,
-    miniSettings.repositorySubdir,
-    "profiles/macbook.json and profiles/mac-mini.json must share the same repositorySubdir " +
-      "(it is the only thing that determines the remote tree path — see toRepositoryRelativePath " +
-      "in src/memory-sync/config.ts); the 'profile' field is local-only and may differ"
+  // committed files, independent of any CLI/git plumbing. Includes
+  // linux.example.json — the copy-paste source for any new machine — so a
+  // future template edit that reintroduces a per-machine placeholder (as
+  // this template originally had, mirroring the pre-fix macbook/mac-mini
+  // profiles) is caught here too, not just on the two profiles already in
+  // active use.
+  const profileFiles = ["macbook.json", "mac-mini.json", "linux.example.json"];
+  const settingsByFile = Object.fromEntries(
+    profileFiles.map((file) => [file, JSON.parse(readText(path.join(PROFILES_DIR, file)))])
   );
+
+  for (const file of profileFiles) {
+    assert.ok(settingsByFile[file].repositorySubdir, `profiles/${file} must set repositorySubdir explicitly`);
+  }
+
+  const [firstFile, ...restFiles] = profileFiles;
+  const expected = settingsByFile[firstFile].repositorySubdir;
+  for (const file of restFiles) {
+    assert.equal(
+      settingsByFile[file].repositorySubdir,
+      expected,
+      `profiles/${file} must share the same repositorySubdir as profiles/${firstFile} ` +
+        "(it is the only thing that determines the remote tree path — see toRepositoryRelativePath " +
+        "in src/memory-sync/config.ts); the 'profile' field is local-only and may differ"
+    );
+  }
 });

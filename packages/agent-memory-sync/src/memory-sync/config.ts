@@ -125,6 +125,10 @@ function walkFiles(rootDir: string): string[] {
   const results: string[] = [];
 
   for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
+    if (isHiddenEntryName(entry.name)) {
+      continue;
+    }
+
     const absolutePath = path.join(rootDir, entry.name);
     if (entry.isDirectory()) {
       results.push(...walkFiles(absolutePath));
@@ -136,6 +140,21 @@ function walkFiles(rootDir: string): string[] {
   }
 
   return results;
+}
+
+// Directory-kind syncPaths (e.g. every committed profile's source: "."
+// covering the whole rootDir) must not sweep up dotfiles/dot-directories —
+// .DS_Store, AppleDouble resource-fork shadows (._*, which also start with
+// "." so this one check covers them too), .git, editor swap dirs, etc. On
+// macOS these are machine-local cruft that differs byte-for-byte between
+// machines, producing spurious recurring inline-conflict-marker diffs on
+// every run. A hidden entry is skipped entirely, including not descending
+// into a hidden directory. Note this is mirrored in ./git-client.ts's own
+// walkFiles (used to read back the remote's current tree during pull/push)
+// so a hidden path already sitting in the remote is symmetrically never
+// materialized locally either — keep both in sync if this rule changes.
+function isHiddenEntryName(name: string): boolean {
+  return name.startsWith(".");
 }
 
 module.exports = {

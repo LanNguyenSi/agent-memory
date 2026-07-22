@@ -122,6 +122,45 @@ test("checkRemoteReachable: a dash-prefixed-host remote never spawns ssh — ski
   assert.match(result.reason, /no dedicated/);
 });
 
+// ─── classifyRemote: whitespace-padded host guard (isUnsafeSshHost bypass) ──
+//
+// isUnsafeSshHost only checked host.startsWith("-"). A host with leading
+// whitespace before the dash — " -oProxyCommand=..." or a leading tab —
+// does not start with "-" (it starts with the whitespace character), so it
+// slipped past that check and was classified "ssh", with the raw
+// (unstripped) host handed to the ssh probe argv. Not exploitable in
+// practice (ssh's own argv-option parser expects the option token itself,
+// not a whitespace-padded string, to start with "-"), but it defeats the
+// guard's stated intent and is fixed for defense in depth: the host must
+// match a plausible hostname character set — letters, digits, dot, hyphen,
+// underscore — with no leading/trailing whitespace and no leading hyphen.
+
+test("classifyRemote: scp-like host with a leading space before a dash-option is unsupported (whitespace bypass guard)", () => {
+  const result = classifyRemote(" -oProxyCommand=id:repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+test("classifyRemote: scp-like host with a leading tab before a dash-option is unsupported (whitespace bypass guard)", () => {
+  const result = classifyRemote("\t-oProxyCommand=id:repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+test("classifyRemote: scp-like 'user@ -host' with a leading space after the user is unsupported (whitespace bypass guard)", () => {
+  const result = classifyRemote("user@ -oProxyCommand=id:repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+test("classifyRemote: scp-like host with trailing whitespace is unsupported", () => {
+  const result = classifyRemote("mini :repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+test("classifyRemote: legitimate hyphenated/dotted/numeric hosts remain classified as ssh (whitespace guard does not over-reject)", () => {
+  assert.deepEqual(classifyRemote("my-host:repo.git"), { kind: "ssh", host: "my-host" });
+  assert.deepEqual(classifyRemote("mini.local:repo.git"), { kind: "ssh", host: "mini.local" });
+  assert.deepEqual(classifyRemote("192.168.1.5:repo.git"), { kind: "ssh", host: "192.168.1.5" });
+});
+
 // ─── deriveProbeCommand ───────────────────────────────────────────────────────
 
 test("deriveProbeCommand: builds a BatchMode/ConnectTimeout ssh probe for scp-like remotes", () => {

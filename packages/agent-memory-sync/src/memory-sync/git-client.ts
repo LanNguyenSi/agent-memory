@@ -226,6 +226,10 @@ function walkFiles(rootDir: string): string[] {
   const results: string[] = [];
 
   for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
+    if (isHiddenEntryName(entry.name)) {
+      continue;
+    }
+
     const absolutePath = path.join(rootDir, entry.name);
     if (entry.isDirectory()) {
       results.push(...walkFiles(absolutePath));
@@ -237,6 +241,18 @@ function walkFiles(rootDir: string): string[] {
   }
 
   return results;
+}
+
+// Mirrors ./config.ts's isHiddenEntryName: GitClient.listFiles() (via this
+// walkFiles) is how push/pull/watch read back "what the remote currently
+// has" from the checked-out working copy. Filtering hidden entries here too
+// means a hidden path already committed to the remote (legacy junk from
+// before this rule existed, or hand-committed) is symmetrically never
+// reported back — so pull never materializes it locally, and push/watch
+// never treat it as remote state to reconcile against. Keep both in sync if
+// this rule changes.
+function isHiddenEntryName(name: string): boolean {
+  return name.startsWith(".");
 }
 
 function toUtf8(value?: string | Buffer): string {

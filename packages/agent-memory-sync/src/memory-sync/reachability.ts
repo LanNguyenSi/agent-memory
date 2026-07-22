@@ -101,7 +101,19 @@ function classifyRemote(remoteUrl: string): ClassifiedRemote {
 // process is ever spawned) and the real `git` operation downstream applies
 // its own hardening.
 function isUnsafeSshHost(host: string): boolean {
-  return host.startsWith("-");
+  // A conservative "looks like a real hostname" allowlist — letters,
+  // digits, dot, hyphen, underscore, with the first character required to
+  // be alphanumeric. This rejects a leading "-" (the CVE-2017-1000117-style
+  // option-injection case above) without a separate startsWith("-") check,
+  // and it additionally rejects leading/trailing whitespace: a naive
+  // startsWith("-") check missed " -oProxyCommand=..." or a leading tab,
+  // since those strings start with the whitespace character, not "-" —
+  // defeating the guard's intent even though ssh's own argv-option parser
+  // likely would not treat a whitespace-padded token as an option either
+  // (not confirmed exploitable, fixed anyway for defense in depth). A
+  // hyphen remains allowed mid-string (e.g. "my-host") since only a
+  // *leading* "-" is meaningful to ssh's option parser.
+  return !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(host);
 }
 
 // Builds the default `ssh -o BatchMode=yes -o ConnectTimeout=<n> <host> true`

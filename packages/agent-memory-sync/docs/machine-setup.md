@@ -22,7 +22,13 @@ This document wires together the pieces already documented individually
   (`pull` reporting `applied=0`). `syncPaths` in every profile is a single
   `source: "."` directory entry with `destination: "memory"`, so the whole
   `rootDir` (flat `.md` files, no fixed subdirectory layout) syncs to
-  `pandora/memory/...` in the bare repo, including any file added later.
+  `pandora/memory/...` in the bare repo, including any file added later. The
+  directory walk skips hidden files/dot-directories (`.DS_Store`, `._*`
+  AppleDouble shadows, `.git`, ...) by design — macOS cruft never becomes a
+  synced file or a recurring inline-conflict-marker diff between machines —
+  and it never follows symlinks under `rootDir` either (silently skipped,
+  not descended into; intentional containment). See `isHiddenEntryName` in
+  `src/memory-sync/config.ts` / `src/memory-sync/git-client.ts`.
 - Conflict strategy is `inline-markers` everywhere — concurrent edits that
   aren't a clean append merge land as `<<<<<<< local` / `>>>>>>> remote`
   markers in the file for a human to resolve, rather than silently picking a
@@ -119,21 +125,25 @@ agent-memory-sync run macbook --config profiles/macbook.json --mode pull
 Pass **both** `--config <profile file>` and the profile name positionally.
 The CLI's `[profile]` argument defaults to `"default"` and always overrides
 the `"profile"` field inside the config file when it isn't given explicitly
-(see `src/commands/run.ts` — `resolveRunConfig(loaded, { profile, ... })`),
-so state files (`queue/`, `base/`, `tmp/`) only land under the profile's own
-subdirectory when you pass the name on the command line too. Omitting it
-silently falls back to the `default` profile's state directory — the sync
-still runs against the right `rootDir`/`remoteUrl` from the config file, but
-its queue/base-snapshot bookkeeping would be shared with whatever else uses
-that machine's `default` profile, which is almost never what you want.
+(see `src/commands/run.ts` — `resolveRunConfig(loaded, { profile, ... })`).
+What that override does and does not affect is more subtle than it looks —
+see the next paragraph before assuming it controls where state files land.
 
 **What the profile name actually controls — and what it does not.** The
-`"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) only
-labels this one machine's own `stateDir` (queue/base/tmp bookkeeping —
-every committed profile also points `stateDir` at a machine-specific
-absolute path outside `rootDir`; see any profile's `"//"` field for why).
-It has **no effect on the remote** and is safe to differ, or even coincide,
-across machines. The field that must be identical everywhere for machines to
+`"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) is, in
+general, only a fallback: `resolveRunConfig()` derives a default `stateDir`
+of `.agent-memory-sync/<profile>` (relative to `rootDir`) *when `stateDir`
+is not set explicitly*. Every committed profile under `profiles/` sets
+`stateDir` explicitly (a machine-specific absolute path outside `rootDir`;
+see any profile's `"//"` field for why), so `"profile"` currently has **no
+effect on any file path at all** for these profiles — it only ends up
+recorded as a cosmetic label inside that machine's own `state.json`
+(`StateStore.loadState()`'s default `profile` field) and echoed in a run's
+JSON/text output. Passing it on the command line anyway (see the CLI
+snippets below) keeps invocations self-documenting and that label correct;
+it is not load-bearing for path resolution here. Either way it has **no
+effect on the remote** and is safe to differ, or even coincide, across
+machines. The field that must be identical everywhere for machines to
 actually see each other's changes is `repositorySubdir` — see the shared
 remote tree bullet at the top of this document. Committing a profile with
 a machine-specific `repositorySubdir` (as an earlier version of these
@@ -265,7 +275,9 @@ is `agent-memory-sync restore`:
 
 ```bash
 # Find a commit to roll back to (from any machine, or `ssh mini` + `git log`
-# directly against the bare repo)
+# directly against the bare repo). Use the FULL 40-char sha: abbreviated
+# shas cannot be fetched from a remote (git only serves full object names),
+# so `restore <short-sha>` fails with "could not fetch ref".
 agent-memory-sync restore <sha> --config profiles/<name>.json --dry-run
 
 # Roll back a single file — --path is relative to repositorySubdir, and
