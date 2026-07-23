@@ -267,15 +267,30 @@ function registerWatchCommand(program: import("commander").Command): void {
         writeWarning(`watcher error: ${message}`, outputOptions);
       });
 
+      // Printed from chokidar's own 'ready' event (fired once its initial
+      // recursive scan of watchedPaths completes) rather than unconditionally
+      // right after chokidar.watch() returns. Two reasons: (1) it is
+      // semantically correct — the line claims "watching", which is only
+      // true once the initial scan has actually finished; (2) on an
+      // inotify-backed watcher (Linux) that scan is not instantaneous, and a
+      // filesystem write issued before it completes can be silently missed —
+      // chokidar has not finished wiring up inotify watch descriptors for
+      // every (possibly nested) watched path yet. A caller that treats this
+      // line as the "watch is now armed" signal (e.g. an integration test
+      // triggering an edit) is therefore safe on both fsevents (macOS) and
+      // inotify (Linux) once the line has actually printed, where a fixed
+      // sleep() before that point is not.
+      watcher.on("ready", () => {
+        writeInfo(
+          `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,
+          outputOptions
+        );
+      });
+
       const sigintHandler = () => requestShutdown("received SIGINT, flushing pending changes before exit");
       const sigtermHandler = () => requestShutdown("received SIGTERM, flushing pending changes before exit");
       process.on("SIGINT", sigintHandler);
       process.on("SIGTERM", sigtermHandler);
-
-      writeInfo(
-        `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,
-        outputOptions
-      );
 
       await done;
       process.off("SIGINT", sigintHandler);
