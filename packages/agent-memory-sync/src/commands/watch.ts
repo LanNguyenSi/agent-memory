@@ -6,7 +6,8 @@ const {
   resolveRunConfig
 } = require("../config/loader");
 const { CliError } = require("../errors");
-const { commitAndPushSnapshot, buildCommitMessage } = require("../memory-sync/snapshot");
+const { buildCommitMessage } = require("../memory-sync/snapshot");
+const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
 
 type OutputFormat = "text" | "json" | "yaml";
@@ -119,16 +120,50 @@ function registerWatchCommand(program: import("commander").Command): void {
         return buildCommitMessage(changedFiles, deletedFiles);
       }
 
-      function pushSnapshot(message: string): void {
-        const result = commitAndPushSnapshot(runConfig, message);
-        if (result.status === "committed") {
+      // Routes through the same base-snapshot-aware performPush that
+      // `run --mode sync/push` uses (src/memory-sync/push.ts), instead of
+      // the former whole-subtree mirror push (src/memory-sync/snapshot.ts's
+      // now-removed commitAndPushSnapshot). That mirror blindly overwrote a
+      // concurrently-changed remote file and deleted any remote path missing
+      // locally, including a peer machine's file this workspace had not
+      // pulled yet — performPush's 3-way merge over localFiles ∪ baseFiles
+      // touches neither. `tempDirLabel: "watch"` keeps watch's working copy
+      // isolated from a concurrently running `run --mode push/sync` on the
+      // same stateDir/profile (both otherwise default to the "push" label).
+      //
+      // A genuinely unreachable/failed push is no longer a thrown error here
+      // (see README.md's "watch" section for the documented contract
+      // change): performPush queues the snapshot locally and returns
+      // normally instead, exactly like `run --mode push/sync` already does.
+      // Config/data errors (e.g. a required syncPaths entry missing) still
+      // throw before performPush's own try/catch and so still propagate to
+      // handleSnapshotError below (fail loud, non-zero exit), unchanged.
+      async function pushSnapshot(message: string): Promise<void> {
+        const result = await performPush(runConfig, {
+          dryRun: false,
+          commitMessage: message,
+          tempDirLabel: "watch"
+        });
+
+        if (result.status === "queued") {
           writeInfo(
-            `pushed snapshot ${result.commitSha?.slice(0, 7)} (${result.addedOrChangedFiles.length} changed, ${result.deletedFiles.length} deleted)`,
+            `watch tick queued locally instead of pushing (${(result.notes || []).join("; ") || "remote unavailable"})`,
             outputOptions
           );
-        } else {
-          writeInfo("watch tick produced no remote changes", outputOptions);
+          return;
         }
+
+        if (result.appliedFiles.length === 0) {
+          writeInfo("watch tick produced no remote changes", outputOptions);
+          return;
+        }
+
+        writeInfo(
+          `pushed snapshot ${result.remoteHeadAfter ? result.remoteHeadAfter.slice(0, 7) : "?"} ` +
+            `(${result.appliedFiles.length} file(s) applied` +
+            `${result.conflictFiles.length ? `, ${result.conflictFiles.length} conflict(s)` : ""})`,
+          outputOptions
+        );
       }
 
       async function runTick(): Promise<void> {
@@ -140,7 +175,7 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         try {
-          pushSnapshot(message);
+          await pushSnapshot(message);
           runsCompleted += 1;
           if (maxRuns && runsCompleted >= maxRuns) {
             shouldExit = true;
@@ -192,7 +227,7 @@ function registerWatchCommand(program: import("commander").Command): void {
             const finalMessage = takePendingMessage();
             if (finalMessage) {
               try {
-                pushSnapshot(finalMessage);
+                await pushSnapshot(finalMessage);
               } catch (error) {
                 handleSnapshotError(error);
               }

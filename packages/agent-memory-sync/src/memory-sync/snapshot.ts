@@ -1,85 +1,15 @@
-const { collectLocalSyncFiles, toRepositoryRelativePath } = require("./config");
-const { GitClient } = require("./git-client");
-
-// Structural subset of RunConfig in src/config/loader.ts. Keep in sync if RunConfig drifts.
-interface SnapshotConfig {
-  rootDir: string;
-  stateDir: string;
-  repositorySubdir: string;
-  remoteUrl: string;
-  branch: string;
-  gitBinary: string;
-  syncPaths: Array<{
-    source: string;
-    destination?: string;
-    kind?: "file" | "directory";
-    required?: boolean;
-  }>;
-}
-
-interface SnapshotResult {
-  status: "committed" | "no-changes";
-  commitSha: string | null;
-  addedOrChangedFiles: string[];
-  deletedFiles: string[];
-}
-
-function commitAndPushSnapshot(config: SnapshotConfig, commitMessage: string): SnapshotResult {
-  const gitClient = new GitClient(config.gitBinary);
-  const workingCopy = gitClient.prepareWorkingCopy(
-    config.remoteUrl,
-    config.branch,
-    gitClient.createTempRepoDir(config.stateDir, "watch")
-  );
-
-  const localFiles = collectLocalSyncFiles(config);
-  const desiredRepoPaths = new Set<string>();
-  const addedOrChangedFiles: string[] = [];
-
-  for (const file of localFiles) {
-    const repoRelativePath = toRepositoryRelativePath(config, file.remoteRelativePath);
-    desiredRepoPaths.add(repoRelativePath);
-
-    const existing = gitClient.readFile(workingCopy.repoDir, repoRelativePath);
-    if (existing !== file.content) {
-      gitClient.writeFile(workingCopy.repoDir, repoRelativePath, file.content);
-      addedOrChangedFiles.push(file.remoteRelativePath);
-    }
-  }
-
-  const deletedFiles: string[] = [];
-  const existingRepoPaths = gitClient.listFiles(workingCopy.repoDir, config.repositorySubdir);
-  for (const repoRelativePath of existingRepoPaths) {
-    if (!repoRelativePath.startsWith(`${config.repositorySubdir}/`)) {
-      continue;
-    }
-    if (desiredRepoPaths.has(repoRelativePath)) {
-      continue;
-    }
-
-    gitClient.deleteFile(workingCopy.repoDir, repoRelativePath);
-    deletedFiles.push(repoRelativePath.slice(config.repositorySubdir.length + 1));
-  }
-
-  const commitSha = gitClient.commitAll(workingCopy.repoDir, commitMessage);
-  if (!commitSha) {
-    return {
-      status: "no-changes",
-      commitSha: null,
-      addedOrChangedFiles: [],
-      deletedFiles: []
-    };
-  }
-
-  gitClient.push(workingCopy.repoDir, config.branch);
-
-  return {
-    status: "committed",
-    commitSha,
-    addedOrChangedFiles: addedOrChangedFiles.sort(),
-    deletedFiles: deletedFiles.sort()
-  };
-}
+// Formerly also held `commitAndPushSnapshot`: a whole-subtree MIRROR push
+// used by `watch` (src/commands/watch.ts) that blindly overwrote any
+// differing remote file with the local version and deleted any remote path
+// under `repositorySubdir` missing locally — including a peer machine's file
+// this workspace simply had not pulled yet. `watch` now reuses the
+// base-snapshot-aware `performPush` (./push.ts) that `run --mode sync/push`
+// already used, so that mirror-push (and its hazard) is gone; only the
+// commit-message formatter survives here, since watch's per-tick commit
+// messages ("update N memories" + bulleted body) are independent of the push
+// mechanics and are still worth keeping human-readable. Kept as its own
+// small module rather than folded into watch.ts or push.ts, to keep this
+// change's diff minimal.
 
 function buildCommitMessage(changedFiles: string[], deletedFiles: string[]): string {
   const all = Array.from(new Set([...changedFiles, ...deletedFiles])).sort();
@@ -101,6 +31,5 @@ function buildCommitMessage(changedFiles: string[], deletedFiles: string[]): str
 }
 
 module.exports = {
-  commitAndPushSnapshot,
   buildCommitMessage
 };

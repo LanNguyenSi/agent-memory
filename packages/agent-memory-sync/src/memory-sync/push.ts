@@ -9,6 +9,17 @@ const { StateStore } = require("./state-store");
 
 interface PushOptions {
   dryRun: boolean;
+  // Overrides the "current" snapshot's commit message (default:
+  // "sync(push): local memory update"). Used by `watch` to keep its
+  // human-readable per-tick commit messages (buildCommitMessage in
+  // ./snapshot.ts) after watch started reusing this function instead of its
+  // own mirror-push (src/commands/watch.ts).
+  commitMessage?: string;
+  // Overrides the working-copy temp-dir label under stateDir/tmp (default:
+  // "push"). `watch` passes "watch" here so its ticks keep their own
+  // isolated working copy instead of sharing one with a concurrently
+  // running `run --mode push/sync` on the same stateDir/profile.
+  tempDirLabel?: string;
 }
 
 interface PushConfig {
@@ -55,7 +66,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
       id: "current",
       localFiles: currentLocalMap,
       baseFiles: currentBaseMap,
-      message: "sync(push): local memory update"
+      message: options.commitMessage || "sync(push): local memory update"
     }
   ];
 
@@ -102,7 +113,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     const workingCopy = gitClient.prepareWorkingCopy(
       config.remoteUrl,
       config.branch,
-      gitClient.createTempRepoDir(config.stateDir, "push")
+      gitClient.createTempRepoDir(config.stateDir, options.tempDirLabel || "push")
     );
 
     const appliedFiles: string[] = [];

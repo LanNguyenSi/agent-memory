@@ -110,7 +110,7 @@ Options:
   --help
 ```
 
-A single edit produces a `update <path>` commit; several edits within the debounce window land as a single `update N memories` commit with a bulleted body listing each path. Deletions become `remove <path>`. Push failures (auth, fast-forward conflict, network) surface on stderr with a non-zero exit; the process does not silently swallow errors. `SIGINT` / `SIGTERM` flush any pending debounce before exiting.
+A single edit produces a `update <path>` commit; several edits within the debounce window land as a single `update N memories` commit with a bulleted body listing each path. Deletions become `remove <path>`. A push that fails because the remote is unreachable or rejects it (auth, non-fast-forward, network) is queued locally instead — see [Sync behavior](#sync-behavior) and the note below; a genuine config/data error (e.g. a required `syncPaths` entry missing) still surfaces on stderr with a non-zero exit, and the process never silently swallows *that* class of error. `SIGINT` / `SIGTERM` flush any pending debounce before exiting.
 
 ##### systemd unit
 
@@ -136,25 +136,31 @@ StartLimitBurst=10
 WantedBy=multi-user.target
 ```
 
-The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop so an expired credential or a permanently rejected push (which `watch` surfaces as a non-zero exit, by design) does not crashloop forever. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting.
+The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the class of failure that still exits non-zero — a config/data error such as a required `syncPaths` entry missing — so a persistently broken config does not crashloop forever; a network hiccup or a rejected push no longer exits at all (see below), so it never spends this budget. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on that remaining class of failure.
 
 macOS equivalent (LaunchAgent instead of systemd): see
 [`docs/launchd/com.agent-memory-sync.watch.plist.template`](docs/launchd/com.agent-memory-sync.watch.plist.template)
 and [docs/machine-setup.md](docs/machine-setup.md).
 
-Note `watch` pushes directly per debounce window and does not run the
-reachability precheck described under [Sync behavior](#sync-behavior) —
-that precheck covers `run`'s `pull`/`push`/`sync` (and queue replay) only.
-A network failure during `watch` still surfaces as the non-zero exit
-described above, by the same design as any other push failure; this keeps
-`watch`'s existing fail-loud/let-the-supervisor-restart contract intact
-rather than silently swallowing a bad edit's push.
+`watch`'s push goes through the same base-snapshot-aware `performPush` that
+`run`'s `pull`/`push`/`sync` use (`src/memory-sync/push.ts`), so it gets the
+same reachability precheck under [Sync behavior](#sync-behavior) and the
+same offline-queue behavior: an unreachable remote, or a push that the
+remote rejects (auth, non-fast-forward, network), is queued locally
+(`stateDir/queue`) and replayed on the next successful `watch` tick or
+`run`, with a clean exit `0`. This is a deliberate contract change from an
+earlier version of `watch`, where any push failure exited non-zero and
+relied on launchd/systemd to restart the process; a genuine config/data
+error (e.g. a required `syncPaths` entry missing) is the only class of
+failure that still exits non-zero and reaches the supervisor-restart path
+described above.
 
-`watch` also never pulls — it is edge-triggered on local changes only, so a
+`watch` still never pulls — it is edge-triggered on local changes only, so a
 machine that was offline while changes landed elsewhere will not pick them
-up until its own next local edit. For that reason, a periodic
-`run --mode sync` (which does queue, and does skip cleanly when the remote
-is unreachable) running alongside `watch` is a **required** part of any
+up until its own next local edit, even though its own push is now safe to
+run against a stale local view (see [docs/machine-setup.md](docs/machine-setup.md)
+for what that safety does and does not cover). For that reason, a periodic
+`run --mode sync` running alongside `watch` is a **required** part of any
 fallback-machine setup, not an optional extra — see
 [docs/machine-setup.md](docs/machine-setup.md) for the launchd/systemd
 companion jobs.
