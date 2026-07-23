@@ -33,39 +33,38 @@ This document wires together the pieces already documented individually
   aren't a clean append merge land as `<<<<<<< local` / `>>>>>>> remote`
   markers in the file for a human to resolve, rather than silently picking a
   winner.
-- **Reachability precheck coverage — read this before assuming `watch` is
-  covered too.** Only `run`'s `pull`/`push`/`sync` (and its queue replay) go
-  through the fast reachability precheck in
-  `src/memory-sync/reachability.ts`: an unreachable mini is a clean no-op —
-  one note, exit `0`, no `git ls-remote` hang, queue left untouched. `watch`
-  does **not** use this precheck at all. A network failure during `watch`
-  (unreachable mini or an auth/push failure) always surfaces as the
-  documented non-zero exit ("by design", README.md `#systemd-unit`), and
-  launchd/systemd restarts it per the KeepAlive/Restart config below. This
-  is intentional — see the README.md note right after the systemd unit for
-  why `watch`'s fail-loud contract was left as-is — but it means `watch`
-  alone gives you neither offline queueing nor a "did the last edit actually
-  reach the mini" recovery path; that's what the periodic `run --mode sync`
-  job in (b)/(c) below is for.
+- **Reachability precheck coverage.** `watch`'s push now goes through the
+  same base-snapshot-aware `performPush` (`src/memory-sync/push.ts`) that
+  `run`'s `pull`/`push`/`sync` use, so a `watch` tick gets the same fast
+  reachability precheck in `src/memory-sync/reachability.ts` and the same
+  offline-queue behavior: an unreachable mini during a tick is queued
+  locally (`stateDir/queue`) and replayed on the next successful `watch`
+  tick or `run`, with a clean exit `0` — no `git ls-remote` hang. This is a
+  deliberate contract change from `watch`'s earlier behavior, where any push
+  failure (including a merely unreachable remote) surfaced as a non-zero
+  exit and relied on launchd/systemd to restart the process; see the
+  README.md `watch` section for the exact new boundary — a genuine
+  config/data error (e.g. a required `syncPaths` entry missing) still exits
+  non-zero, only network/git-push-level failures are now queued instead.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
-  *this* machine's local files change; it never reads from the remote.
-  Its push is also a whole-subtree MIRROR of this machine's local tree
-  under `repositorySubdir` (`commitAndPushSnapshot` in
-  `src/memory-sync/snapshot.ts`): any remote file that is missing locally —
-  e.g. a peer's file this machine has not pulled yet — is DELETED from the
-  remote by that push, and differing files are overwritten with the local
-  version (no 3-way merge). Keeping the periodic pull-before-push
-  `run --mode sync` job tight is what keeps that window small. If
-  the mini (or another machine) pushes changes while this machine was
-  offline or simply not editing anything, those changes only reach this
+  *this* machine's local files change; it never reads from the remote. Its
+  push reuses the same base-snapshot-aware `performPush`
+  (`src/memory-sync/push.ts`) that `run --mode sync/push` uses: a 3-way
+  merge (`mergeText` in `src/memory-sync/merge.ts`) over this workspace's
+  local files and its own last-known base snapshot, so a remote file this
+  machine has never pulled — e.g. a peer's file — is left untouched rather
+  than deleted, and a file changed both locally and on the remote is merged
+  (or conflict-marked, per `conflictStrategy`) rather than blindly
+  overwritten with the local version. What `watch` still does not do is
+  pull: if the mini (or another machine) pushes changes while this machine
+  was offline or simply not editing anything, those changes only reach this
   machine's local files on the next successful `pull`/`sync` — `watch`'s
   file-watcher has no signal to trigger that, since nothing changed here.
   Without the periodic sync job, a MacBook that reconnects after being
-  offline overnight silently sits on stale memory until either a human runs
-  `run --mode pull` manually, or a fresh unrelated local edit through `watch`
-  happens to succeed and paper over it. Both `watch` **and** the periodic
-  sync job must be running on every fallback machine.
+  offline overnight silently sits on stale memory until a human runs
+  `run --mode pull` manually. Both `watch` **and** the periodic sync job
+  must be running on every fallback machine.
 
 Machine-specific values (paths, SSH alias) are committed as profile files
 under `profiles/`: `profiles/macbook.json`, `profiles/mac-mini.json`, and a
@@ -106,9 +105,9 @@ Host mini
 ```
 
 Verify it works (this is exactly the probe the reachability precheck runs
-internally, so a manual pass here means `run`'s `pull`/`push`/`sync` will see
-the mini as reachable too — `watch` does not run this precheck at all, see
-the coverage note above):
+internally, so a manual pass here means `run`'s `pull`/`push`/`sync` — and
+`watch`, which shares the same precheck, see the coverage note above — will
+see the mini as reachable too):
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=5 mini true && echo reachable
@@ -341,33 +340,31 @@ named after its own profile (`machine-state/mac-mini.json`,
 machine's file — this makes *content* conflicts on this path structurally
 impossible (`inline-markers` conflict resolution is never invoked here in
 practice, unlike the `memory` tree where concurrent edits are expected).
-It does NOT protect a peer's file from the mirror-push deletion described
-below. Only `<profile>.json` belongs in `~/.harness/machine-state`, and
-never any secret: the whole directory is mirrored into a shared, committed
-remote, so every file dropped there ends up in git history on every peer.
-The consumer is the harness companion `session-start toolchain-parity`,
-which reads every machine's file under `machine-state/` to compare
-toolchain versions across machines at session start.
+Only `<profile>.json` belongs in `~/.harness/machine-state`, and never any
+secret: the whole directory is synced into a shared, committed remote, so
+every file dropped there ends up in git history on every peer. The consumer
+is the harness companion `session-start toolchain-parity`, which reads every
+machine's file under `machine-state/` to compare toolchain versions across
+machines at session start.
 
-**Propagation runs through the periodic `run --mode sync` job, not
-`watch` — and an un-synced machine's `watch` push can DELETE peers'
-snapshot files from the remote.** Same mechanics as the `memory` tree (see
-the "edge-triggered" note near the top of this document): `watch` never
-pulls, and its push is a whole-subtree mirror of this machine's local tree.
-Because owner-writes-only means a machine's local `machine-state/` holds
-only its *own* file until a pull has imported the peers', a `watch` tick
-from a machine that has not yet pulled a peer's snapshot removes that
-peer's `machine-state/<peer>.json` from the shared remote (verified
-empirically during review). This is the default outcome at bootstrap and
-in the window between a peer's first push and this machine's next pull;
-it self-heals on the owner's next local write+push, and the periodic
-pull-before-push `run --mode sync` job keeps the window short. A consumer
-reading `machine-state/` locally is reading whatever the last successful
-sync pulled, not necessarily each peer's very latest write. One more edge:
-`watch` only detects the *first-ever* write into `machine-state/` if the
-parent directory (`~/.harness`) already existed when `watch` started;
-on a truly fresh machine the first snapshot travels only via the periodic
-sync or after a `watch` restart.
+**Propagation to this machine's local `machine-state/` still runs through
+the periodic `run --mode sync` job, not `watch` — `watch`'s push no longer
+deletes peers' snapshot files, but it still never pulls them in.** Same
+"edge-triggered" mechanics as the `memory` tree (see the note near the top
+of this document): `watch`'s push reuses the base-snapshot-aware
+`performPush`, which merges over this workspace's local files and its own
+last-known base snapshot, so a peer's `machine-state/<peer>.json` — never
+written locally, owner-writes-only — is simply outside that merge and stays
+untouched on the remote. What a `watch` tick does NOT do is fetch that
+peer's file down into this machine's own `machine-state/` directory; only a
+`pull`/`sync` does. A consumer reading `machine-state/` locally is therefore
+reading whatever the last successful `pull`/`sync` fetched, not necessarily
+each peer's very latest write — keeping the periodic
+`run --mode sync` job's interval short is what keeps that staleness window
+small. One more edge: `watch` only detects the *first-ever* local write into
+`machine-state/` if the parent directory (`~/.harness`) already existed when
+`watch` started; on a truly fresh machine the first snapshot travels only
+via the periodic sync or after a `watch` restart.
 
 **The local `~/.harness/machine-state` directory does not need to pre-exist.**
 `collectLocalSyncFiles` (`src/memory-sync/config.ts`) skips a non-required

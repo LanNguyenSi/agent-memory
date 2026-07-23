@@ -6,7 +6,8 @@ const {
   resolveRunConfig
 } = require("../config/loader");
 const { CliError } = require("../errors");
-const { commitAndPushSnapshot, buildCommitMessage } = require("../memory-sync/snapshot");
+const { buildCommitMessage } = require("../memory-sync/snapshot");
+const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
 
 type OutputFormat = "text" | "json" | "yaml";
@@ -47,7 +48,8 @@ function registerWatchCommand(program: import("commander").Command): void {
     )
     .option(
       "--max-runs <count>",
-      "Exit after this many snapshots have been pushed (primarily for tests)"
+      "Exit after this many watch ticks complete — pushed or queued locally when the remote " +
+        "is unreachable (primarily for tests)"
     )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
     .option("-v, --verbose", "Enable verbose diagnostics", false)
@@ -119,16 +121,50 @@ function registerWatchCommand(program: import("commander").Command): void {
         return buildCommitMessage(changedFiles, deletedFiles);
       }
 
-      function pushSnapshot(message: string): void {
-        const result = commitAndPushSnapshot(runConfig, message);
-        if (result.status === "committed") {
+      // Routes through the same base-snapshot-aware performPush that
+      // `run --mode sync/push` uses (src/memory-sync/push.ts), instead of
+      // the former whole-subtree mirror push (src/memory-sync/snapshot.ts's
+      // now-removed commitAndPushSnapshot). That mirror blindly overwrote a
+      // concurrently-changed remote file and deleted any remote path missing
+      // locally, including a peer machine's file this workspace had not
+      // pulled yet — performPush's 3-way merge over localFiles ∪ baseFiles
+      // touches neither. `tempDirLabel: "watch"` keeps watch's working copy
+      // isolated from a concurrently running `run --mode push/sync` on the
+      // same stateDir/profile (both otherwise default to the "push" label).
+      //
+      // A genuinely unreachable/failed push is no longer a thrown error here
+      // (see README.md's "watch" section for the documented contract
+      // change): performPush queues the snapshot locally and returns
+      // normally instead, exactly like `run --mode push/sync` already does.
+      // Config/data errors (e.g. a required syncPaths entry missing) still
+      // throw before performPush's own try/catch and so still propagate to
+      // handleSnapshotError below (fail loud, non-zero exit), unchanged.
+      async function pushSnapshot(message: string): Promise<void> {
+        const result = await performPush(runConfig, {
+          dryRun: false,
+          commitMessage: message,
+          tempDirLabel: "watch"
+        });
+
+        if (result.status === "queued") {
           writeInfo(
-            `pushed snapshot ${result.commitSha?.slice(0, 7)} (${result.addedOrChangedFiles.length} changed, ${result.deletedFiles.length} deleted)`,
+            `watch tick queued locally instead of pushing (${(result.notes || []).join("; ") || "remote unavailable"})`,
             outputOptions
           );
-        } else {
-          writeInfo("watch tick produced no remote changes", outputOptions);
+          return;
         }
+
+        if (result.appliedFiles.length === 0) {
+          writeInfo("watch tick produced no remote changes", outputOptions);
+          return;
+        }
+
+        writeInfo(
+          `pushed snapshot ${result.remoteHeadAfter ? result.remoteHeadAfter.slice(0, 7) : "?"} ` +
+            `(${result.appliedFiles.length} file(s) applied` +
+            `${result.conflictFiles.length ? `, ${result.conflictFiles.length} conflict(s)` : ""})`,
+          outputOptions
+        );
       }
 
       async function runTick(): Promise<void> {
@@ -140,7 +176,15 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         try {
-          pushSnapshot(message);
+          // Counts every tick that completed a pushSnapshot() call, whether
+          // performPush actually pushed or queued the snapshot locally
+          // (unreachable/failed remote) — matching run.ts's own --max-runs,
+          // which counts scheduled invocations rather than only ones that
+          // pushed something. This also keeps --max-runs usable as a
+          // deterministic test-termination mechanism for an offline tick,
+          // which never throws (see pushSnapshot above) and so would
+          // otherwise never increment a "successful pushes only" counter.
+          await pushSnapshot(message);
           runsCompleted += 1;
           if (maxRuns && runsCompleted >= maxRuns) {
             shouldExit = true;
@@ -192,7 +236,7 @@ function registerWatchCommand(program: import("commander").Command): void {
             const finalMessage = takePendingMessage();
             if (finalMessage) {
               try {
-                pushSnapshot(finalMessage);
+                await pushSnapshot(finalMessage);
               } catch (error) {
                 handleSnapshotError(error);
               }
@@ -223,15 +267,30 @@ function registerWatchCommand(program: import("commander").Command): void {
         writeWarning(`watcher error: ${message}`, outputOptions);
       });
 
+      // Printed from chokidar's own 'ready' event (fired once its initial
+      // recursive scan of watchedPaths completes) rather than unconditionally
+      // right after chokidar.watch() returns. Two reasons: (1) it is
+      // semantically correct — the line claims "watching", which is only
+      // true once the initial scan has actually finished; (2) on an
+      // inotify-backed watcher (Linux) that scan is not instantaneous, and a
+      // filesystem write issued before it completes can be silently missed —
+      // chokidar has not finished wiring up inotify watch descriptors for
+      // every (possibly nested) watched path yet. A caller that treats this
+      // line as the "watch is now armed" signal (e.g. an integration test
+      // triggering an edit) is therefore safe on both fsevents (macOS) and
+      // inotify (Linux) once the line has actually printed, where a fixed
+      // sleep() before that point is not.
+      watcher.on("ready", () => {
+        writeInfo(
+          `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,
+          outputOptions
+        );
+      });
+
       const sigintHandler = () => requestShutdown("received SIGINT, flushing pending changes before exit");
       const sigtermHandler = () => requestShutdown("received SIGTERM, flushing pending changes before exit");
       process.on("SIGINT", sigintHandler);
       process.on("SIGTERM", sigtermHandler);
-
-      writeInfo(
-        `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,
-        outputOptions
-      );
 
       await done;
       process.off("SIGINT", sigintHandler);
