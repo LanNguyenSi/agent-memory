@@ -48,7 +48,8 @@ function registerWatchCommand(program: import("commander").Command): void {
     )
     .option(
       "--max-runs <count>",
-      "Exit after this many snapshots have been pushed (primarily for tests)"
+      "Exit after this many watch ticks complete — pushed or queued locally when the remote " +
+        "is unreachable (primarily for tests)"
     )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
     .option("-v, --verbose", "Enable verbose diagnostics", false)
@@ -175,6 +176,14 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         try {
+          // Counts every tick that completed a pushSnapshot() call, whether
+          // performPush actually pushed or queued the snapshot locally
+          // (unreachable/failed remote) — matching run.ts's own --max-runs,
+          // which counts scheduled invocations rather than only ones that
+          // pushed something. This also keeps --max-runs usable as a
+          // deterministic test-termination mechanism for an offline tick,
+          // which never throws (see pushSnapshot above) and so would
+          // otherwise never increment a "successful pushes only" counter.
           await pushSnapshot(message);
           runsCompleted += 1;
           if (maxRuns && runsCompleted >= maxRuns) {

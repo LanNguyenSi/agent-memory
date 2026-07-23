@@ -99,7 +99,9 @@ agent-memory-sync watch [profile] [OPTIONS]
 Options:
   --debounce-ms <ms>             Aggregate rapid changes within this window
                                  (default 5000, env AGENT_MEMORY_SYNC_WATCH_DEBOUNCE_MS)
-  --max-runs <count>             Exit after this many snapshots (primarily for tests)
+  --max-runs <count>             Exit after this many watch ticks complete — pushed or
+                                 queued locally when the remote is unreachable
+                                 (primarily for tests)
   --remote <url>                 Override remote Git repository URL
   --branch <name>                Override branch
   --repository-subdir <path>     Override remote subdirectory

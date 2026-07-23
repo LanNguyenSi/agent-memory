@@ -188,3 +188,143 @@ test("watch tick still deletes locally-removed files and pushes local edits, wit
   assert.equal(fileExists(path.join(inspection, "shared", "logs", "peer.md")), true);
   assert.equal(readText(path.join(inspection, "shared", "logs", "peer.md")), "peer note\n");
 });
+
+// Rework finding (MEDIUM, review of this task): the queued-instead-of-fail-loud
+// path (performPush's reachability precheck / offline queue, now shared by
+// watch — see the "pushSnapshot" comment in src/commands/watch.ts) had no
+// direct coverage. This pins the whole lifecycle through `watch` itself: an
+// unreachable remote is a clean, non-throwing, --verbose-logged queue (exit
+// 0, stateDir/queue non-empty), and a later tick against a reachable remote
+// replays that queued snapshot before applying its own new local change.
+test("watch tick queues locally when the remote is unreachable, then replays the queue once the remote is reachable again", async () => {
+  const root = createSandbox("watch-queue-replay");
+  const actualRemoteDir = initBareRemote(root);
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const queueDir = path.join(workspaceRoot, ".agent-memory-sync", "default", "queue");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, offlineRemoteDir),
+    // offlineRemoteDir is a local path, so reachability is a plain fs check
+    // either way; keep the precheck timeout small regardless.
+    reachabilityTimeoutMs: 500
+  });
+
+  // --verbose is required to see the queued-locally note at all: writeInfo
+  // (src/output.ts) is a no-op unless verbose is set.
+  const offlineChild = spawnWatch(
+    [
+      "watch",
+      "default",
+      "--config",
+      configPath,
+      "--debounce-ms",
+      "300",
+      "--max-runs",
+      "1",
+      "--verbose",
+      "--output",
+      "json"
+    ],
+    process.env
+  );
+  let offlineStderr = "";
+  offlineChild.stderr.on("data", (chunk: Buffer) => {
+    offlineStderr += chunk.toString("utf8");
+  });
+
+  await sleep(500);
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "queued change\n");
+
+  const offlineExitCode: number = await new Promise((resolve) => {
+    offlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
+  });
+  if (offlineChild.exitCode === null) {
+    offlineChild.kill("SIGINT");
+  }
+
+  assert.equal(offlineExitCode, 0, `watch exited non-zero while offline. stderr: ${offlineStderr}`);
+  assert.match(offlineStderr, /queued locally/);
+  assert.ok(fs.existsSync(queueDir), "expected stateDir/queue to exist after an offline tick");
+  const queuedAfterOffline = fs.readdirSync(queueDir);
+  assert.equal(
+    queuedAfterOffline.length,
+    1,
+    `expected exactly one queued snapshot, found: ${queuedAfterOffline.join(", ")}`
+  );
+
+  // Point the same profile/stateDir at the real remote, then fire a second
+  // tick via a NEW local edit — watch never ticks on its own, and this edit
+  // targets a different file than the queued one so this tick's own
+  // "current" snapshot cannot collide with the just-replayed queued content.
+  writeProjectConfig(configPath, createConfig(workspaceRoot, actualRemoteDir));
+
+  const onlineChild = spawnWatch(
+    [
+      "watch",
+      "default",
+      "--config",
+      configPath,
+      "--debounce-ms",
+      "300",
+      "--max-runs",
+      "1",
+      "--verbose",
+      "--output",
+      "json"
+    ],
+    process.env
+  );
+  let onlineStderr = "";
+  onlineChild.stderr.on("data", (chunk: Buffer) => {
+    onlineStderr += chunk.toString("utf8");
+  });
+
+  await sleep(500);
+  writeText(path.join(workspaceRoot, "logs", "trigger.md"), "trigger\n");
+
+  const onlineExitCode: number = await new Promise((resolve) => {
+    onlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
+  });
+  if (onlineChild.exitCode === null) {
+    onlineChild.kill("SIGINT");
+  }
+
+  assert.equal(onlineExitCode, 0, `watch exited non-zero while replaying. stderr: ${onlineStderr}`);
+  assert.deepEqual(fs.readdirSync(queueDir), [], "expected the queue to be empty after a successful replay");
+
+  const inspection = cloneRemote(actualRemoteDir, root, "inspect-replay");
+  assert.equal(
+    readText(path.join(inspection, "shared", "MEMORY.md")),
+    "queued change\n",
+    "the queued snapshot did not land on the remote after the replay tick"
+  );
+  assert.equal(readText(path.join(inspection, "shared", "logs", "trigger.md")), "trigger\n");
+});
+
+// Rework finding (LOW, review of this task): pins that a successful tick
+// updates stateDir/base to the post-merge remote state — the input the next
+// tick's 3-way merge relies on to correctly leave an unpulled peer file
+// alone (see the first test in this file) and to detect real conflicts
+// rather than either false-positive or false-negative them.
+test("watch tick updates the local base snapshot to the post-merge remote content", async () => {
+  const root = createSandbox("watch-base-snapshot-update");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  const { exitCode, stderr } = await runWatchTick(configPath, () => {
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\nupdated\n");
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+
+  const baseFile = path.join(workspaceRoot, ".agent-memory-sync", "default", "base", "MEMORY.md");
+  const baseMeta = JSON.parse(readText(`${baseFile}.meta.json`));
+  assert.equal(readText(baseFile), "seed\nupdated\n");
+  assert.equal(baseMeta.deleted, false);
+});
