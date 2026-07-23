@@ -1,6 +1,16 @@
+// Watch-spawning tests in this file use the shared spawn/arming/deadline
+// helpers in ../helpers/watch-process.ts (also used by
+// watch-mirror-delete.test.ts): runWatchTick() waits for watch's own
+// chokidar-'ready'-driven "watching N path(s) under ..." line before
+// applying the trigger edit, instead of a fixed sleep() — a fixed delay is
+// not a structural fix for watch's initial-scan race (most visible on
+// inotify/Linux, worse under CI load), it only narrows the window; see that
+// file's header comment for the full explanation. --verbose is required for
+// the ready line to print at all (writeInfo, src/output.ts, is a no-op
+// otherwise) — none of the assertions below match on exact/full stderr
+// content, so the extra --verbose log lines this enables are harmless here.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
@@ -14,6 +24,7 @@ const {
   writeProjectConfig,
   writeText
 } = require("../helpers/cli.ts");
+const { runWatchTick } = require("../helpers/watch-process.ts");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
   return {
@@ -27,14 +38,6 @@ function createConfig(workspaceRoot: string, remoteDir: string) {
       { source: "logs", destination: "logs", kind: "directory" }
     ]
   };
-}
-
-function spawnWatch(args: string[], env: NodeJS.ProcessEnv) {
-  return spawn(
-    path.resolve(process.cwd(), "node_modules", ".bin", "tsx"),
-    ["src/main.ts", ...args],
-    { env, stdio: ["ignore", "pipe", "pipe"] }
-  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -57,44 +60,17 @@ test("watch debounces N rapid changes into a single commit", async () => {
   const inspectionBefore = cloneRemote(remoteDir, root, "before");
   const headBefore = git(["rev-parse", "HEAD"], inspectionBefore).trim();
 
-  const child = spawnWatch(
-    [
-      "watch",
-      "default",
-      "--config",
-      configPath,
-      "--debounce-ms",
-      "400",
-      "--max-runs",
-      "1",
-      "--output",
-      "json"
-    ],
-    process.env
+  const { exitCode, stderr } = await runWatchTick(
+    configPath,
+    async () => {
+      for (let i = 0; i < 7; i += 1) {
+        writeText(path.join(workspaceRoot, "MEMORY.md"), `change ${i}\n`);
+        await sleep(20);
+      }
+    },
+    { debounceMs: 400 }
   );
-
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-  });
-
-  try {
-    await sleep(600);
-
-    for (let i = 0; i < 7; i += 1) {
-      writeText(path.join(workspaceRoot, "MEMORY.md"), `change ${i}\n`);
-      await sleep(20);
-    }
-
-    const exitCode: number = await new Promise((resolve) => {
-      child.on("exit", (code: number | null) => resolve(code ?? -1));
-    });
-    assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
-  } finally {
-    if (child.exitCode === null) {
-      child.kill("SIGINT");
-    }
-  }
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
 
   const inspectionAfter = cloneRemote(remoteDir, root, "after");
   const log = git(["log", "--oneline", `${headBefore}..HEAD`], inspectionAfter).trim();
@@ -114,35 +90,10 @@ test("watch produces a single-file commit message when only one path changed", a
 
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const child = spawnWatch(
-    [
-      "watch",
-      "default",
-      "--config",
-      configPath,
-      "--debounce-ms",
-      "300",
-      "--max-runs",
-      "1",
-      "--output",
-      "json"
-    ],
-    process.env
-  );
-
-  try {
-    await sleep(500);
+  const { exitCode } = await runWatchTick(configPath, () => {
     writeText(path.join(workspaceRoot, "MEMORY.md"), "updated\n");
-
-    const exitCode: number = await new Promise((resolve) => {
-      child.on("exit", (code: number | null) => resolve(code ?? -1));
-    });
-    assert.equal(exitCode, 0);
-  } finally {
-    if (child.exitCode === null) {
-      child.kill("SIGINT");
-    }
-  }
+  });
+  assert.equal(exitCode, 0);
 
   const inspection = cloneRemote(remoteDir, root, "msg-single");
   const subject = git(["log", "-1", "--format=%s"], inspection).trim();
@@ -161,37 +112,16 @@ test("watch produces an aggregated commit message for multiple file changes", as
 
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const child = spawnWatch(
-    [
-      "watch",
-      "default",
-      "--config",
-      configPath,
-      "--debounce-ms",
-      "400",
-      "--max-runs",
-      "1",
-      "--output",
-      "json"
-    ],
-    process.env
+  const { exitCode } = await runWatchTick(
+    configPath,
+    () => {
+      writeText(path.join(workspaceRoot, "MEMORY.md"), "updated\n");
+      writeText(path.join(workspaceRoot, "logs", "2026-05-01.md"), "log 1 v2\n");
+      writeText(path.join(workspaceRoot, "logs", "2026-05-02.md"), "log 2\n");
+    },
+    { debounceMs: 400 }
   );
-
-  try {
-    await sleep(600);
-    writeText(path.join(workspaceRoot, "MEMORY.md"), "updated\n");
-    writeText(path.join(workspaceRoot, "logs", "2026-05-01.md"), "log 1 v2\n");
-    writeText(path.join(workspaceRoot, "logs", "2026-05-02.md"), "log 2\n");
-
-    const exitCode: number = await new Promise((resolve) => {
-      child.on("exit", (code: number | null) => resolve(code ?? -1));
-    });
-    assert.equal(exitCode, 0);
-  } finally {
-    if (child.exitCode === null) {
-      child.kill("SIGINT");
-    }
-  }
+  assert.equal(exitCode, 0);
 
   const inspection = cloneRemote(remoteDir, root, "msg-multi");
   const subject = git(["log", "-1", "--format=%s"], inspection).trim();
@@ -214,35 +144,10 @@ test("watch records deletions as remove entries", async () => {
 
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const child = spawnWatch(
-    [
-      "watch",
-      "default",
-      "--config",
-      configPath,
-      "--debounce-ms",
-      "300",
-      "--max-runs",
-      "1",
-      "--output",
-      "json"
-    ],
-    process.env
-  );
-
-  try {
-    await sleep(500);
+  const { exitCode } = await runWatchTick(configPath, () => {
     fs.rmSync(path.join(workspaceRoot, "logs", "2026-05-01.md"));
-
-    const exitCode: number = await new Promise((resolve) => {
-      child.on("exit", (code: number | null) => resolve(code ?? -1));
-    });
-    assert.equal(exitCode, 0);
-  } finally {
-    if (child.exitCode === null) {
-      child.kill("SIGINT");
-    }
-  }
+  });
+  assert.equal(exitCode, 0);
 
   const inspection = cloneRemote(remoteDir, root, "delete");
   const subject = git(["log", "-1", "--format=%s"], inspection).trim();

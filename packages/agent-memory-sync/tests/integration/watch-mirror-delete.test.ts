@@ -14,9 +14,14 @@
 // already uses, so watch now gets the same 3-way merge over
 // localFiles ∪ baseFiles: a remote-only path (never in this workspace's
 // local files or its last-known base snapshot) is never touched.
+//
+// Spawn/arming/deadline helpers (spawnWatch, waitForWatcherReady,
+// withTickDeadline, runWatchTick) live in ../helpers/watch-process.ts,
+// shared with watch-restore.test.ts — see that file's header comment for
+// why waiting for the watcher's own 'ready' signal (rather than a fixed
+// sleep) and a hard per-tick deadline both matter here.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
@@ -30,6 +35,7 @@ const {
   writeProjectConfig,
   writeText
 } = require("../helpers/cli.ts");
+const { spawnWatch, waitForWatcherReady, withTickDeadline, runWatchTick } = require("../helpers/watch-process.ts");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
   return {
@@ -43,144 +49,6 @@ function createConfig(workspaceRoot: string, remoteDir: string) {
       { source: "logs", destination: "logs", kind: "directory" }
     ]
   };
-}
-
-function spawnWatch(args: string[], env: NodeJS.ProcessEnv) {
-  return spawn(
-    path.resolve(process.cwd(), "node_modules", ".bin", "tsx"),
-    ["src/main.ts", ...args],
-    { env, stdio: ["ignore", "pipe", "pipe"] }
-  );
-}
-
-// Matches watch.ts's "watching N path(s) under ..." line, which it now
-// prints from chokidar's 'ready' event instead of unconditionally right
-// after chokidar.watch() (see src/commands/watch.ts). --verbose is required
-// for this line to print at all: writeInfo (src/output.ts) is a no-op
-// unless verbose is set — every spawnWatch call in this file passes
-// --verbose for that reason, not just for debugging.
-const WATCH_READY_PATTERN = /watching \d+ path\(s\) under/;
-const READY_TIMEOUT_MS = 10000;
-const TICK_TIMEOUT_MS = 20000;
-
-// Polls `getStderr()` until it matches WATCH_READY_PATTERN. Waiting for the
-// real "watch is now armed" signal instead of a fixed sleep() before the
-// edit that is meant to trigger a tick closes a real race on inotify-backed
-// watchers (Linux CI, and CI generally under load): chokidar's initial
-// recursive scan of the watched paths is not instantaneous there (unlike
-// fsevents on macOS, where local development happens), and a filesystem
-// write issued before that scan completes can be silently lost — chokidar
-// has not finished wiring up the inotify watch descriptors yet, so the edit
-// never produces an 'add'/'change' event, `watch` never ticks, and
-// `--max-runs 1` never terminates: the child process — and the `await` on
-// its exit below — hangs indefinitely. That is exactly the CI failure this
-// helper (plus withTickDeadline below) closes: previously this file relied
-// on the same fixed-sleep pattern the pre-existing watch-restore.test.ts
-// tests use, which is not immune to this race either — it simply had not
-// been observed failing there, which is a matter of luck/load, not a
-// structural guarantee, so it was not copied here as-is.
-function waitForWatcherReady(getStderr: () => string, timeoutMs = READY_TIMEOUT_MS): Promise<void> {
-  const start = Date.now();
-  return new Promise((resolve, reject) => {
-    const check = () => {
-      if (WATCH_READY_PATTERN.test(getStderr())) {
-        resolve();
-        return;
-      }
-      if (Date.now() - start > timeoutMs) {
-        reject(
-          new Error(
-            `timed out after ${timeoutMs}ms waiting for watch to report ready. stderr so far: ${getStderr() || "(empty)"}`
-          )
-        );
-        return;
-      }
-      setTimeout(check, 25);
-    };
-    check();
-  });
-}
-
-// Bounds `fn` (expected to await a spawned watch child reaching some
-// end state) to `timeoutMs`: if it has not settled in time, force-kills
-// `child` (SIGKILL — this tier exists specifically as a last-resort
-// guarantee, not a graceful shutdown) and rejects with a clear message
-// instead of hanging. Without this, a watcher-ready race (or any future
-// regression with the same shape: a tick that never completes) hangs not
-// just this test but the whole CI job — that is exactly what happened here:
-// "ci (agent-memory-sync)" ran for ~10 minutes past the last passing
-// subtest before being cancelled, orphaning the node/esbuild/watch child
-// processes. With this guard the same failure mode is a normal failing
-// assertion in well under a minute.
-async function withTickDeadline<T>(
-  child: ReturnType<typeof spawn>,
-  fn: () => Promise<T>,
-  timeoutMs = TICK_TIMEOUT_MS
-): Promise<T> {
-  let timer: NodeJS.Timeout | null = null;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-      reject(new Error(`watch tick did not complete within ${timeoutMs}ms — killed the child process`));
-    }, timeoutMs);
-  });
-
-  try {
-    return await Promise.race([fn(), timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-// Spawns `watch --max-runs 1`, waits for its "watching ..." ready line,
-// applies the local filesystem edit(s) via `triggerEdit`, then waits for the
-// single tick to complete and the process to exit — the whole sequence
-// bounded by withTickDeadline.
-async function runWatchTick(
-  configPath: string,
-  triggerEdit: () => void
-): Promise<{ exitCode: number; stderr: string }> {
-  const child = spawnWatch(
-    [
-      "watch",
-      "default",
-      "--config",
-      configPath,
-      "--debounce-ms",
-      "300",
-      "--max-runs",
-      "1",
-      "--verbose",
-      "--output",
-      "json"
-    ],
-    process.env
-  );
-
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-  });
-
-  try {
-    return await withTickDeadline(child, async () => {
-      await waitForWatcherReady(() => stderr);
-      triggerEdit();
-
-      const exitCode: number = await new Promise((resolve) => {
-        child.on("exit", (code: number | null) => resolve(code ?? -1));
-      });
-      return { exitCode, stderr };
-    });
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGINT");
-    }
-  }
 }
 
 test("watch tick does not delete a peer file that was pushed to the remote but never pulled locally", async () => {
