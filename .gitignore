@@ -1,3 +1,10 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# orchestrator-workflow run state: local orchestration bookkeeping, never committed.
+# Untracked run directories otherwise make the worktree dirty and fail the
+# clean-worktree preflight check.
+# Root-anchored on purpose: packages/*/.ai/ holds tracked per-package agent docs
+# (AGENTS.md, ARCHITECTURE.md, DECISIONS.md, TASKS.md) that must not be caught.
+/.ai/
