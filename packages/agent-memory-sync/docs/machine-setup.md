@@ -281,9 +281,14 @@ is `agent-memory-sync restore`:
 
 ```bash
 # Find a commit to roll back to (from any machine, or `ssh mini` + `git log`
-# directly against the bare repo). Use the FULL 40-char sha: abbreviated
-# shas cannot be fetched from a remote (git only serves full object names),
-# so `restore <short-sha>` fails with "could not fetch ref".
+# directly against the bare repo). An abbreviated sha works too as long as
+# the commit is reachable from the configured branch: `restore` resolves it
+# locally against the branch history its working copy already fetched, no
+# extra network round-trip needed. It only falls back to an explicit
+# `git fetch origin <sha>` (which only ever accepts a *full* object id from
+# a remote) for a sha that history does not already contain — and if that
+# still fails, the error says explicitly to use the full 40-char sha instead
+# of guessing why a short one did not resolve.
 agent-memory-sync restore <sha> --config profiles/<name>.json --dry-run
 
 # Roll back a single file — --path is relative to repositorySubdir, and

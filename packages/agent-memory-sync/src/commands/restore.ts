@@ -89,7 +89,14 @@ function registerRestoreCommand(program: import("commander").Command): void {
         gitClient.createTempRepoDir(runConfig.stateDir, "restore")
       );
 
-      gitClient.fetchRef(workingCopy.repoDir, sha);
+      // Skip the network-only fetchRef path entirely when `sha` (full or
+      // abbreviated) already resolves against objects prepareWorkingCopy
+      // just fetched (the whole branch history) — this is what makes an
+      // abbreviated sha work at all, since fetchRef's own `git fetch origin
+      // <ref>` cannot resolve one against the remote (see git-client.ts).
+      if (!gitClient.resolveLocalCommit(workingCopy.repoDir, sha)) {
+        gitClient.fetchRef(workingCopy.repoDir, sha);
+      }
 
       const targetRepoPaths = options.path
         ? [normalizeRequestedPath(runConfig.repositorySubdir, options.path)]

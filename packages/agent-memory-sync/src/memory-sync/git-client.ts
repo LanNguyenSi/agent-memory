@@ -138,11 +138,43 @@ class GitClient {
     return repoDir;
   }
 
+  // Resolves `ref` (full or abbreviated sha, branch/tag name) against
+  // objects the working copy already has locally — no network access.
+  // `restore`'s working copy is always prepared via prepareWorkingCopy(),
+  // which already ran a full `git fetch origin <branch>`, so every commit
+  // reachable from that branch tip (i.e. any commit `restore` could
+  // sensibly be asked for) is already present as a local object at this
+  // point, abbreviated shas included: git resolves an abbreviated ref
+  // against locally-known objects the same way regardless of how many
+  // characters were supplied. Returns null (rather than throwing) when the
+  // ref cannot be resolved locally, so callers can fall back to fetchRef.
+  resolveLocalCommit(repoDir: string, ref: string): string | null {
+    const result = this.run(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoDir, true);
+    if (result.exitCode !== 0) {
+      return null;
+    }
+    return result.stdout.trim() || null;
+  }
+
   fetchRef(repoDir: string, ref: string): void {
     const result = this.run(["fetch", "origin", ref], repoDir, true);
     if (result.exitCode !== 0) {
+      // `git fetch <remote> <ref>` only accepts a ref name or a *full*
+      // object id from the remote side — an abbreviated commit sha is
+      // never resolvable that way (unlike local ref resolution, which
+      // supports abbreviation freely). Surface that explicitly for a
+      // short-looking hex ref rather than leaving the reader to guess why
+      // it failed; see resolveLocalCommit above for the case (an
+      // abbreviated sha reachable from the configured branch) this
+      // fetchRef fallback path is not even reached for.
+      const looksLikeShortSha = ref.length < 40 && /^[0-9a-f]+$/i.test(ref);
       throw new CliError(
-        `could not fetch ref '${ref}' from remote. Verify the commit/branch exists and the remote is reachable.`,
+        `could not fetch ref '${ref}' from remote. Verify the commit/branch exists and the remote is reachable.` +
+          (looksLikeShortSha
+            ? ` '${ref}' is not reachable from the configured branch's already-fetched history, and an ` +
+              `abbreviated commit sha cannot be fetched directly from a remote (git only serves full object ` +
+              `names that way) — use the full 40-character sha instead.`
+            : ""),
         4
       );
     }

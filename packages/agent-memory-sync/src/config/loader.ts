@@ -305,12 +305,59 @@ function readEnvConfig(): UserConfig {
     );
   }
   if (env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND) {
-    config.reachabilityCheckCommand = normalizeReachabilityCheckCommand(
-      JSON.parse(env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND) as string[]
-    );
+    // Both failure modes below (invalid JSON syntax, and valid JSON of the
+    // wrong shape — including a falsy JSON value like `false`, which would
+    // otherwise slip past normalizeReachabilityCheckCommand's `if (!value)`
+    // guard silently) are caught here and turned into one visible warning
+    // instead of either a silent no-op (the live incident: `=false` quietly
+    // ran the default ssh probe with no explanation) or an uncaught
+    // exception that would crash the whole CLI invocation over a value only
+    // ever consulted if the remote turns out unreachable. The override is
+    // left unset on failure, so config.reachabilityCheckCommand keeps
+    // falling through to the config file / default below, same as if the
+    // env var had not been set at all.
+    try {
+      const parsedValue = JSON.parse(env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND);
+      // JSON.parse alone would happily accept any JSON value (a bare
+      // `false`, a number, a plain object, ...), and normalizeReachability
+      // CheckCommand's `if (!value) return null;` guard would then silently
+      // treat any *falsy* one of those (false, 0, "") as "not set" without
+      // ever reaching its own shape check below — this is exactly how the
+      // live incident's `=false` slipped through unnoticed. Requiring the
+      // parsed value to already be `null` or an array here, before handing
+      // off to the shared normalizer, closes that gap without changing
+      // normalizeReachabilityCheckCommand's behavior for its other callers
+      // (config file, `config set`), which is unrelated to this env-only fix.
+      if (parsedValue !== null && !Array.isArray(parsedValue)) {
+        throw new CliError(
+          `must be a JSON array of non-empty strings (argv form) or JSON null, got ${typeof parsedValue}.`,
+          3
+        );
+      }
+      config.reachabilityCheckCommand = normalizeReachabilityCheckCommand(parsedValue as string[] | null);
+    } catch (error) {
+      warnUnparsableReachabilityCheckCommandEnv(
+        env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND,
+        error
+      );
+    }
   }
 
   return config;
+}
+
+// Always printed (not gated by --quiet/--verbose, which are not resolved
+// yet at this point in config loading anyway): a misconfigured reachability
+// probe override silently substituting the default is exactly the failure
+// mode this warning exists to surface, so it must not itself be silenceable.
+function warnUnparsableReachabilityCheckCommandEnv(rawValue: string, error: unknown): void {
+  const reason = error instanceof Error ? error.message : String(error);
+  process.stderr.write(
+    `warning: ignoring env AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND='${rawValue}' ` +
+      `(${reason}). Expected a JSON array of non-empty strings (argv form), e.g. ` +
+      `'["ssh","-o","BatchMode=yes","-o","ConnectTimeout=4","host","true"]'. Falling back to ` +
+      `the default reachability probe.\n`
+  );
 }
 
 function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {

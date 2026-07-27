@@ -195,7 +195,7 @@ Options:
   --help
 ```
 
-A full-tree restore requires `--yes` (or `--dry-run` to preview); a single file via `--path MEMORY.md` does not. Files are written byte-identical to their contents at `<sha>`. The command refuses to map a remote path that does not match an entry in `syncPaths`, so a restore cannot scatter files outside the configured workspace. An unknown SHA or a path that did not exist at that commit fails loudly.
+A full-tree restore requires `--yes` (or `--dry-run` to preview); a single file via `--path MEMORY.md` does not. Files are written byte-identical to their contents at `<sha>`. The command refuses to map a remote path that does not match an entry in `syncPaths`, so a restore cannot scatter files outside the configured workspace. An unknown SHA or a path that did not exist at that commit fails loudly. `<sha>` may be abbreviated as long as the commit is reachable from the configured branch — it resolves locally against the branch history the command already fetches, no extra network round-trip; a short sha that is not reachable that way fails loudly with an explicit "use the full 40-character sha" message, since a plain `git fetch <remote> <ref>` only ever accepts a full object id from a remote.
 
 ```bash
 # Roll back MEMORY.md to a specific commit
@@ -290,7 +290,11 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   is left untouched. Tune the timeout with `--reachability-timeout-ms` / `reachabilityTimeoutMs`
   (default 4000ms), or fully override the probe with `reachabilityCheckCommand` (an argv array;
   config file / `AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND` only, no CLI flag — same pattern
-  as `syncPaths`)
+  as `syncPaths`). The env form must be a JSON array of non-empty strings (e.g.
+  `["ssh","-o","BatchMode=yes","host","true"]`); a value that fails to parse that way (invalid
+  JSON, or valid JSON of the wrong shape — a bare `false`, a string, an object, ...) prints a
+  visible warning naming the offending value and falls back to the default probe, instead of
+  either crashing the CLI or silently substituting the default with no explanation
 - failed pushes (including ones skipped by the reachability precheck) are queued locally in
   `stateDir/queue` and replayed on the next successful push
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers

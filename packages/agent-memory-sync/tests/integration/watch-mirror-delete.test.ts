@@ -271,6 +271,46 @@ test("watch tick queues locally when the remote is unreachable, then replays the
   assert.equal(readText(path.join(inspection, "shared", "logs", "trigger.md")), "trigger\n");
 });
 
+// Counterpart to the queue-replay test above (agent-tasks
+// 1b63070d-9ea1-4a38-bba0-e58a4678b596): the reachability precheck softens
+// watch's push failure handling for one specific class of failure — the
+// remote being unreachable — into a clean, non-throwing queue. It must not
+// soften anything else. A genuine config/data error (README.md's own
+// example: a required `syncPaths` entry missing) is raised by
+// collectLocalSyncFiles() before performPush's reachability precheck or its
+// try/catch are ever reached (see src/memory-sync/push.ts), so it still
+// propagates all the way out to watch's handleSnapshotError and exits
+// non-zero — preserving the supervisor-respawn semantics (launchd
+// KeepAlive/ThrottleInterval, systemd's StartLimitIntervalSec/-Burst) that
+// this class of failure relies on. The remote here is a real, reachable
+// bare repo, isolating the assertion from reachability entirely.
+test("watch tick with a missing required syncPaths entry still exits non-zero, independent of remote reachability", async () => {
+  const root = createSandbox("watch-required-syncpath-missing");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    syncPaths: [
+      { source: "MEMORY.md", destination: "MEMORY.md", kind: "file" },
+      { source: "REQUIRED.md", destination: "REQUIRED.md", kind: "file", required: true }
+    ]
+  });
+
+  const { exitCode, stderr } = await runWatchTick(configPath, () => {
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\nlocal edit\n");
+  });
+
+  assert.notEqual(
+    exitCode,
+    0,
+    `watch was expected to crash loudly on a missing required sync path; it exited 0 instead. stderr: ${stderr}`
+  );
+  assert.match(stderr, /required sync path/i);
+});
+
 // Rework finding (LOW, review of this task): pins that a successful tick
 // updates stateDir/base to the post-merge remote state — the input the next
 // tick's 3-way merge relies on to correctly leave an unpulled peer file

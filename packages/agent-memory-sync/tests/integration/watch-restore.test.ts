@@ -319,4 +319,78 @@ test("restore rejects an unknown sha with a loud non-zero exit", () => {
   );
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /fetch|deadbeef|not.+exist/i);
+  // Pins the AC-3 hint: `deadbeef` is short (8 hex chars), and unresolvable
+  // both locally and via an explicit remote fetch (see the short-sha tests
+  // below for the resolvable case), so the error should say outright that a
+  // full 40-character sha is required instead of leaving the reader to
+  // guess why a seemingly valid-looking hex string failed.
+  assert.match(result.stderr, /40.character sha/i);
+});
+
+// Reproduces the documented restore-short-sha failure (README.md's restore
+// section, docs/machine-setup.md): `git fetch origin <ref>` only accepts a
+// ref name or a *full* object id from a remote — an abbreviated commit sha
+// is never resolvable that way, so restore used to fail with a bare "could
+// not fetch ref" even though the commit is right there in history.
+//
+// Fix: restore's working copy is prepared via prepareWorkingCopy(), which
+// already runs a full `git fetch origin <branch>` and so already has every
+// commit reachable from that branch tip as a local object — the short sha
+// is resolvable locally (no network round-trip needed) via `git rev-parse
+// --verify` before ever attempting the remote-only fetchRef path. This
+// pins the common case (restoring from an older commit on the configured
+// branch, the only realistic use of `restore`) actually working with a
+// short sha, not just a friendlier error message.
+test("restore <short-sha> resolves against the already-fetched branch history and restores successfully", () => {
+  const root = createSandbox("restore-short-sha");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "snapshot 1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const inspection = cloneRemote(remoteDir, root, "rev1");
+  const fullSha = git(["rev-parse", "HEAD"], inspection).trim();
+  const shortSha = git(["rev-parse", "--short", "HEAD"], inspection).trim();
+  assert.ok(shortSha.length < fullSha.length, "test fixture assumption: short sha must be abbreviated");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "snapshot 2\n");
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const result = runCli([
+    "restore",
+    shortSha,
+    "--config",
+    configPath,
+    "--path",
+    "MEMORY.md",
+    "--output",
+    "json"
+  ]);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.restored.length, 1);
+  assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "snapshot 1\n");
+});
+
+test("restore <short-sha> that is not reachable from the configured branch fails loudly with an explicit full-sha hint", () => {
+  const root = createSandbox("restore-short-sha-unreachable");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "v1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // A well-formed but short hex string that is not a prefix of any object
+  // reachable from the branch (nor known to the remote at all) — neither
+  // local resolution nor the fallback remote fetchRef can succeed.
+  const result = runCli(
+    ["restore", "0123abc", "--config", configPath, "--yes", "--output", "json"],
+    { expectFailure: true }
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /40.character sha/i);
 });
