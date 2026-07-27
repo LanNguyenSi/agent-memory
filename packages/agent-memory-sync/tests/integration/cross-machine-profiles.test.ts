@@ -155,4 +155,65 @@ test("profiles/macbook.json, profiles/mac-mini.json, and profiles/linux.example.
         "in src/memory-sync/config.ts); the 'profile' field is local-only and may differ"
     );
   }
+
+  // Pin the frictions syncPaths entry (agent-tasks 343d5a8f) directly
+  // against each committed profile file — deliberately placed in THIS test,
+  // not the live push/pull E2E test above, because this one parses the
+  // profile JSON via settingsByFile and never touches a real machine's home
+  // directory, so it stays green even where the E2E test's EACCES failure
+  // (mac-mini.json's hardcoded /Users/lannguyensi paths on a machine that
+  // isn't the mini) applies. Without this block, reverting the three
+  // profiles' new syncPaths entry left the suite fully green — nothing else
+  // reads the committed profile files for this entry.
+  function findEntriesByDestination(
+    syncPaths: Array<Record<string, unknown>> | undefined,
+    destination: string
+  ): Array<Record<string, unknown>> {
+    return (syncPaths || []).filter((entry) => entry.destination === destination);
+  }
+
+  for (const file of profileFiles) {
+    const frictionsEntries = findEntriesByDestination(settingsByFile[file].syncPaths, "frictions");
+    assert.equal(
+      frictionsEntries.length,
+      1,
+      `profiles/${file} must declare exactly one syncPaths entry with destination 'frictions', found ${frictionsEntries.length}`
+    );
+    const [frictionsEntry] = frictionsEntries;
+    assert.equal(frictionsEntry.kind, "directory", `profiles/${file} frictions entry must be kind 'directory'`);
+    assert.ok(
+      typeof frictionsEntry.source === "string" && path.isAbsolute(frictionsEntry.source as string),
+      `profiles/${file} frictions entry source must be an absolute path, got: ${JSON.stringify(frictionsEntry.source)}`
+    );
+    assert.ok(
+      (frictionsEntry.source as string).endsWith("/.harness/frictions"),
+      `profiles/${file} frictions entry source must end with '/.harness/frictions', got: ${frictionsEntry.source}`
+    );
+    assert.ok(
+      !frictionsEntry.required,
+      `profiles/${file} frictions entry must not be required (missing-source tolerance is the point)`
+    );
+  }
+
+  // Same pin for the pre-existing machine-state entry, closing the identical
+  // #64 coverage gap — macbook.json and mac-mini.json only, since
+  // linux.example.json's template has never carried a machine-state entry.
+  for (const file of ["macbook.json", "mac-mini.json"]) {
+    const machineStateEntries = findEntriesByDestination(settingsByFile[file].syncPaths, "machine-state");
+    assert.equal(
+      machineStateEntries.length,
+      1,
+      `profiles/${file} must declare exactly one syncPaths entry with destination 'machine-state', found ${machineStateEntries.length}`
+    );
+    const [machineStateEntry] = machineStateEntries;
+    assert.equal(machineStateEntry.kind, "directory", `profiles/${file} machine-state entry must be kind 'directory'`);
+    assert.ok(
+      typeof machineStateEntry.source === "string" && path.isAbsolute(machineStateEntry.source as string),
+      `profiles/${file} machine-state entry source must be an absolute path, got: ${JSON.stringify(machineStateEntry.source)}`
+    );
+    assert.ok(
+      (machineStateEntry.source as string).endsWith("/.harness/machine-state"),
+      `profiles/${file} machine-state entry source must end with '/.harness/machine-state', got: ${machineStateEntry.source}`
+    );
+  }
 });

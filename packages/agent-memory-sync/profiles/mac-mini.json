@@ -117,6 +117,7 @@
   "reachabilityTimeoutMs": 5000,
   "syncPaths": [
     { "source": ".", "destination": "memory", "kind": "directory" },
-    { "source": "/Users/lannguyensi/.harness/machine-state", "destination": "machine-state", "kind": "directory" }
+    { "source": "/Users/lannguyensi/.harness/machine-state", "destination": "machine-state", "kind": "directory" },
+    { "source": "/Users/lannguyensi/.harness/frictions", "destination": "frictions", "kind": "directory" }
   ]
 }

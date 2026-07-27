@@ -19,14 +19,17 @@ This document wires together the pieces already documented individually
   per-machine value (mirroring the profile name) — that made every machine
   write to its own top-level tree in the bare repo and none of them ever
   saw each other's pushes, caught by a live cross-machine E2E test
-  (`pull` reporting `applied=0`). `syncPaths` in every profile is a single
-  `source: "."` directory entry with `destination: "memory"`, so the whole
-  `rootDir` (flat `.md` files, no fixed subdirectory layout) syncs to
-  `pandora/memory/...` in the bare repo, including any file added later. The
-  directory walk skips hidden files/dot-directories (`.DS_Store`, `._*`
-  AppleDouble shadows, `.git`, ...) by design — macOS cruft never becomes a
-  synced file or a recurring inline-conflict-marker diff between machines —
-  and it never follows symlinks under `rootDir` either (silently skipped,
+  (`pull` reporting `applied=0`). The `memory` entry in every profile's
+  `syncPaths` — a `source: "."` directory entry with `destination:
+  "memory"` — covers the whole `rootDir` (flat `.md` files, no fixed
+  subdirectory layout), so it syncs to `pandora/memory/...` in the bare
+  repo, including any file added later (profiles carry further,
+  independent `syncPaths` entries beyond this one — see (e) and (f)
+  below). The directory walk skips hidden files/dot-directories
+  (`.DS_Store`, `._*` AppleDouble shadows, `.git`, ...) by design — macOS
+  cruft never becomes a synced file or a recurring inline-conflict-marker
+  diff between machines — and it never follows symlinks under `rootDir`
+  either (silently skipped,
   not descended into; intentional containment). See `isHiddenEntryName` in
   `src/memory-sync/config.ts` / `src/memory-sync/git-client.ts`.
 - Conflict strategy is `inline-markers` everywhere — concurrent edits that
@@ -298,10 +301,12 @@ is `agent-memory-sync restore`:
 # of guessing why a short one did not resolve.
 agent-memory-sync restore <sha> --config profiles/<name>.json --dry-run
 
-# Roll back a single file — --path is relative to repositorySubdir, and
-# every profile's syncPaths destination is "memory" (see the shared remote
-# tree bullet at the top of this document), so the path is memory/<file>,
-# not just the bare filename:
+# Roll back a single file — --path is relative to repositorySubdir. Only
+# the memory tree's syncPaths destination is "memory" (see the shared
+# remote tree bullet at the top of this document); the other payloads
+# (machine-state, frictions) use their own destinations instead — see
+# (e)/(f) below. So a memory file's path is memory/<file>, not just the
+# bare filename:
 agent-memory-sync restore <sha> --config profiles/<name>.json --path memory/MEMORY.md
 
 # Roll back the entire synced tree (requires --yes)
@@ -337,7 +342,7 @@ one described at the top of this document:
 Unlike the `memory` entry, `source` here is an **absolute path outside
 `rootDir`** — `~/.harness/machine-state`, not anywhere under the Claude Code
 memory directory — pointing at a per-machine toolchain-snapshot directory
-maintained by the (upcoming) harness companion `session-start
+maintained by the (shipped) harness companion `session-start
 toolchain-parity`. `resolveWorkspacePath` in `src/memory-sync/config.ts`
 treats an absolute `source` as-is instead of resolving it against `rootDir`,
 so this entry syncs on its own schedule independent of the memory tree; both
@@ -390,3 +395,52 @@ peer's snapshot is pulled down, so no manual `mkdir` step is required during
 machine setup either — though the harness companion consuming these files
 may still create the directory itself on first run if it expects it to
 exist ahead of any sync.
+
+## f) frictions payload (friction-log exports)
+
+Every committed profile (`profiles/mac-mini.json`, `profiles/macbook.json`,
+`profiles/linux.example.json`) also carries an **independent** `syncPaths`
+entry pointing at `~/.harness/frictions` — the third entry in
+`mac-mini.json`/`macbook.json` (after `memory` and `machine-state`), and
+the second in `linux.example.json` (that template does not yet include a
+`machine-state` entry):
+
+```json
+{ "source": "/Users/<user>/.harness/frictions", "destination": "frictions", "kind": "directory" }
+```
+
+Same convention as the machine-state payload in section e) above: one file
+per machine, named after its own profile (`frictions/mac-mini.json`,
+`frictions/macbook.json`, ...), owner-writes-only, and never any secret —
+the directory is synced into the shared, committed remote, so anything
+dropped there ends up in every peer's git history.
+
+**Producer convention.** Each machine configures `friction-log`'s
+`sync_export.path` setting to `~/.harness/frictions/<its own profile>.json`
+(e.g. `~/.harness/frictions/mac-mini.json`) — `friction-log` writes exactly
+that configured path and never derives a filename of its own, so the
+owner-writes-only convention above is carried entirely by that per-machine
+config, not by anything in this package. The file is also kept current via
+write-through from `friction-log`'s six mutating commands, not only by the
+dedicated `sync-export` verb, so `frictions/<profile>.json` can reflect a
+mutation made through any of those commands, not just an explicit export
+step. This producer (`friction-log`, config-gated) is shipped in
+`agent-dx`, not in this repo; this `syncPaths` entry only carries the
+resulting file, it does not generate it.
+
+The same missing-source tolerance and `mkdir -p`-on-pull behavior described
+above for `machine-state` apply here unchanged, since both are plain
+non-required, absolute-source, directory-kind `syncPaths` entries handled
+by the same code path. The same `watch` caveats from section e) apply too:
+`watch` only pushes and never pulls, so a peer's `frictions/<peer>.json`
+only shows up locally after the next `pull`/`sync`; and `watch` only
+detects this machine's own very first local write into `frictions/` if
+`~/.harness` already existed when `watch` started — on a truly fresh
+machine the first export travels via the periodic sync job or after a
+`watch` restart instead.
+
+**Exposure note.** Friction-log records are free text. Like every other
+payload in this document, anything written into
+`~/.harness/frictions/<profile>.json` is synced into the shared, committed
+remote and therefore counts as published into every peer's git history —
+redact anything sensitive before logging it, not after.

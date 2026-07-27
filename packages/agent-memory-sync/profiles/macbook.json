@@ -110,6 +110,11 @@
       "source": "/Users/lan/.harness/machine-state",
       "destination": "machine-state",
       "kind": "directory"
+    },
+    {
+      "source": "/Users/lan/.harness/frictions",
+      "destination": "frictions",
+      "kind": "directory"
     }
   ]
 }
