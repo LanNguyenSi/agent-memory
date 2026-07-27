@@ -89,12 +89,30 @@ function registerRestoreCommand(program: import("commander").Command): void {
         gitClient.createTempRepoDir(runConfig.stateDir, "restore")
       );
 
-      gitClient.fetchRef(workingCopy.repoDir, sha);
+      // Skip the network-only fetchRef path entirely when `sha` (full or
+      // abbreviated) already resolves against objects prepareWorkingCopy
+      // just fetched (the whole branch history) — this is what makes an
+      // abbreviated sha work at all, since fetchRef's own `git fetch origin
+      // <ref>` cannot resolve one against the remote (see git-client.ts).
+      // Capture the resolved FULL sha and use it for every subsequent git
+      // call and in the reported payload below, instead of re-resolving the
+      // (possibly abbreviated) `sha` the operator typed on every call and
+      // reporting the abbreviation rather than the commit actually restored
+      // from. `|| sha` is a defensive fallback for the practically-unreachable
+      // case where fetchRef succeeds but the ref still doesn't resolve
+      // locally afterwards (e.g. it named a non-commit object) — preserves
+      // this file's prior behavior (operate on the as-typed ref) rather than
+      // introducing a new failure mode for that corner.
+      let resolvedSha = gitClient.resolveLocalCommit(workingCopy.repoDir, sha);
+      if (!resolvedSha) {
+        gitClient.fetchRef(workingCopy.repoDir, sha);
+        resolvedSha = gitClient.resolveLocalCommit(workingCopy.repoDir, sha) || sha;
+      }
 
       const targetRepoPaths = options.path
         ? [normalizeRequestedPath(runConfig.repositorySubdir, options.path)]
         : gitClient
-            .listTreePaths(workingCopy.repoDir, sha, runConfig.repositorySubdir)
+            .listTreePaths(workingCopy.repoDir, resolvedSha, runConfig.repositorySubdir)
             .filter((p: string) => p.startsWith(`${runConfig.repositorySubdir}/`));
 
       if (targetRepoPaths.length === 0) {
@@ -116,7 +134,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
           );
         }
 
-        const content = gitClient.showAtRef(workingCopy.repoDir, sha, repoRelativePath);
+        const content = gitClient.showAtRef(workingCopy.repoDir, resolvedSha, repoRelativePath);
         if (content === null) {
           throw new CliError(
             `file '${repoRelativePath}' does not exist at ${sha}.`,
@@ -141,7 +159,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
 
       const payload = {
         command: "restore",
-        sha,
+        sha: resolvedSha,
         dryRun: options.dryRun,
         repositorySubdir: runConfig.repositorySubdir,
         restored

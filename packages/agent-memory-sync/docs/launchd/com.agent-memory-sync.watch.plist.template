@@ -46,22 +46,39 @@
                           the log paths below)
 
   KeepAlive / ThrottleInterval, and why:
-    `watch` does NOT use the reachability precheck (src/memory-sync/
-    reachability.ts) — that precheck only covers `run`'s pull/push/sync. Any
-    network failure during `watch` — the mini being unreachable, an expired
-    credential, a rejected push, a filesystem error — surfaces as a
-    non-zero exit "by design" (see README.md #systemd-unit) with no
-    precheck softening it. KeepAlive's SuccessfulExit=false mirrors that:
-    launchd respawns on a crash (non-zero exit) but does not respawn after a
-    clean shutdown. ThrottleInterval caps the respawn rate so a
-    persistently failing cause (mini down, bad ssh key, permanently
-    rejected push) does not spin the CPU in a restart loop — this is
+    `watch`'s push goes through the same base-snapshot-aware `performPush`
+    (src/memory-sync/push.ts) that `run`'s pull/push/sync use, so it gets
+    the same reachability precheck (src/memory-sync/reachability.ts): an
+    unreachable mini, or a push the remote rejects (auth, non-fast-forward,
+    network), is queued locally (stateDir/queue) and replayed on the next
+    successful tick or `run`, with a clean exit 0 — no crash, no respawn.
+    This is a deliberate contract change from watch's earlier behavior
+    (where any push failure, including a merely unreachable remote, exited
+    non-zero and relied on launchd to restart the process); see README.md's
+    `watch` section and docs/machine-setup.md for the exact boundary. The
+    queue-instead-of-crash handling is narrow, not a general catch-all:
+    only a failure GitClient.lookupRemoteHead / GitClient.push attributes
+    to the remote itself (unreachable, rejected, non-fast-forward — see
+    RemoteUnavailableError in src/errors.ts) is queued. Errors raised
+    while collecting local sync files, before the remote working copy is
+    even prepared (e.g. a required `syncPaths` entry missing), and any
+    other git-level failure while that working copy is being prepared or
+    committed (a full disk, a corrupted git config, a broken commit hook,
+    ...) still surface as a non-zero exit "by design" (see README.md
+    #systemd-unit) — those are what KeepAlive/ThrottleInterval below are
+    sized for. KeepAlive's SuccessfulExit=false mirrors that: launchd
+    respawns on a crash (non-zero exit) but does not respawn after a clean
+    shutdown (including the clean exit 0 the queued-offline case above now
+    produces). ThrottleInterval caps the respawn rate so a persistently
+    broken cause does not spin the CPU in a restart loop — this is
     launchd's rough equivalent of systemd's StartLimitIntervalSec/
     StartLimitBurst pairing, just as a single minimum gap between attempts
     rather than a burst counter.
 
-    Because `watch` alone gives no offline queueing here, pair this job
-    with the periodic-sync companion,
+    Offline edits still only reach the remote once this machine's own
+    `watch` next runs successfully (or the periodic sync companion below
+    replays the queue) — `watch` remains edge-triggered and does not pull,
+    so pair this job with the periodic-sync companion,
     com.agent-memory-sync.sync.plist.template — see its header and
     docs/machine-setup.md for why that companion is required, not optional.
 -->

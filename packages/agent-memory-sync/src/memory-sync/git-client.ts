@@ -1,7 +1,7 @@
 const { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const path = require("node:path");
-const { CliError } = require("../errors");
+const { CliError, RemoteUnavailableError } = require("../errors");
 
 interface GitCommandResult {
   stdout: string;
@@ -53,9 +53,12 @@ class GitClient {
     );
 
     if (result.exitCode !== 0) {
-      throw new CliError(
-        `could not reach remote git repository '${remoteUrl}'. Check connectivity and repository access.`,
-        4
+      // RemoteUnavailableError, not plain CliError: this is one of the two
+      // recognized "the remote itself is the problem" sites performPush's
+      // catch (memory-sync/push.ts) queues instead of crashing on — see
+      // errors.ts for why that distinction exists and matters.
+      throw new RemoteUnavailableError(
+        `could not reach remote git repository '${remoteUrl}'. Check connectivity and repository access.`
       );
     }
 
@@ -114,16 +117,19 @@ class GitClient {
   }
 
   push(repoDir: string, branch: string): void {
+    // Both throws below are RemoteUnavailableError, not plain CliError — see
+    // the errors.ts comment: these are the second of the two recognized
+    // "the remote is the problem" sites performPush's catch queues instead
+    // of crashing on (the other is lookupRemoteHead above).
     const result = this.run(["push", "origin", `HEAD:refs/heads/${branch}`], repoDir, true);
     if (result.exitCode !== 0) {
       if (/\[rejected\]|fetch first|non-fast-forward/i.test(result.stderr)) {
-        throw new CliError(
-          "remote branch changed during push. Re-run the sync to merge against the latest remote state.",
-          4
+        throw new RemoteUnavailableError(
+          "remote branch changed during push. Re-run the sync to merge against the latest remote state."
         );
       }
 
-      throw new CliError("git push failed. Check repository access and branch permissions.", 4);
+      throw new RemoteUnavailableError("git push failed. Check repository access and branch permissions.");
     }
   }
 
@@ -138,11 +144,52 @@ class GitClient {
     return repoDir;
   }
 
+  // Resolves `ref` — a hex commit sha, full or abbreviated — against objects
+  // the working copy already has locally, no network access, and returns
+  // the full sha. Precondition: callers must have already validated `ref`
+  // looks like a hex sha (restore.ts does this with its own
+  // `/^[0-9a-f]{4,64}$/i` check before ever reaching this method). This
+  // does not special-case branch/tag names as a *supported* input even
+  // though the underlying `git rev-parse ref^{commit}` would resolve one of
+  // those too (e.g. "HEAD", "HEAD~1", a branch name) — nothing unsafe
+  // reaches this method today only because its one caller pre-validates the
+  // hex shape in a different file; do not start passing it unvalidated
+  // input on the assumption that it accepts anything `git rev-parse` does.
+  // `restore`'s working copy is always prepared via prepareWorkingCopy(),
+  // which already ran a full `git fetch origin <branch>`, so every commit
+  // reachable from that branch tip (i.e. any commit `restore` could
+  // sensibly be asked for) is already present as a local object at this
+  // point, abbreviated shas included: git resolves an abbreviated ref
+  // against locally-known objects the same way regardless of how many
+  // characters were supplied. Returns null (rather than throwing) when the
+  // ref cannot be resolved locally, so callers can fall back to fetchRef.
+  resolveLocalCommit(repoDir: string, ref: string): string | null {
+    const result = this.run(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoDir, true);
+    if (result.exitCode !== 0) {
+      return null;
+    }
+    return result.stdout.trim() || null;
+  }
+
   fetchRef(repoDir: string, ref: string): void {
     const result = this.run(["fetch", "origin", ref], repoDir, true);
     if (result.exitCode !== 0) {
+      // `git fetch <remote> <ref>` only accepts a ref name or a *full*
+      // object id from the remote side — an abbreviated commit sha is
+      // never resolvable that way (unlike local ref resolution, which
+      // supports abbreviation freely). Surface that explicitly for a
+      // short-looking hex ref rather than leaving the reader to guess why
+      // it failed; see resolveLocalCommit above for the case (an
+      // abbreviated sha reachable from the configured branch) this
+      // fetchRef fallback path is not even reached for.
+      const looksLikeShortSha = ref.length < 40 && /^[0-9a-f]+$/i.test(ref);
       throw new CliError(
-        `could not fetch ref '${ref}' from remote. Verify the commit/branch exists and the remote is reachable.`,
+        `could not fetch ref '${ref}' from remote. Verify the commit/branch exists and the remote is reachable.` +
+          (looksLikeShortSha
+            ? ` '${ref}' is not reachable from the configured branch's already-fetched history, and an ` +
+              `abbreviated commit sha cannot be fetched directly from a remote (git only serves full object ` +
+              `names that way) — use the full 40-character sha instead.`
+            : ""),
         4
       );
     }

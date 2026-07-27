@@ -138,7 +138,7 @@ StartLimitBurst=10
 WantedBy=multi-user.target
 ```
 
-The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the class of failure that still exits non-zero — a config/data error such as a required `syncPaths` entry missing — so a persistently broken config does not crashloop forever; a network hiccup or a rejected push no longer exits at all (see below), so it never spends this budget. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on that remaining class of failure.
+The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the failures that still exit non-zero — a config/data error raised before the remote working copy is prepared (e.g. a required `syncPaths` entry missing), or any other git-level failure while preparing/committing that working copy (a full disk, a corrupted git config, a broken commit hook, ...) — so a persistently broken cause does not crashloop forever; a remote that is merely unreachable or rejecting the push (see below) no longer exits at all, so it never spends this budget. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on one of those failures.
 
 macOS equivalent (LaunchAgent instead of systemd): see
 [`docs/launchd/com.agent-memory-sync.watch.plist.template`](docs/launchd/com.agent-memory-sync.watch.plist.template)
@@ -152,10 +152,16 @@ remote rejects (auth, non-fast-forward, network), is queued locally
 (`stateDir/queue`) and replayed on the next successful `watch` tick or
 `run`, with a clean exit `0`. This is a deliberate contract change from an
 earlier version of `watch`, where any push failure exited non-zero and
-relied on launchd/systemd to restart the process; a genuine config/data
-error (e.g. a required `syncPaths` entry missing) is the only class of
-failure that still exits non-zero and reaches the supervisor-restart path
-described above.
+relied on launchd/systemd to restart the process. The queue-instead-of-crash
+handling is narrow, not a general catch-all: only a failure that
+`GitClient.lookupRemoteHead` / `GitClient.push` attributes to the remote
+itself (unreachable, rejected, non-fast-forward — see `RemoteUnavailableError`
+in `src/errors.ts`) is queued. Every other failure still exits non-zero and
+reaches the supervisor-restart path described above — a config/data error
+raised before the remote working copy is even prepared (e.g. a required
+`syncPaths` entry missing), and any other git-level failure while that
+working copy is being prepared or committed (a full disk, a corrupted git
+config, a broken commit hook, ...).
 
 `watch` still never pulls — it is edge-triggered on local changes only, so a
 machine that was offline while changes landed elsewhere will not pick them
@@ -195,7 +201,7 @@ Options:
   --help
 ```
 
-A full-tree restore requires `--yes` (or `--dry-run` to preview); a single file via `--path MEMORY.md` does not. Files are written byte-identical to their contents at `<sha>`. The command refuses to map a remote path that does not match an entry in `syncPaths`, so a restore cannot scatter files outside the configured workspace. An unknown SHA or a path that did not exist at that commit fails loudly.
+A full-tree restore requires `--yes` (or `--dry-run` to preview); a single file via `--path MEMORY.md` does not. Files are written byte-identical to their contents at `<sha>`. The command refuses to map a remote path that does not match an entry in `syncPaths`, so a restore cannot scatter files outside the configured workspace. An unknown SHA or a path that did not exist at that commit fails loudly. `<sha>` may be abbreviated as long as the commit is reachable from the configured branch — it resolves locally against the branch history the command already fetches, no extra network round-trip; a short sha that is not reachable that way fails loudly with an explicit "use the full 40-character sha" message, since a plain `git fetch <remote> <ref>` only ever accepts a full object id from a remote.
 
 ```bash
 # Roll back MEMORY.md to a specific commit
@@ -290,7 +296,17 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   is left untouched. Tune the timeout with `--reachability-timeout-ms` / `reachabilityTimeoutMs`
   (default 4000ms), or fully override the probe with `reachabilityCheckCommand` (an argv array;
   config file / `AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND` only, no CLI flag — same pattern
-  as `syncPaths`)
+  as `syncPaths`). The env form must be a JSON array of non-empty strings (e.g.
+  `["ssh","-o","BatchMode=yes","host","true"]`); a value that fails to parse that way (invalid
+  JSON, or valid JSON of the wrong shape — a bare `false`, a string, an object, ...) prints a
+  visible warning naming the offending value and falls back to the default probe, instead of
+  either crashing the CLI or silently substituting the default with no explanation. An empty
+  string is the one exception: it is treated as unset, silently, same as the env var not being
+  set at all — a deliberate convention (an unset/cleared shell variable commonly round-trips as
+  `""`), not a warning candidate. To actually disable the probe (always treat the remote as
+  reachable and let the real git operation surface any failure on its own), set
+  `reachabilityCheckCommand` to a command that always exits `0`, e.g. `["true"]` — there is no
+  separate on/off switch, this is the supported way to opt out
 - failed pushes (including ones skipped by the reachability precheck) are queued locally in
   `stateDir/queue` and replayed on the next successful push
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers

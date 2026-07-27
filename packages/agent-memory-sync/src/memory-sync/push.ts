@@ -2,6 +2,7 @@ const {
   collectLocalSyncFiles,
   toRepositoryRelativePath
 } = require("./config");
+const { RemoteUnavailableError } = require("../errors");
 const { GitClient } = require("./git-client");
 const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
@@ -155,6 +156,23 @@ async function performPush(config: PushConfig, options: PushOptions) {
       notes: queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []
     };
   } catch (error) {
+    // Only a RemoteUnavailableError (thrown exclusively from
+    // GitClient.lookupRemoteHead and GitClient.push — see errors.ts) is
+    // queued instead of crashing: those are the two operations that can
+    // fail because the *remote* is unavailable or rejecting the push. Any
+    // other error raised inside this try block (prepareWorkingCopy's own
+    // init/fetch/checkout, applySnapshotToWorkingCopy's file writes,
+    // commitAll, collectRemoteFiles, any StateStore write — a full disk, a
+    // broken commit hook, a corrupted git config, ...) re-throws, so it
+    // still crashes loud and reaches the supervisor-restart path (launchd
+    // KeepAlive, systemd StartLimit*) instead of being misreported as a
+    // benign "remote unavailable" queue. See
+    // tests/integration/watch-mirror-delete.test.ts's "non-network git
+    // failure inside the push" test for the case this guards against.
+    if (!(error instanceof RemoteUnavailableError)) {
+      throw error;
+    }
+
     return enqueueCurrentSnapshot(
       stateStore,
       currentLocalMap,

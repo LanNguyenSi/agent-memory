@@ -43,9 +43,16 @@ This document wires together the pieces already documented individually
   deliberate contract change from `watch`'s earlier behavior, where any push
   failure (including a merely unreachable remote) surfaced as a non-zero
   exit and relied on launchd/systemd to restart the process; see the
-  README.md `watch` section for the exact new boundary — a genuine
-  config/data error (e.g. a required `syncPaths` entry missing) still exits
-  non-zero, only network/git-push-level failures are now queued instead.
+  README.md `watch` section for the exact new boundary. The
+  queue-instead-of-crash handling is narrow, not a general catch-all: only a
+  failure `GitClient.lookupRemoteHead` / `GitClient.push` attributes to the
+  remote itself (unreachable, rejected, non-fast-forward — see
+  `RemoteUnavailableError` in `src/errors.ts`) is queued. Errors raised
+  while collecting local sync files, before the remote working copy is even
+  prepared (e.g. a required `syncPaths` entry missing), and any other
+  git-level failure while that working copy is being prepared or committed
+  (a full disk, a corrupted git config, a broken commit hook, ...) still
+  exit non-zero.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
   *this* machine's local files change; it never reads from the remote. Its
@@ -281,9 +288,14 @@ is `agent-memory-sync restore`:
 
 ```bash
 # Find a commit to roll back to (from any machine, or `ssh mini` + `git log`
-# directly against the bare repo). Use the FULL 40-char sha: abbreviated
-# shas cannot be fetched from a remote (git only serves full object names),
-# so `restore <short-sha>` fails with "could not fetch ref".
+# directly against the bare repo). An abbreviated sha works too as long as
+# the commit is reachable from the configured branch: `restore` resolves it
+# locally against the branch history its working copy already fetched, no
+# extra network round-trip needed. It only falls back to an explicit
+# `git fetch origin <sha>` (which only ever accepts a *full* object id from
+# a remote) for a sha that history does not already contain — and if that
+# still fails, the error says explicitly to use the full 40-char sha instead
+# of guessing why a short one did not resolve.
 agent-memory-sync restore <sha> --config profiles/<name>.json --dry-run
 
 # Roll back a single file — --path is relative to repositorySubdir, and
