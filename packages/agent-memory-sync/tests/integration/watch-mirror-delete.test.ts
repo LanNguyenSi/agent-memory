@@ -272,18 +272,17 @@ test("watch tick queues locally when the remote is unreachable, then replays the
 });
 
 // Counterpart to the queue-replay test above (agent-tasks
-// 1b63070d-9ea1-4a38-bba0-e58a4678b596): the reachability precheck softens
-// watch's push failure handling for one specific class of failure — the
-// remote being unreachable — into a clean, non-throwing queue. It must not
-// soften anything else. A genuine config/data error (README.md's own
+// 1b63070d-9ea1-4a38-bba0-e58a4678b596). This test only covers the
+// pre-try-block boundary: a genuine config/data error (README.md's own
 // example: a required `syncPaths` entry missing) is raised by
 // collectLocalSyncFiles() before performPush's reachability precheck or its
-// try/catch are ever reached (see src/memory-sync/push.ts), so it still
-// propagates all the way out to watch's handleSnapshotError and exits
-// non-zero — preserving the supervisor-respawn semantics (launchd
-// KeepAlive/ThrottleInterval, systemd's StartLimitIntervalSec/-Burst) that
-// this class of failure relies on. The remote here is a real, reachable
-// bare repo, isolating the assertion from reachability entirely.
+// try/catch are ever reached (see src/memory-sync/push.ts), so it was
+// always going to propagate — this class of error never had a "soften it
+// into a queue" risk to begin with. See the next test for the boundary that
+// actually mattered: a failure raised *inside* performPush's try block,
+// where the reachability precheck's queue-instead-of-throw handling lives,
+// and which — without RemoteUnavailableError discrimination in push.ts's
+// catch — used to swallow indiscriminately.
 test("watch tick with a missing required syncPaths entry still exits non-zero, independent of remote reachability", async () => {
   const root = createSandbox("watch-required-syncpath-missing");
   const remoteDir = initBareRemote(root);
@@ -309,6 +308,94 @@ test("watch tick with a missing required syncPaths entry still exits non-zero, i
     `watch was expected to crash loudly on a missing required sync path; it exited 0 instead. stderr: ${stderr}`
   );
   assert.match(stderr, /required sync path/i);
+});
+
+// A tiny `git` stand-in: forwards every subcommand to the real `git` binary
+// unmodified, except `commit`, which it forces to fail — simulating a
+// non-network git failure that happens *inside* performPush's try block
+// (src/memory-sync/push.ts), after prepareWorkingCopy has already
+// succeeded (a full disk writing the commit object, a corrupt index, a
+// broken commit hook, ...). Written to `root` and made executable so it can
+// be pointed at via the `gitBinary` config field.
+// A plain POSIX shell script, deliberately NOT a Node script: this repo's
+// coverage run sets NODE_V8_COVERAGE-style instrumentation that a `#!/usr/bin/env
+// node` child process would inherit and report itself into the coverage
+// table (a harmless but noisy artifact, spotted while writing this test) —
+// `exec`-ing the real `git` keeps this a single extra process with no such
+// side effect.
+function writeStubGitFailingOnCommit(root: string): string {
+  const stubPath = path.join(root, "stub-git-fails-on-commit.sh");
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "commit" ]; then',
+      '  echo "stub-git: forced commit failure (simulated non-network error)" >&2',
+      "  exit 17",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+// THE boundary test AC1 actually depends on. Before this rework, performPush
+// wrapped everything from prepareWorkingCopy through the final state-store
+// writes in one catch-all that swallowed ANY thrown error into
+// enqueueCurrentSnapshot's "queued, exit 0" outcome (see the removed
+// unconditional catch in src/memory-sync/push.ts) — indistinguishable from
+// the genuinely-benign unreachable-remote case the reachability precheck is
+// meant to cover. A non-network failure raised inside that try block (a
+// full disk, a broken commit hook, a corrupted git config, ...) would have
+// logged the same benign "queued locally instead of pushing" line, exited
+// 0, and — under launchd's KeepAlive: SuccessfulExit=false — never been
+// respawned, and never synced again. Invisible by construction, and the
+// opposite of the supervisor semantics this rework promises.
+//
+// The fix (src/errors.ts's RemoteUnavailableError, thrown only from
+// GitClient.lookupRemoteHead and GitClient.push, checked explicitly in
+// push.ts's catch) narrows that catch to exactly the two git operations
+// that can fail because the *remote* is unavailable/rejecting; everything
+// else re-throws. This test forces `git commit` (inside the try block,
+// after prepareWorkingCopy has already succeeded against the real,
+// reachable bare remote) to fail for a reason that has nothing to do with
+// the remote, and pins that watch still exits non-zero for it.
+test("watch tick with a non-network git failure inside the push (e.g. commit failing) still exits non-zero, not queued", async () => {
+  const root = createSandbox("watch-non-network-git-failure");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
+  // Seed the remote with the real git binary first, so the stub (used only
+  // for the tick under test below) never has to handle first-time-push
+  // bootstrapping.
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const stubGitBinary = writeStubGitFailingOnCommit(root);
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: stubGitBinary
+  });
+
+  const { exitCode, stderr } = await runWatchTick(configPath, () => {
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\nlocal edit\n");
+  });
+
+  assert.notEqual(
+    exitCode,
+    0,
+    `watch was expected to crash loudly on a non-network git commit failure; it exited 0 instead ` +
+      `(queued, masking the failure). stderr: ${stderr}`
+  );
+  assert.doesNotMatch(
+    stderr,
+    /queued locally/,
+    "a non-network git failure must not be reported as a benign queued-instead-of-pushed tick"
+  );
 });
 
 // Rework finding (LOW, review of this task): pins that a successful tick

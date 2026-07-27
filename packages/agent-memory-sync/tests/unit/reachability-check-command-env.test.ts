@@ -76,8 +76,32 @@ test(`${ENV_KEY}='not valid json' warns visibly instead of crashing the whole CL
   assert.match(stderr, /json array/i);
 });
 
-test(`${ENV_KEY}='["true","5","x"]' with non-array-of-strings shape (a JSON object) warns visibly`, async () => {
+test(`${ENV_KEY}='{"not":"an array"}' (valid JSON, but not an array at all) warns visibly`, async () => {
   const { reachabilityCheckCommand, stderr } = await resolveWithEnvValue('{"not":"an array"}');
+
+  assert.equal(reachabilityCheckCommand, null);
+  assert.match(stderr, /warning/i);
+  assert.match(stderr, /json array/i);
+});
+
+// Distinct code path from the object-shaped case above: this value IS a
+// JSON array, so it clears this module's own `Array.isArray` gate, and
+// instead reaches normalizeReachabilityCheckCommand's own element-shape
+// check (loader.ts: `value.some((entry) => typeof entry !== "string" ||
+// !entry)`), which throws for a non-string / empty-string element. Both
+// throw sites are caught by the same try/catch and produce the same
+// warning, but exercising this one separately pins branch coverage on the
+// element-shape guard specifically, not just the top-level type guard.
+test(`${ENV_KEY}='["ssh",""]' (a JSON array, but with an empty-string element) warns visibly`, async () => {
+  const { reachabilityCheckCommand, stderr } = await resolveWithEnvValue('["ssh",""]');
+
+  assert.equal(reachabilityCheckCommand, null);
+  assert.match(stderr, /warning/i);
+  assert.match(stderr, /json array/i);
+});
+
+test(`${ENV_KEY}='[1,2]' (a JSON array, but of numbers, not strings) warns visibly`, async () => {
+  const { reachabilityCheckCommand, stderr } = await resolveWithEnvValue("[1,2]");
 
   assert.equal(reachabilityCheckCommand, null);
   assert.match(stderr, /warning/i);
@@ -95,6 +119,25 @@ test(`${ENV_KEY} with a valid JSON array of non-empty strings applies with no wa
 
 test(`${ENV_KEY}='[]' (explicit empty array) applies as null with no warning`, async () => {
   const { reachabilityCheckCommand, stderr } = await resolveWithEnvValue("[]");
+
+  assert.equal(reachabilityCheckCommand, null);
+  assert.doesNotMatch(stderr, /warning/i);
+});
+
+// Deliberate, documented convention (README.md's Sync behavior section),
+// pinned here so it stays a decision rather than an accident: readEnvConfig
+// only even looks at this env var inside `if (env.AGENT_MEMORY_SYNC_
+// REACHABILITY_CHECK_COMMAND)`, and an empty string is falsy in JS, so it
+// is treated identically to the env var not being set at all — silently,
+// with no warning. This is the same *shape* as the incident this file
+// otherwise pins (a value that disables the override without saying so),
+// but empty-string-as-unset is a common, intentional shell convention (an
+// unset or cleared variable often round-trips as ""), unlike a stray
+// `false`/`not valid json`/wrong-shaped value, which is far more likely a
+// mistake. Hence: silent by design, not a warning candidate — if this ever
+// changes, this test should change with it.
+test(`${ENV_KEY}='' (empty string) is treated as unset — silent, no warning, no override applied`, async () => {
+  const { reachabilityCheckCommand, stderr } = await resolveWithEnvValue("");
 
   assert.equal(reachabilityCheckCommand, null);
   assert.doesNotMatch(stderr, /warning/i);

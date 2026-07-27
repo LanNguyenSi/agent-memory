@@ -372,6 +372,12 @@ test("restore <short-sha> resolves against the already-fetched branch history an
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.restored.length, 1);
   assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "snapshot 1\n");
+  // Pins that the reported sha is the resolved FULL commit actually restored
+  // from, not an echo of the abbreviation the operator typed — restore.ts
+  // captures GitClient.resolveLocalCommit's return value and threads it
+  // through to the payload instead of discarding it after the truthiness
+  // check.
+  assert.equal(payload.sha, fullSha);
 });
 
 test("restore <short-sha> that is not reachable from the configured branch fails loudly with an explicit full-sha hint", () => {

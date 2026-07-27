@@ -138,7 +138,7 @@ StartLimitBurst=10
 WantedBy=multi-user.target
 ```
 
-The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the class of failure that still exits non-zero — a config/data error such as a required `syncPaths` entry missing — so a persistently broken config does not crashloop forever; a network hiccup or a rejected push no longer exits at all (see below), so it never spends this budget. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on that remaining class of failure.
+The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the failures that still exit non-zero — a config/data error raised before the remote working copy is prepared (e.g. a required `syncPaths` entry missing), or any other git-level failure while preparing/committing that working copy (a full disk, a corrupted git config, a broken commit hook, ...) — so a persistently broken cause does not crashloop forever; a remote that is merely unreachable or rejecting the push (see below) no longer exits at all, so it never spends this budget. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on one of those failures.
 
 macOS equivalent (LaunchAgent instead of systemd): see
 [`docs/launchd/com.agent-memory-sync.watch.plist.template`](docs/launchd/com.agent-memory-sync.watch.plist.template)
@@ -152,10 +152,16 @@ remote rejects (auth, non-fast-forward, network), is queued locally
 (`stateDir/queue`) and replayed on the next successful `watch` tick or
 `run`, with a clean exit `0`. This is a deliberate contract change from an
 earlier version of `watch`, where any push failure exited non-zero and
-relied on launchd/systemd to restart the process; a genuine config/data
-error (e.g. a required `syncPaths` entry missing) is the only class of
-failure that still exits non-zero and reaches the supervisor-restart path
-described above.
+relied on launchd/systemd to restart the process. The queue-instead-of-crash
+handling is narrow, not a general catch-all: only a failure that
+`GitClient.lookupRemoteHead` / `GitClient.push` attributes to the remote
+itself (unreachable, rejected, non-fast-forward — see `RemoteUnavailableError`
+in `src/errors.ts`) is queued. Every other failure still exits non-zero and
+reaches the supervisor-restart path described above — a config/data error
+raised before the remote working copy is even prepared (e.g. a required
+`syncPaths` entry missing), and any other git-level failure while that
+working copy is being prepared or committed (a full disk, a corrupted git
+config, a broken commit hook, ...).
 
 `watch` still never pulls — it is edge-triggered on local changes only, so a
 machine that was offline while changes landed elsewhere will not pick them
@@ -294,7 +300,13 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   `["ssh","-o","BatchMode=yes","host","true"]`); a value that fails to parse that way (invalid
   JSON, or valid JSON of the wrong shape — a bare `false`, a string, an object, ...) prints a
   visible warning naming the offending value and falls back to the default probe, instead of
-  either crashing the CLI or silently substituting the default with no explanation
+  either crashing the CLI or silently substituting the default with no explanation. An empty
+  string is the one exception: it is treated as unset, silently, same as the env var not being
+  set at all — a deliberate convention (an unset/cleared shell variable commonly round-trips as
+  `""`), not a warning candidate. To actually disable the probe (always treat the remote as
+  reachable and let the real git operation surface any failure on its own), set
+  `reachabilityCheckCommand` to a command that always exits `0`, e.g. `["true"]` — there is no
+  separate on/off switch, this is the supported way to opt out
 - failed pushes (including ones skipped by the reachability precheck) are queued locally in
   `stateDir/queue` and replayed on the next successful push
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers

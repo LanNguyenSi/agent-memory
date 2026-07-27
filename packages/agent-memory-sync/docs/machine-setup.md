@@ -43,9 +43,16 @@ This document wires together the pieces already documented individually
   deliberate contract change from `watch`'s earlier behavior, where any push
   failure (including a merely unreachable remote) surfaced as a non-zero
   exit and relied on launchd/systemd to restart the process; see the
-  README.md `watch` section for the exact new boundary — a genuine
-  config/data error (e.g. a required `syncPaths` entry missing) still exits
-  non-zero, only network/git-push-level failures are now queued instead.
+  README.md `watch` section for the exact new boundary. The
+  queue-instead-of-crash handling is narrow, not a general catch-all: only a
+  failure `GitClient.lookupRemoteHead` / `GitClient.push` attributes to the
+  remote itself (unreachable, rejected, non-fast-forward — see
+  `RemoteUnavailableError` in `src/errors.ts`) is queued. Errors raised
+  while collecting local sync files, before the remote working copy is even
+  prepared (e.g. a required `syncPaths` entry missing), and any other
+  git-level failure while that working copy is being prepared or committed
+  (a full disk, a corrupted git config, a broken commit hook, ...) still
+  exit non-zero.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
   *this* machine's local files change; it never reads from the remote. Its
