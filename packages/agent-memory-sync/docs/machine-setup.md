@@ -337,7 +337,7 @@ one described at the top of this document:
 Unlike the `memory` entry, `source` here is an **absolute path outside
 `rootDir`** — `~/.harness/machine-state`, not anywhere under the Claude Code
 memory directory — pointing at a per-machine toolchain-snapshot directory
-maintained by the (upcoming) harness companion `session-start
+maintained by the (shipped) harness companion `session-start
 toolchain-parity`. `resolveWorkspacePath` in `src/memory-sync/config.ts`
 treats an absolute `source` as-is instead of resolving it against `rootDir`,
 so this entry syncs on its own schedule independent of the memory tree; both
@@ -390,3 +390,28 @@ peer's snapshot is pulled down, so no manual `mkdir` step is required during
 machine setup either — though the harness companion consuming these files
 may still create the directory itself on first run if it expects it to
 exist ahead of any sync.
+
+## f) frictions payload (friction-log exports)
+
+Every committed profile (`profiles/mac-mini.json`, `profiles/macbook.json`,
+`profiles/linux.example.json`) also carries an **independent** `syncPaths`
+entry pointing at `~/.harness/frictions` — the third entry in
+`mac-mini.json`/`macbook.json` (after `memory` and `machine-state`), and
+the second in `linux.example.json` (that template does not yet include a
+`machine-state` entry):
+
+```json
+{ "source": "/Users/<user>/.harness/frictions", "destination": "frictions", "kind": "directory" }
+```
+
+Same convention as the machine-state payload in section e) above: one file
+per machine, named after its own profile (`frictions/mac-mini.json`,
+`frictions/macbook.json`, ...), owner-writes-only, and never any secret —
+the directory is synced into the shared, committed remote, so anything
+dropped there ends up in every peer's git history. The producer is the
+`friction-log sync-export` command (config-gated, shipped in `agent-dx`,
+not in this repo); this entry only carries the resulting file, it does not
+generate it. The same missing-source tolerance and `mkdir -p`-on-pull
+behavior described above for `machine-state` apply here unchanged, since
+both are plain non-required, absolute-source, directory-kind `syncPaths`
+entries handled by the same code path.
