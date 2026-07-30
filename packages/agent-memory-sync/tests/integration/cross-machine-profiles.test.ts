@@ -126,16 +126,16 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   );
 });
 
-test("profiles/macbook.json, profiles/mac-mini.json, and profiles/linux.example.json all declare the same repositorySubdir", () => {
+test("all committed profiles (macbook, mac-mini, linux, linux.example) declare the same repositorySubdir", () => {
   // A narrower, faster companion to the end-to-end test above: pins the
   // specific config field that caused the divergence directly against the
   // committed files, independent of any CLI/git plumbing. Includes
   // linux.example.json — the copy-paste source for any new machine — so a
   // future template edit that reintroduces a per-machine placeholder (as
   // this template originally had, mirroring the pre-fix macbook/mac-mini
-  // profiles) is caught here too, not just on the two profiles already in
+  // profiles) is caught here too, not just on the profiles already in
   // active use.
-  const profileFiles = ["macbook.json", "mac-mini.json", "linux.example.json"];
+  const profileFiles = ["macbook.json", "mac-mini.json", "linux.json", "linux.example.json"];
   const settingsByFile = Object.fromEntries(
     profileFiles.map((file) => [file, JSON.parse(readText(path.join(PROFILES_DIR, file)))])
   );
@@ -196,9 +196,10 @@ test("profiles/macbook.json, profiles/mac-mini.json, and profiles/linux.example.
   }
 
   // Same pin for the pre-existing machine-state entry, closing the identical
-  // #64 coverage gap — macbook.json and mac-mini.json only, since
-  // linux.example.json's template has never carried a machine-state entry.
-  for (const file of ["macbook.json", "mac-mini.json"]) {
+  // #64 coverage gap — every committed machine profile, but not
+  // linux.example.json, since the template has never carried a machine-state
+  // entry (linux.json adds it deliberately; see machine-setup.md section f).
+  for (const file of ["macbook.json", "mac-mini.json", "linux.json"]) {
     const machineStateEntries = findEntriesByDestination(settingsByFile[file].syncPaths, "machine-state");
     assert.equal(
       machineStateEntries.length,
