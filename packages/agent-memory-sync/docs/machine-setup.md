@@ -77,7 +77,8 @@ This document wires together the pieces already documented individually
   must be running on every fallback machine.
 
 Machine-specific values (paths, SSH alias) are committed as profile files
-under `profiles/`: `profiles/macbook.json`, `profiles/mac-mini.json`, and a
+under `profiles/`: `profiles/macbook.json`, `profiles/mac-mini.json`,
+`profiles/linux.json` (the Linux desktop set up via (c) below), and a
 template for further machines, `profiles/linux.example.json`. Each profile
 file documents its own placeholders and the namespace-divergence gotcha
 in its `"//"` field — read the profile you're activating before copying
@@ -331,7 +332,8 @@ bullet at the top of this document.
 
 ## e) machine-state payload (toolchain snapshots)
 
-Every committed profile (`profiles/mac-mini.json`, `profiles/macbook.json`)
+Every committed machine profile (`profiles/mac-mini.json`,
+`profiles/macbook.json`, `profiles/linux.json`)
 carries a **second, independent** `syncPaths` entry alongside the `memory`
 one described at the top of this document:
 
@@ -399,11 +401,11 @@ exist ahead of any sync.
 ## f) frictions payload (friction-log exports)
 
 Every committed profile (`profiles/mac-mini.json`, `profiles/macbook.json`,
-`profiles/linux.example.json`) also carries an **independent** `syncPaths`
-entry pointing at `~/.harness/frictions` — the third entry in
-`mac-mini.json`/`macbook.json` (after `memory` and `machine-state`), and
-the second in `linux.example.json` (that template does not yet include a
-`machine-state` entry):
+`profiles/linux.json`, `profiles/linux.example.json`) also carries an
+**independent** `syncPaths` entry pointing at `~/.harness/frictions` — the
+third entry in `mac-mini.json`/`macbook.json`/`linux.json` (after `memory`
+and `machine-state`), and the second in `linux.example.json` (that template
+does not yet include a `machine-state` entry):
 
 ```json
 { "source": "/Users/<user>/.harness/frictions", "destination": "frictions", "kind": "directory" }
