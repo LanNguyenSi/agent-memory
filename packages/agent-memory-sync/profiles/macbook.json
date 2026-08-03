@@ -45,6 +45,16 @@
     "machine's toolchain snapshot for cross-machine parity checks \u2014 see",
     "docs/machine-setup.md section e) for the payload convention.",
     "",
+    "The machine-state and frictions entries both set \"ownerScoped\": true \u2014",
+    "each is a one-file-per-machine convention (this machine only ever writes",
+    "its own <profile>.json, e.g. machine-state/macbook.json), so push must",
+    "only ever offer that one file, never a peer's file this machine merely",
+    "pulled. See collectLocalSyncFiles' ownerFilter option in",
+    "src/memory-sync/config.ts and",
+    ".ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md (D-002 to",
+    "D-004) for the echo/last-writer-wins race this closes. Pull is",
+    "unaffected \u2014 a peer's file is still materialized locally as before.",
+    "",
     "The directory walk skips hidden files/dot-directories (.DS_Store, ._*",
     "AppleDouble shadows, .git, ...) by design \u2014 see isHiddenEntryName in",
     "src/memory-sync/config.ts and src/memory-sync/git-client.ts \u2014 so macOS",
@@ -109,12 +119,14 @@
     {
       "source": "/Users/lan/.harness/machine-state",
       "destination": "machine-state",
-      "kind": "directory"
+      "kind": "directory",
+      "ownerScoped": true
     },
     {
       "source": "/Users/lan/.harness/frictions",
       "destination": "frictions",
-      "kind": "directory"
+      "kind": "directory",
+      "ownerScoped": true
     }
   ]
 }

@@ -13,6 +13,10 @@ interface SyncPathConfig {
   destination?: string;
   kind?: "file" | "directory";
   required?: boolean;
+  // See src/memory-sync/config.ts's SyncPathConfig.ownerScoped for the full
+  // rationale — this is the same field, mirrored here since this file
+  // declares its own structural copy of the shape rather than importing it.
+  ownerScoped?: boolean;
 }
 
 interface UserConfig {
@@ -435,7 +439,8 @@ function normalizeSyncPathConfigList(value?: SyncPathConfig[]): SyncPathConfig[]
       source: entry.source,
       destination: entry.destination || entry.source,
       kind: entry.kind,
-      required: Boolean(entry.required)
+      required: Boolean(entry.required),
+      ownerScoped: Boolean(entry.ownerScoped)
     };
   });
 }

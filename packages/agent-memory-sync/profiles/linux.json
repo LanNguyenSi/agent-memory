@@ -31,6 +31,16 @@
     "frictions producer: friction-log sync_export in",
     "~/.config/friction-log/config.yml writes ~/.harness/frictions/linux.json.",
     "",
+    "Both the machine-state and frictions entries set \"ownerScoped\": true —",
+    "the owner-writes-only convention above is now enforced, not just",
+    "documented: push only ever offers this machine's own <profile>.json",
+    "(machine-state/linux.json, frictions/linux.json), never a peer's file",
+    "this machine merely pulled. See collectLocalSyncFiles' ownerFilter",
+    "option in src/memory-sync/config.ts and",
+    ".ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md (D-002 to",
+    "D-004) for the echo/last-writer-wins race this closes. Pull is",
+    "unaffected — a peer's file is still materialized locally as before.",
+    "",
     "Activation: pass BOTH --config (this file) and the profile name",
     "positionally:",
     "  agent-memory-sync run linux --config profiles/linux.json"
@@ -45,7 +55,7 @@
   "reachabilityTimeoutMs": 10000,
   "syncPaths": [
     { "source": ".", "destination": "memory", "kind": "directory" },
-    { "source": "/home/lan/.harness/machine-state", "destination": "machine-state", "kind": "directory" },
-    { "source": "/home/lan/.harness/frictions", "destination": "frictions", "kind": "directory" }
+    { "source": "/home/lan/.harness/machine-state", "destination": "machine-state", "kind": "directory", "ownerScoped": true },
+    { "source": "/home/lan/.harness/frictions", "destination": "frictions", "kind": "directory", "ownerScoped": true }
   ]
 }

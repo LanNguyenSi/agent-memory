@@ -1,5 +1,6 @@
 const {
   collectLocalSyncFiles,
+  filterOwnerScopedBaseMap,
   toRepositoryRelativePath
 } = require("./config");
 const { RemoteUnavailableError } = require("../errors");
@@ -46,14 +47,26 @@ async function performPush(config: PushConfig, options: PushOptions) {
   const stateStore = new StateStore(config.stateDir, config.profile);
   stateStore.ensure();
 
-  const currentLocalFiles = collectLocalSyncFiles(config);
+  // ownerFilter: true — this is the PUSH-side collection of "what is my
+  // local snapshot", the only place Defect B's echo (a peer's ownerScoped
+  // file, materialized locally by a prior pull, getting offered back as
+  // this machine's own change) can originate. Pull's own collectLocalSyncFiles
+  // call (src/memory-sync/pull.ts) deliberately omits this option — see
+  // config.ts's CollectLocalSyncFilesOptions and D-004 in
+  // .ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md.
+  const currentLocalFiles = collectLocalSyncFiles(config, { ownerFilter: true });
   const currentLocalMap = Object.fromEntries(
     currentLocalFiles.map((file: { remoteRelativePath: string; content: string }) => [
       file.remoteRelativePath,
       file.content
     ])
   );
-  const currentBaseMap = stateStore.readBaseSnapshots();
+  // Strips any foreign ownerScoped file (e.g. a peer's machine-state/frictions
+  // file, materialized locally by a prior pull) out of the base snapshot
+  // too — filtering currentLocalMap above is not sufficient on its own,
+  // since applySnapshotToWorkingCopy's targetPaths is localFiles keys UNION
+  // baseFiles keys; see filterOwnerScopedBaseMap's own comment in config.ts.
+  const currentBaseMap = filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots());
 
   const queuedSnapshots = stateStore.listQueuedSnapshots();
   const snapshots = [
