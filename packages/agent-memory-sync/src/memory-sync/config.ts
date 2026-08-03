@@ -43,6 +43,23 @@ interface CollectLocalSyncFilesOptions {
   // a machine never re-offers a peer's file it merely pulled as if it were
   // its own change (the Defect B echo/last-writer-wins race).
   ownerFilter?: boolean;
+  // Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde):
+  // when an ownerScoped directory has OTHER files but not this machine's own
+  // `<profile>.json`, the pre-fix code silently offered nothing for that
+  // destination — a real data-loss path, reachable whenever the resolved
+  // `config.profile` doesn't match the machine's actual owner filename (the
+  // CLI's [profile] positional defaults to 'default' and overrides the
+  // config file's 'profile' field when omitted — run.ts's `.argument`
+  // default plus loader.ts's override-order). Rather than staying silent,
+  // that situation now pushes a warning string into this caller-supplied
+  // array (an out-parameter, not a return-shape change, so callers that
+  // don't pass it — i.e. pull, which never sets ownerFilter either —
+  // continue to receive plain LocalSyncFile[] back, untouched). The caller
+  // (push.ts) surfaces any collected warning via the same `notes` array
+  // every other push/pull diagnostic already uses (see preview.ts's
+  // summarizeOperation, which renders `notes=...` in text output, and the
+  // JSON payload's own `notes` field).
+  warnings?: string[];
 }
 
 function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFilesOptions = {}): LocalSyncFile[] {
@@ -80,6 +97,21 @@ function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFiles
           remoteRelativePath: path.posix.join(destination, ownerFileName),
           content: readFileSync(ownerAbsolutePath, "utf8")
         });
+      } else {
+        // Own file absent. Stay tolerant (no exception — a brand-new
+        // machine's first run legitimately has no <profile>.json yet), but
+        // only stay SILENT when the directory is genuinely empty of other
+        // content too. If other files ARE present, this machine has
+        // something to compare against and is about to publish nothing for
+        // this destination — that is the silent-data-loss path the HIGH
+        // finding flagged, so it becomes a visible warning instead.
+        const peerFiles = walkFiles(absoluteSource);
+        if (peerFiles.length > 0 && options.warnings) {
+          options.warnings.push(
+            `profile '${config.profile}': own file '${ownerFileName}' not found among ${peerFiles.length} file(s) in '${absoluteSource}'; ` +
+              `this machine will publish no '${destination}' state — check the profile positional matches this machine`
+          );
+        }
       }
       continue;
     }

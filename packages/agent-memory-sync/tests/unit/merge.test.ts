@@ -15,6 +15,20 @@
 // returned content carries markers, while leaving the actual designed
 // single-pass conflict fallback (marker construction, already
 // conflict:true) and the untouched `unchanged`/strategy paths alone.
+//
+// Fix-Runde (05-review-findings.md, agent-tasks 06d09cde): two follow-up
+// clusters added below.
+//   Fix 2 (MEDIUM, "Markdown-Ausschluss"): the first cut of
+//   hasConflictMarkers also matched a bare `=======` / `>>>>>>> ` line, which
+//   false-positives on ordinary Markdown (setext H1 underlines, `====`
+//   dividers, deep blockquotes) that legitimately starts a line that way —
+//   spurious conflict:true on content that was never actually corrupted.
+//   Narrowed to the unambiguous `<<<<<<< ` opener alone (mergeText always
+//   writes the full three-line block together, so the opener is sufficient
+//   and does not need corroboration from the other two lines).
+//   Fix 4 (LOW, "wins-Honesty"): the local-wins/remote-wins strategy
+//   branches still returned unconditional conflict:false, breaking the same
+//   invariant on an unreachable-today-but-still-public code path.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { hasConflictMarkers, mergeText } = require("../../src/memory-sync/merge");
@@ -33,12 +47,47 @@ test("hasConflictMarkers: detects a '<<<<<<< local' line", () => {
   assert.equal(hasConflictMarkers("before\n<<<<<<< local\nafter\n"), true);
 });
 
-test("hasConflictMarkers: detects a '=======' line", () => {
-  assert.equal(hasConflictMarkers("before\n=======\nafter\n"), true);
+// Fix 2 (MEDIUM, Markdown-Ausschluss): a bare '=======' or '>>>>>>> ' line,
+// with no accompanying '<<<<<<< ' opener anywhere in the content, is NOT a
+// conflict marker on its own — it's what a setext H1 underline, an
+// '===='-style section divider, or a deeply nested blockquote look like in
+// ordinary agent-memory Markdown. The pre-fix implementation matched these
+// two line prefixes unconditionally and produced spurious conflict:true on
+// such content. These two cases replace what used to assert `true` here.
+test("hasConflictMarkers: a lone '=======' line with no '<<<<<<< ' opener (e.g. a setext H1 underline) is NOT a conflict marker", () => {
+  assert.equal(hasConflictMarkers("before\n=======\nafter\n"), false);
 });
 
-test("hasConflictMarkers: detects a '>>>>>>> remote' line", () => {
-  assert.equal(hasConflictMarkers("before\n>>>>>>> remote\nafter\n"), true);
+test("hasConflictMarkers: a lone '>>>>>>> ' line with no '<<<<<<< ' opener (e.g. a deep blockquote) is NOT a conflict marker", () => {
+  assert.equal(hasConflictMarkers("before\n>>>>>>> remote\nafter\n"), false);
+});
+
+test("hasConflictMarkers: a setext-style H1 underline in ordinary memory Markdown is not flagged", () => {
+  assert.equal(hasConflictMarkers("Overview\n=======\nnotes"), false);
+});
+
+test("hasConflictMarkers: an '====' style section divider (no opener anywhere) is not flagged", () => {
+  assert.equal(hasConflictMarkers("Section one\n\n====\n\nSection two\n"), false);
+});
+
+test("hasConflictMarkers: a deeply nested blockquote line starting with '>>>>>>> ' (no opener anywhere) is not flagged", () => {
+  assert.equal(hasConflictMarkers("some reply\n>>>>>>> quoted from someone\nmore text\n"), false);
+});
+
+test("hasConflictMarkers: a real inherited conflict block (opener present) is still flagged true even amid lone '=======' /'>>>>>>> '-style Markdown elsewhere", () => {
+  const content = [
+    "Notes",
+    "=======",
+    "<<<<<<< local",
+    "local content",
+    "=======",
+    "remote content",
+    ">>>>>>> remote",
+    "",
+    "quoted reply:",
+    ">>>>>>> someone else"
+  ].join("\n");
+  assert.equal(hasConflictMarkers(content), true);
 });
 
 test("hasConflictMarkers: a marker substring that is not at the start of a line does not count (line-anchored)", () => {
@@ -128,4 +177,38 @@ test("mergeText: genuine single-pass conflict (no clean fast path, no append mer
   assert.match(result.content, /=======/);
   assert.match(result.content, /remote replaced/);
   assert.match(result.content, />>>>>>> remote/);
+});
+
+// ─── Fix 4: local-wins/remote-wins strategy branches upgrade too ────────────
+//
+// Unreachable via the deployed inline-markers conflictStrategy, but
+// local-wins/remote-wins are still public MergeInput.strategy values; both
+// branches previously returned unconditional conflict:false even when their
+// picked winner already carried inherited markers, breaking the same
+// honesty invariant the fast paths and appendOnly path above were fixed for.
+
+test("mergeText: local-wins strategy is upgraded to conflict:true when the local winner already carries markers", () => {
+  const markerLocal = ["<<<<<<< local", "stale local", "=======", "stale remote", ">>>>>>> remote"].join("\n");
+  const result = mergeText({
+    base: "base\n",
+    local: markerLocal,
+    remote: "remote replaced\n",
+    strategy: "local-wins"
+  });
+  assert.equal(result.status, "conflict");
+  assert.equal(result.content, markerLocal, "payload must not be rewritten, only the conflict flag");
+  assert.equal(result.conflict, true);
+});
+
+test("mergeText: remote-wins strategy is upgraded to conflict:true when the remote winner already carries markers", () => {
+  const markerRemote = ["<<<<<<< local", "stale local", "=======", "stale remote", ">>>>>>> remote"].join("\n");
+  const result = mergeText({
+    base: "base\n",
+    local: "local replaced\n",
+    remote: markerRemote,
+    strategy: "remote-wins"
+  });
+  assert.equal(result.status, "conflict");
+  assert.equal(result.content, markerRemote, "payload must not be rewritten, only the conflict flag");
+  assert.equal(result.conflict, true);
 });
