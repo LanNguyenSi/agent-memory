@@ -7,12 +7,24 @@ interface SyncPathConfig {
   destination?: string;
   kind?: "file" | "directory";
   required?: boolean;
+  // Marks a directory-kind entry as machine-exclusive (one owner file per
+  // machine, named `<profile>.json` — the machine-state/frictions
+  // convention documented in profiles/linux.json). Absent/false is the
+  // pre-existing behavior (every file under the directory is offered).
+  // See collectLocalSyncFiles' `options.ownerFilter` below: this field only
+  // takes effect there, i.e. only for the PUSH collection, never for pull.
+  ownerScoped?: boolean;
 }
 
 interface RunConfig {
   rootDir: string;
   repositorySubdir: string;
   syncPaths: SyncPathConfig[];
+  // Present on every real caller (PushConfig/PullConfig both declare it
+  // required) — optional here only so a minimal hand-built config (as some
+  // existing tests use) still type-checks. Used solely to derive the
+  // `<profile>.json` owner filename below.
+  profile?: string;
 }
 
 interface LocalSyncFile {
@@ -22,8 +34,37 @@ interface LocalSyncFile {
   content: string;
 }
 
-function collectLocalSyncFiles(config: RunConfig): LocalSyncFile[] {
+interface CollectLocalSyncFilesOptions {
+  // Applies the ownerScoped filter (see SyncPathConfig.ownerScoped above).
+  // Pull must NEVER set this — pull is the one place a peer's owner file is
+  // supposed to be materialized locally (D-004,
+  // .ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md); only
+  // push's own "what do I offer as my local snapshot" collection sets it, so
+  // a machine never re-offers a peer's file it merely pulled as if it were
+  // its own change (the Defect B echo/last-writer-wins race).
+  ownerFilter?: boolean;
+  // Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde):
+  // when an ownerScoped directory has OTHER files but not this machine's own
+  // `<profile>.json`, the pre-fix code silently offered nothing for that
+  // destination — a real data-loss path, reachable whenever the resolved
+  // `config.profile` doesn't match the machine's actual owner filename (the
+  // CLI's [profile] positional defaults to 'default' and overrides the
+  // config file's 'profile' field when omitted — run.ts's `.argument`
+  // default plus loader.ts's override-order). Rather than staying silent,
+  // that situation now pushes a warning string into this caller-supplied
+  // array (an out-parameter, not a return-shape change, so callers that
+  // don't pass it — i.e. pull, which never sets ownerFilter either —
+  // continue to receive plain LocalSyncFile[] back, untouched). The caller
+  // (push.ts) surfaces any collected warning via the same `notes` array
+  // every other push/pull diagnostic already uses (see preview.ts's
+  // summarizeOperation, which renders `notes=...` in text output, and the
+  // JSON payload's own `notes` field).
+  warnings?: string[];
+}
+
+function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFilesOptions = {}): LocalSyncFile[] {
   const results: LocalSyncFile[] = [];
+  const ownerFileName = options.ownerFilter && config.profile ? `${config.profile}.json` : null;
 
   for (const entry of config.syncPaths) {
     const absoluteSource = resolveWorkspacePath(config.rootDir, entry.source);
@@ -47,6 +88,34 @@ function collectLocalSyncFiles(config: RunConfig): LocalSyncFile[] {
       continue;
     }
 
+    if (kind === "directory" && entry.ownerScoped && ownerFileName) {
+      const ownerAbsolutePath = path.join(absoluteSource, ownerFileName);
+      if (existsSync(ownerAbsolutePath) && statSync(ownerAbsolutePath).isFile()) {
+        results.push({
+          absolutePath: ownerAbsolutePath,
+          localRelativePath: normalizeLocalRelativePath(config.rootDir, ownerAbsolutePath),
+          remoteRelativePath: path.posix.join(destination, ownerFileName),
+          content: readFileSync(ownerAbsolutePath, "utf8")
+        });
+      } else {
+        // Own file absent. Stay tolerant (no exception — a brand-new
+        // machine's first run legitimately has no <profile>.json yet), but
+        // only stay SILENT when the directory is genuinely empty of other
+        // content too. If other files ARE present, this machine has
+        // something to compare against and is about to publish nothing for
+        // this destination — that is the silent-data-loss path the HIGH
+        // finding flagged, so it becomes a visible warning instead.
+        const peerFiles = walkFiles(absoluteSource);
+        if (peerFiles.length > 0 && options.warnings) {
+          options.warnings.push(
+            `profile '${config.profile}': own file '${ownerFileName}' not found among ${peerFiles.length} file(s) in '${absoluteSource}'; ` +
+              `this machine will publish no '${destination}' state — check the profile positional matches this machine`
+          );
+        }
+      }
+      continue;
+    }
+
     for (const nestedFile of walkFiles(absoluteSource)) {
       const nestedRelative = path.relative(absoluteSource, nestedFile).replace(/\\/g, "/");
       results.push({
@@ -59,6 +128,55 @@ function collectLocalSyncFiles(config: RunConfig): LocalSyncFile[] {
   }
 
   return results.sort((left, right) => left.remoteRelativePath.localeCompare(right.remoteRelativePath));
+}
+
+// Push-only companion to collectLocalSyncFiles' ownerFilter. Filtering the
+// LOCAL snapshot alone is not enough: push's 3-way merge visits every path
+// in `localFiles keys UNION baseFiles keys` (src/memory-sync/push.ts's
+// applySnapshotToWorkingCopy), and the state store's base snapshot still
+// legitimately carries a peer's ownerScoped file — it was written there by
+// a prior pull's `stateStore.replaceBaseSnapshots(remoteMap)`. Left
+// unfiltered, that foreign key survives in baseFiles alone (base non-null,
+// local now absent because collectLocalSyncFiles dropped it, remote
+// possibly having moved on since) and still gets visited: base !== local
+// and base !== remote trips the genuine-conflict fallback, which would
+// spuriously flag a "conflict" and write marker content combining an empty
+// local half with the peer's real remote content — actively corrupting a
+// file this machine never touched. Call this once, right where
+// collectLocalSyncFiles' PUSH collection is also called, so both the
+// "current" snapshot and anything newly enqueued from it stay consistent.
+function filterOwnerScopedBaseMap(
+  config: RunConfig,
+  baseMap: Record<string, string | null>
+): Record<string, string | null> {
+  if (!config.profile) {
+    return baseMap;
+  }
+
+  const ownerFileName = `${config.profile}.json`;
+  const ownerScopedDestinations = config.syncPaths
+    .filter(
+      (entry) =>
+        entry.ownerScoped && resolveSyncPathKind(resolveWorkspacePath(config.rootDir, entry.source), entry) === "directory"
+    )
+    .map((entry) => normalizeRemoteRelativePath(entry.destination || entry.source));
+
+  if (ownerScopedDestinations.length === 0) {
+    return baseMap;
+  }
+
+  const result: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(baseMap)) {
+    const owningDestination = ownerScopedDestinations.find(
+      (destination) => key === destination || key.startsWith(`${destination}/`)
+    );
+    if (owningDestination && key !== path.posix.join(owningDestination, ownerFileName)) {
+      continue;
+    }
+    result[key] = value;
+  }
+
+  return result;
 }
 
 function mapRemotePathToLocalAbsolute(config: RunConfig, remoteRelativePath: string): string | null {
@@ -159,6 +277,7 @@ function isHiddenEntryName(name: string): boolean {
 
 module.exports = {
   collectLocalSyncFiles,
+  filterOwnerScopedBaseMap,
   mapRemotePathToLocalAbsolute,
   normalizeRemoteRelativePath,
   toRepositoryRelativePath

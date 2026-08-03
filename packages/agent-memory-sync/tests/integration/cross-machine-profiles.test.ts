@@ -218,3 +218,39 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
     );
   }
 });
+
+// Pins Defect B's fix (agent-tasks 06d09cde / .ai/runs/2026-08-03-sync-conflict-markers-echo,
+// D-002/D-003): machine-state and frictions are one-owner-file-per-machine
+// destinations, so push must never re-offer a peer's file it only pulled —
+// ownerScoped: true on both entries in every real machine profile is what
+// makes collectLocalSyncFiles' ownerFilter (src/memory-sync/config.ts)
+// actually engage. Deliberately scoped to the same 3 real profiles as the
+// machine-state pin above, not linux.example.json — the template documents
+// the convention but was never a live sync target, so it carries no
+// machine-state entry at all and this task's brief only requires the flag on
+// "die 3 committeten Profilen".
+test("macbook, mac-mini, and linux profiles set ownerScoped: true on both their machine-state and frictions entries", () => {
+  const profileFiles = ["macbook.json", "mac-mini.json", "linux.json"];
+  const settingsByFile = Object.fromEntries(
+    profileFiles.map((file) => [file, JSON.parse(readText(path.join(PROFILES_DIR, file)))])
+  );
+
+  function findEntriesByDestination(
+    syncPaths: Array<Record<string, unknown>> | undefined,
+    destination: string
+  ): Array<Record<string, unknown>> {
+    return (syncPaths || []).filter((entry) => entry.destination === destination);
+  }
+
+  for (const file of profileFiles) {
+    for (const destination of ["machine-state", "frictions"]) {
+      const [entry] = findEntriesByDestination(settingsByFile[file].syncPaths, destination);
+      assert.ok(entry, `profiles/${file} must declare a syncPaths entry with destination '${destination}'`);
+      assert.equal(
+        entry.ownerScoped,
+        true,
+        `profiles/${file}'s '${destination}' entry must set ownerScoped: true, got: ${JSON.stringify(entry.ownerScoped)}`
+      );
+    }
+  }
+});

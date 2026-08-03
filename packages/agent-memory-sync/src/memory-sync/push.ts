@@ -1,5 +1,6 @@
 const {
   collectLocalSyncFiles,
+  filterOwnerScopedBaseMap,
   toRepositoryRelativePath
 } = require("./config");
 const { RemoteUnavailableError } = require("../errors");
@@ -46,21 +47,51 @@ async function performPush(config: PushConfig, options: PushOptions) {
   const stateStore = new StateStore(config.stateDir, config.profile);
   stateStore.ensure();
 
-  const currentLocalFiles = collectLocalSyncFiles(config);
+  // ownerFilter: true — this is the PUSH-side collection of "what is my
+  // local snapshot", the only place Defect B's echo (a peer's ownerScoped
+  // file, materialized locally by a prior pull, getting offered back as
+  // this machine's own change) can originate. Pull's own collectLocalSyncFiles
+  // call (src/memory-sync/pull.ts) deliberately omits this option — see
+  // config.ts's CollectLocalSyncFilesOptions and D-004 in
+  // .ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md.
+  const ownerScopedWarnings: string[] = [];
+  const currentLocalFiles = collectLocalSyncFiles(config, {
+    ownerFilter: true,
+    warnings: ownerScopedWarnings
+  });
   const currentLocalMap = Object.fromEntries(
     currentLocalFiles.map((file: { remoteRelativePath: string; content: string }) => [
       file.remoteRelativePath,
       file.content
     ])
   );
-  const currentBaseMap = stateStore.readBaseSnapshots();
+  // Strips any foreign ownerScoped file (e.g. a peer's machine-state/frictions
+  // file, materialized locally by a prior pull) out of the base snapshot
+  // too — filtering currentLocalMap above is not sufficient on its own,
+  // since applySnapshotToWorkingCopy's targetPaths is localFiles keys UNION
+  // baseFiles keys; see filterOwnerScopedBaseMap's own comment in config.ts.
+  const currentBaseMap = filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots());
 
   const queuedSnapshots = stateStore.listQueuedSnapshots();
   const snapshots = [
+    // Fix-Runde MEDIUM finding #3 (05-review-findings.md, agent-tasks
+    // 06d09cde): a snapshot enqueued BEFORE this machine's profile picked up
+    // ownerScoped:true (or before this fix shipped at all) can still carry a
+    // peer's ownerScoped file in its stored localFiles/baseFiles — it was
+    // captured verbatim from an older, unfiltered collectLocalSyncFiles/
+    // readBaseSnapshots() call. Replaying it verbatim would re-introduce
+    // exactly the echo Fix 2/D-002-D-004 closed for the "current" snapshot,
+    // just via the queue instead of a live collection. Route both maps
+    // through the same filterOwnerScopedBaseMap used for currentBaseMap
+    // below so a stale queued peer file is stripped here too, not just on
+    // freshly collected snapshots. The `as Record<string, string>` cast is
+    // safe: filterOwnerScopedBaseMap only ever drops keys, it never turns an
+    // existing string value into null, and localFiles never held null values
+    // to begin with.
     ...queuedSnapshots.map((entry: { id: string; data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> } }) => ({
       id: entry.id,
-      localFiles: entry.data.localFiles,
-      baseFiles: entry.data.baseFiles,
+      localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
+      baseFiles: filterOwnerScopedBaseMap(config, entry.data.baseFiles),
       message: `sync(queue): replay ${entry.id}`
     })),
     {
@@ -80,30 +111,36 @@ async function performPush(config: PushConfig, options: PushOptions) {
 
   if (options.dryRun) {
     if (!reachability.reachable) {
-      return {
-        kind: "push",
-        status: "dry-run",
-        remoteHeadBefore: null,
-        remoteHeadAfter: null,
-        appliedFiles: unique(Object.keys(snapshots[snapshots.length - 1]?.localFiles || {})),
-        mergedFiles: [],
-        conflictFiles: [],
-        queuedSnapshotId: null,
-        notes: [
-          `remote unreachable (${reachability.reason}); this run would enqueue a snapshot instead of pushing immediately`
-        ]
-      };
+      return appendNotes(
+        {
+          kind: "push",
+          status: "dry-run",
+          remoteHeadBefore: null,
+          remoteHeadAfter: null,
+          appliedFiles: unique(Object.keys(snapshots[snapshots.length - 1]?.localFiles || {})),
+          mergedFiles: [],
+          conflictFiles: [],
+          queuedSnapshotId: null,
+          notes: [
+            `remote unreachable (${reachability.reason}); this run would enqueue a snapshot instead of pushing immediately`
+          ]
+        },
+        ownerScopedWarnings
+      );
     }
 
-    return previewPush(config, snapshots);
+    return appendNotes(previewPush(config, snapshots), ownerScopedWarnings);
   }
 
   if (!reachability.reachable) {
-    return enqueueCurrentSnapshot(
-      stateStore,
-      currentLocalMap,
-      currentBaseMap,
-      `remote unreachable (${reachability.reason}); stored the current local snapshot for replay on the next successful run`
+    return appendNotes(
+      enqueueCurrentSnapshot(
+        stateStore,
+        currentLocalMap,
+        currentBaseMap,
+        `remote unreachable (${reachability.reason}); stored the current local snapshot for replay on the next successful run`
+      ),
+      ownerScopedWarnings
     );
   }
 
@@ -144,17 +181,20 @@ async function performPush(config: PushConfig, options: PushOptions) {
       stateStore.removeQueuedSnapshot(queuedSnapshot.id);
     }
 
-    return {
-      kind: "push",
-      status: "applied",
-      remoteHeadBefore: workingCopy.remoteHead,
-      remoteHeadAfter,
-      appliedFiles: unique(appliedFiles),
-      mergedFiles: unique(mergedFiles),
-      conflictFiles: unique(conflictFiles),
-      queuedSnapshotId,
-      notes: queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []
-    };
+    return appendNotes(
+      {
+        kind: "push",
+        status: "applied",
+        remoteHeadBefore: workingCopy.remoteHead,
+        remoteHeadAfter,
+        appliedFiles: unique(appliedFiles),
+        mergedFiles: unique(mergedFiles),
+        conflictFiles: unique(conflictFiles),
+        queuedSnapshotId,
+        notes: queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []
+      },
+      ownerScopedWarnings
+    );
   } catch (error) {
     // Only a RemoteUnavailableError (thrown exclusively from
     // GitClient.lookupRemoteHead and GitClient.push — see errors.ts) is
@@ -173,13 +213,32 @@ async function performPush(config: PushConfig, options: PushOptions) {
       throw error;
     }
 
-    return enqueueCurrentSnapshot(
-      stateStore,
-      currentLocalMap,
-      currentBaseMap,
-      "remote unavailable; stored the current local snapshot for replay on the next successful run"
+    return appendNotes(
+      enqueueCurrentSnapshot(
+        stateStore,
+        currentLocalMap,
+        currentBaseMap,
+        "remote unavailable; stored the current local snapshot for replay on the next successful run"
+      ),
+      ownerScopedWarnings
     );
   }
+}
+
+// Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde):
+// merges collectLocalSyncFiles' ownerScoped "own file missing among peer
+// files" warnings (see config.ts's CollectLocalSyncFilesResult.warnings)
+// into whatever `notes` array a given result already carries, on every
+// return path below — dry-run, queued (both the reachability-precheck skip
+// and the catch-all git-failure fallback), and a real applied push all still
+// need to surface the warning, since it describes THIS machine's local
+// collection state, independent of whether the push itself succeeded.
+function appendNotes<T extends { notes?: string[] }>(result: T, extraNotes: string[]): T {
+  if (extraNotes.length === 0) {
+    return result;
+  }
+
+  return { ...result, notes: [...(result.notes || []), ...extraNotes] };
 }
 
 // Shared by the reachability-precheck skip path and the catch-all fallback
