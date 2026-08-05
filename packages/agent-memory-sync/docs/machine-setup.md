@@ -56,6 +56,35 @@ This document wires together the pieces already documented individually
   git-level failure while that working copy is being prepared or committed
   (a full disk, a corrupted git config, a broken commit hook, ...) still
   exit non-zero.
+- **Queue escalation: silent-forever is not the same as offline.** The
+  queue-instead-of-crash behavior above is deliberately quiet for a machine
+  that is merely offline (closed overnight, on a flight, a weekend without
+  connectivity) — but a remote that is `RemoteUnavailableError` for a
+  *permanent* reason (a typo'd `remoteUrl`, a renamed bare-repo path on the
+  mini, an SSH host that accepts the connection but can no longer serve
+  `git-upload-pack`) would otherwise look identical: queued, exit `0`,
+  every tick, forever, never actually syncing again. Every enqueue now
+  checks the age of the OLDEST currently-queued snapshot
+  (`stateDir/queue/<id>/manifest.json`'s `createdAt`, already written on
+  every enqueue — no new persisted state) against
+  `queueEscalationThresholdMs` (config file /
+  `AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS`, default 24h). Below the
+  threshold, nothing changes. Once the oldest queued snapshot is older than
+  the threshold — meaning the remote has been *continuously* unreachable for
+  that long, not merely on this one tick, since a successful push clears the
+  whole queue at once — the tick throws instead of returning a clean
+  "queued" result: a clear message on stderr and a non-zero exit (`6`), the
+  same supervisor-restart surface a non-network failure already uses (see
+  the previous bullet). The queued snapshot itself is never lost either way;
+  it stays queued and replays automatically once the remote is reachable
+  again. The 24h default is sized against this document's own committed
+  periodic-sync tick interval — 900s / 15min, see
+  `docs/launchd/com.agent-memory-sync.sync.plist.template`'s `StartInterval`
+  (macOS) and the systemd `OnUnitActiveSec=15min` timer in (c) below (Linux)
+  — 96 missed ticks at that cadence, comfortably past an overnight or
+  weekend offline window while still bounding a genuinely broken remote's
+  silence to about a day. See README.md's "Queue escalation" section under
+  `watch` for the full rationale.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
   *this* machine's local files change; it never reads from the remote. Its
@@ -283,8 +312,19 @@ empty/stale local workspace as if it were authoritative.
    `Persistent=true` catches up a missed tick (e.g. the machine was off)
    shortly after boot instead of waiting a full interval. A tick that fires
    while the mini is unreachable is a fast, clean no-op — same reachability
-   precheck `run` always uses — so a short 15-minute interval is safe; it
-   will not pile up overlapping ssh attempts or spam logs. Install with:
+   precheck `run` always uses — so a short 15-minute interval is safe below
+   the queue escalation threshold (see the "Queue escalation" bullet above):
+   it will not pile up overlapping ssh attempts or spam logs. That stops
+   being true once the OLDEST queued snapshot crosses
+   `queueEscalationThresholdMs` (default 24h, ~96 missed ticks at this
+   interval) — from then on, each 15-minute tick exits non-zero (`6`) with a
+   clear stderr message instead of a silent no-op. Because this is a
+   `Type=oneshot` service fired by a `.timer`, not a `Restart=on-failure`
+   daemon, the timer keeps firing it again every 15 minutes regardless of
+   that failure, so expect one failure line in `journalctl -u
+   agent-memory-sync-sync.service` per tick until the remote is fixed — that
+   repeated visibility is the intended outcome of escalation, not log spam
+   to suppress. Install with:
    `systemctl daemon-reload && systemctl enable --now agent-memory-sync-sync.timer`.
 
 ## d) Restore / rollback

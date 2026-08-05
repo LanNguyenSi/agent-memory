@@ -398,6 +398,90 @@ test("watch tick with a non-network git failure inside the push (e.g. commit fai
   );
 });
 
+// Sibling to writeStubGitFailingOnCommit above, but for `fetch` — pinning
+// the SECOND finding from the 1b63070d review (agent-tasks 11424b5e):
+// GitClient.prepareWorkingCopy (src/memory-sync/git-client.ts) runs
+// `git fetch origin <branch>` via plain run() WITHOUT allowFailure, so a
+// fetch failure throws a generic CliError (exit code 4 — the same numeric
+// exit code RemoteUnavailableError also uses; only the throw site/class
+// discriminates, see errors.ts) and crashes loud instead of being queued.
+// That is a DELIBERATE decision — a fetch failure can be purely local (a
+// full disk writing the incoming packfile, a corrupted object database, ...)
+// and is not safe to assume is "the remote's fault" the way
+// lookupRemoteHead/push's own RemoteUnavailableError throws are — and
+// README.md/docs/machine-setup.md describe it, but nothing pinned it with a
+// test: a future refactor (e.g. reflexively adding `allowFailure: true` to
+// every `this.run(...)` call, or wrapping this specific fetch in a
+// try/catch that reclassifies it) could flip this boundary either way
+// unnoticed.
+function writeStubGitFailingOnFetch(root: string): string {
+  const stubPath = path.join(root, "stub-git-fails-on-fetch.sh");
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "fetch" ]; then',
+      '  echo "stub-git: forced fetch failure (simulated non-network error, e.g. full disk writing the packfile)" >&2',
+      "  exit 17",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+// THE boundary test AC3 (agent-tasks 11424b5e) depends on. Mirrors the
+// commit-failure test above almost exactly, with one deliberate difference:
+// the remote MUST already be seeded with a real commit before the stub is
+// installed, so `lookupRemoteHead`'s `git ls-remote` (never intercepted by
+// the stub — it only forces `fetch` to fail) returns a real head and
+// prepareWorkingCopy takes its `if (remoteHead)` branch — the only branch
+// that calls `git fetch` at all (the `else` branch, an empty remote, calls
+// `checkout --orphan` instead and never fetches). Mutation check for this
+// test (run manually, not part of the automated suite — see this task's
+// final report): temporarily wrap the `this.run(["fetch", ...], repoDir)`
+// call in git-client.ts's prepareWorkingCopy with the same
+// `allowFailure: true` + RemoteUnavailableError classification
+// lookupRemoteHead/push use, confirm this test goes red (exit 0/"queued"
+// instead of exit 4/crash), then restore the original code.
+test("watch tick with a non-network git failure on fetch (e.g. a full disk) still exits non-zero, not queued", async () => {
+  const root = createSandbox("watch-non-network-fetch-failure");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
+  // Seed the remote with the real git binary first, so lookupRemoteHead's
+  // `git ls-remote` (below, with the stub installed) returns a real head
+  // and prepareWorkingCopy takes the branch that actually calls `git fetch`.
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const stubGitBinary = writeStubGitFailingOnFetch(root);
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: stubGitBinary
+  });
+
+  const { exitCode, stderr } = await runWatchTick(configPath, () => {
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\nlocal edit\n");
+  });
+
+  assert.equal(
+    exitCode,
+    4,
+    `watch was expected to crash loudly (exit 4) on a non-network git fetch failure; it exited ${exitCode} ` +
+      `instead. stderr: ${stderr}`
+  );
+  assert.doesNotMatch(
+    stderr,
+    /queued locally/,
+    "a non-network fetch failure must not be reported as a benign queued-instead-of-pushed tick"
+  );
+});
+
 // Rework finding (LOW, review of this task): pins that a successful tick
 // updates stateDir/base to the post-merge remote state — the input the next
 // tick's 3-way merge relies on to correctly leave an unpulled peer file

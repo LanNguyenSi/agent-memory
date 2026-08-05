@@ -1,13 +1,14 @@
+const { readdirSync } = require("node:fs");
 const {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
   toRepositoryRelativePath
 } = require("./config");
-const { RemoteUnavailableError } = require("../errors");
+const { RemoteUnavailableError, RemoteQueueEscalationError } = require("../errors");
 const { GitClient } = require("./git-client");
 const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
-const { StateStore } = require("./state-store");
+const { StateStore, DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("./state-store");
 
 interface PushOptions {
   dryRun: boolean;
@@ -35,6 +36,18 @@ interface PushConfig {
   gitBinary: string;
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
+  // How long the queue may keep failing to drain (oldest queued snapshot's
+  // age — see StateStore.oldestQueuedSnapshotAgeMs) before a tick that would
+  // otherwise be a clean, silent "queued" outcome instead throws
+  // RemoteQueueEscalationError and crashes loud. Defaults to
+  // DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS (24h) — see that constant's
+  // comment in state-store.ts for the full rationale, including the real
+  // launchd/systemd tick interval it is sized against. Explicit `null`
+  // (as opposed to `undefined`, which falls through to the default above)
+  // disables the escalation check entirely — mirrors
+  // reachabilityCheckCommand's null-is-a-real-value convention: the queue
+  // then keeps queuing silently, exit 0, forever, regardless of age.
+  queueEscalationThresholdMs?: number | null;
   syncPaths: Array<{
     source: string;
     destination?: string;
@@ -138,7 +151,8 @@ async function performPush(config: PushConfig, options: PushOptions) {
         stateStore,
         currentLocalMap,
         currentBaseMap,
-        `remote unreachable (${reachability.reason}); stored the current local snapshot for replay on the next successful run`
+        `remote unreachable (${reachability.reason}); stored the current local snapshot for replay on the next successful run`,
+        resolveQueueEscalationThresholdMs(config.queueEscalationThresholdMs)
       ),
       ownerScopedWarnings
     );
@@ -218,11 +232,25 @@ async function performPush(config: PushConfig, options: PushOptions) {
         stateStore,
         currentLocalMap,
         currentBaseMap,
-        "remote unavailable; stored the current local snapshot for replay on the next successful run"
+        "remote unavailable; stored the current local snapshot for replay on the next successful run",
+        resolveQueueEscalationThresholdMs(config.queueEscalationThresholdMs)
       ),
       ownerScopedWarnings
     );
   }
+}
+
+// `undefined` (the field was never set at all — e.g. a PushConfig built
+// outside the config loader) falls back to the default threshold, same as
+// before this fix. Explicit `null` is a distinct, real value meaning
+// "escalation disabled" — see the PushConfig.queueEscalationThresholdMs
+// comment above and loader.ts's queueEscalationThresholdMs validation for
+// where that convention is enforced end-to-end.
+function resolveQueueEscalationThresholdMs(value: number | null | undefined): number | null {
+  if (value === null) {
+    return null;
+  }
+  return value ?? DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS;
 }
 
 // Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde):
@@ -244,17 +272,29 @@ function appendNotes<T extends { notes?: string[] }>(result: T, extraNotes: stri
 // Shared by the reachability-precheck skip path and the catch-all fallback
 // below: stash the current local state as a new queued snapshot (existing
 // queued snapshots are left untouched — they are only cleared after a
-// successful push) and report a clean "queued" result.
+// successful push), then check whether the queue has now been failing to
+// drain for longer than queueEscalationThresholdMs (see
+// checkQueueEscalation below) before reporting a clean "queued" result —
+// escalation takes priority: it throws instead of returning, so a caller
+// that has crossed the threshold never sees a benign-looking "queued"
+// outcome for that tick, even though the snapshot itself is safely persisted
+// either way. A non-null diagnostic note from checkQueueEscalation (the
+// clock-skew sanity-ceiling guard fired instead of escalating) is folded
+// into the returned "queued" result's own notes, so it is still visible on
+// this otherwise-silent, exit-0 path.
 function enqueueCurrentSnapshot(
   stateStore: InstanceType<typeof StateStore>,
   currentLocalMap: Record<string, string>,
   currentBaseMap: Record<string, string | null>,
-  note: string
+  note: string,
+  queueEscalationThresholdMs: number | null
 ) {
   const queuedSnapshotId = stateStore.enqueueSnapshot({
     localFiles: currentLocalMap,
     baseFiles: currentBaseMap
   });
+
+  const skewNote = checkQueueEscalation(stateStore, queueEscalationThresholdMs);
 
   return {
     kind: "push",
@@ -265,8 +305,90 @@ function enqueueCurrentSnapshot(
     mergedFiles: [],
     conflictFiles: [],
     queuedSnapshotId,
-    notes: [note]
+    notes: skewNote ? [note, skewNote] : [note]
   };
+}
+
+// 30x the effective threshold: a sanity ceiling guarding against clock skew.
+// A queued manifest's `createdAt` (StateStore.enqueueSnapshot) is a
+// wall-clock timestamp, so oldestQueuedSnapshotAgeMs is only ever as
+// trustworthy as this machine's clock was AT ENQUEUE TIME (see
+// DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS's comment in state-store.ts). A
+// machine that enqueued under a wrong-in-the-past system clock (dead RTC
+// battery, a container that started before NTP synced, ...) would otherwise
+// compute an implausibly large age — and escalate — the moment NTP corrects
+// the clock forward, which is exactly backwards: that machine's queue may
+// not have been stuck at all. An age past this ceiling is far more likely a
+// clock artifact than 30x the configured "how long is too long" threshold of
+// genuine remote unavailability, so checkQueueEscalation below skips
+// escalating and emits a diagnostic note instead of crashing loud.
+const QUEUE_ESCALATION_SANITY_CEILING_MULTIPLE = 30;
+
+// Age-based escalation (see DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS in
+// state-store.ts for the full "why age, not a counter" rationale and the
+// real launchd/systemd tick interval the default is sized against). Runs
+// after every enqueue; throws RemoteQueueEscalationError — crashing the
+// current tick loud, same supervisor-restart surface as a non-network
+// failure — once the OLDEST queued snapshot is older than the threshold, i.e.
+// once the remote has been continuously unreachable for that long, not just
+// unreachable on this one tick. Below the threshold this is a no-op, so a
+// machine that is merely offline (a laptop closed overnight, a flight, a
+// weekend) keeps queuing exactly as before this rework: silently, exit 0,
+// every tick. `thresholdMs === null` means escalation is disabled outright
+// (see PushConfig.queueEscalationThresholdMs) — also a no-op. Returns a
+// diagnostic note (string) instead of throwing when the computed age is past
+// the clock-skew sanity ceiling above; returns null when there is nothing to
+// report.
+function checkQueueEscalation(
+  stateStore: InstanceType<typeof StateStore>,
+  thresholdMs: number | null
+): string | null {
+  if (thresholdMs === null) {
+    return null;
+  }
+
+  const oldestAgeMs = stateStore.oldestQueuedSnapshotAgeMs();
+  if (oldestAgeMs === null || oldestAgeMs < thresholdMs) {
+    return null;
+  }
+
+  // Direct directory count instead of stateStore.listQueuedSnapshots() —
+  // that helper reads every queued snapshot's full local/base file trees
+  // off disk just to report a count here, on every single enqueue.
+  const queuedCount = readdirSync(stateStore.queueDir(), { withFileTypes: true }).filter(
+    (entry: { isDirectory: () => boolean }) => entry.isDirectory()
+  ).length;
+
+  const sanityCeilingMs = thresholdMs * QUEUE_ESCALATION_SANITY_CEILING_MULTIPLE;
+  if (oldestAgeMs > sanityCeilingMs) {
+    return (
+      `note: the oldest queued snapshot in ${stateStore.queueDir()} claims to be ` +
+      `${formatDurationMs(oldestAgeMs)} old, past the ${formatDurationMs(sanityCeilingMs)} sanity ceiling ` +
+      `(${QUEUE_ESCALATION_SANITY_CEILING_MULTIPLE}x the ${formatDurationMs(thresholdMs)} queue escalation ` +
+      `threshold) — skipping escalation instead of crashing loud, since an age this implausible more likely ` +
+      `means this machine's clock was wrong when the snapshot was queued than that the remote has genuinely ` +
+      `been unreachable this long.`
+    );
+  }
+
+  throw new RemoteQueueEscalationError(
+    `remote has been unreachable for ${formatDurationMs(oldestAgeMs)}, past the ` +
+      `${formatDurationMs(thresholdMs)} queue escalation threshold (${queuedCount} snapshot(s) queued in ` +
+      `${stateStore.queueDir()}); this usually means the remote is permanently misconfigured rather than ` +
+      `temporarily offline. Check remoteUrl/branch/repositorySubdir.`
+  );
+}
+
+function formatDurationMs(ms: number): string {
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+  const totalMinutes = totalSeconds / 60;
+  if (totalMinutes < 60) {
+    return `${totalMinutes.toFixed(1)}m`;
+  }
+  return `${(totalMinutes / 60).toFixed(1)}h`;
 }
 
 function previewPush(

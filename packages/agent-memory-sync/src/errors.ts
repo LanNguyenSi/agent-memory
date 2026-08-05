@@ -29,6 +29,34 @@ class RemoteUnavailableError extends CliError {
   }
 }
 
+// Thrown when the QUEUE — not any single git operation — has been failing
+// to drain for longer than the configured escalation threshold (default
+// 24h; see StateStore.oldestQueuedSnapshotAgeMs and push.ts's
+// checkQueueEscalation). Deliberately NOT a RemoteUnavailableError subclass:
+// push.ts's catch discriminates on `instanceof RemoteUnavailableError` to
+// decide "queue quietly, exit 0" vs. "something else is wrong, crash loud"
+// (see the RemoteUnavailableError comment above) — a RemoteUnavailableError
+// raised on any single tick is exactly that: one tick could not reach the
+// remote, which by itself is indistinguishable from a laptop that is
+// legitimately, temporarily offline (the case the whole queue-instead-of-
+// crash contract exists to protect). This error represents a different,
+// higher-level fact instead: the queue has now been failing to drain for so
+// long that continuing to report a clean "queued" outcome would itself
+// become the failure mode — a permanently misconfigured remote (wrong
+// remoteUrl, a renamed repository path, a host that accepts a connection but
+// cannot serve the repository) is ALSO classified RemoteUnavailableError and
+// would otherwise queue forever, exit 0 every tick, indefinitely. Once the
+// threshold is crossed this error must propagate and crash loud exactly
+// like a non-network failure does, even though its underlying cause is
+// still "the remote is unreachable" — that is the whole point of the
+// escalation.
+class RemoteQueueEscalationError extends CliError {
+  constructor(message: string, exitCode = 6) {
+    super(message, exitCode);
+    this.name = "RemoteQueueEscalationError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -44,6 +72,7 @@ function formatErrorMessage(error: unknown): string {
 module.exports = {
   CliError,
   RemoteUnavailableError,
+  RemoteQueueEscalationError,
   isCliError,
   formatErrorMessage
 };

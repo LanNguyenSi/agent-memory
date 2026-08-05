@@ -81,6 +81,25 @@
     so pair this job with the periodic-sync companion,
     com.agent-memory-sync.sync.plist.template — see its header and
     docs/machine-setup.md for why that companion is required, not optional.
+
+    Queue escalation, and why it DOES respawn (unlike a merely-offline
+    tick): the queue-instead-of-crash handling above only stays silent
+    while the queue keeps draining within a bounded time. If the OLDEST
+    snapshot in stateDir/queue is older than queueEscalationThresholdMs
+    (default 24h — src/memory-sync/state-store.ts's
+    DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS, sized against this template's own
+    companion's 900s StartInterval), the remote has been unreachable for the
+    WHOLE 24h, not just this one tick — a permanently broken remote (bad
+    remoteUrl, a renamed repo path, a host that accepts a connection but
+    can't serve the repository) rather than a laptop offline overnight. That
+    tick then exits non-zero (6) with a clear stderr message instead of the
+    usual clean 0, which — per KeepAlive/SuccessfulExit=false above — DOES
+    trigger a respawn. This is not a tight crash loop: `watch` only ticks on
+    a real local edit, so it only re-throws (and respawns again) the next
+    time this machine's memory actually changes while the remote is still
+    broken, each time writing a fresh, visible line to
+    watch.<profile>.err.log — see docs/machine-setup.md's "Queue escalation"
+    bullet and README.md's "Queue escalation" section under `watch`.
 -->
 <plist version="1.0">
 <dict>
