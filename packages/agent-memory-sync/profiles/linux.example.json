@@ -55,7 +55,7 @@
     "/home/<linux-username>/.harness/machine-state, destination",
     "'machine-state'), carrying this machine's toolchain snapshot for the",
     "cross-machine parity check run by the harness companion 'session-start",
-    "toolchain-parity' — see docs/machine-setup.md section e) for the full",
+    "toolchain-parity'; see docs/machine-setup.md section e) for the full",
     "payload convention (one file per machine, owner-writes-only) and",
     "section f) for the THIRD entry, frictions. Both entries set",
     "\"ownerScoped\": true, matching the real linux.json/macbook.json/",

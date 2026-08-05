@@ -229,7 +229,7 @@ empty/stale local workspace as if it were authoritative.
    checkout path (see the namespace-divergence note inside any existing
    profile file). The template's `syncPaths` already includes the
    `machine-state` entry (see (e) below) alongside `memory` and
-   `frictions` — fill in its `<linux-username>` placeholder like the rest
+   `frictions`; fill in its `<linux-username>` placeholder like the rest
    of the file rather than adding the entry by hand.
 4. First pull so the machine starts from the mini's current state:
    ```bash
@@ -336,8 +336,8 @@ bullet at the top of this document.
 ## e) machine-state payload (toolchain snapshots)
 
 Every committed machine profile (`profiles/mac-mini.json`,
-`profiles/macbook.json`, `profiles/linux.json`) — and the template,
-`profiles/linux.example.json` — carries a **second, independent**
+`profiles/macbook.json`, `profiles/linux.json`), and the template,
+`profiles/linux.example.json`, carries a **second, independent**
 `syncPaths` entry alongside the `memory` one described at the top of this
 document:
 
@@ -356,7 +356,7 @@ entries still land under the same shared `pandora/` remote tree
 (`repositorySubdir`), just under different top-level destinations
 (`pandora/memory/...` vs. `pandora/machine-state/...`). In
 `profiles/linux.example.json` the entry's `source` uses the same
-`<linux-username>` placeholder as `rootDir`/`stateDir` (see (c) above) —
+`<linux-username>` placeholder as `rootDir`/`stateDir` (see (c) above);
 copying the template and filling in that one placeholder is all a new
 machine needs to do here, rather than adding this entry from scratch.
 

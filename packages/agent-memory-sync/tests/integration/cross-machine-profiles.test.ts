@@ -25,7 +25,7 @@ const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 
 // Derives the committed profile file list structurally (readdirSync over
 // profiles/*.json) instead of a hand-maintained array, so a future profile
-// — including a new machine or a template edit — is picked up by every test
+// (including a new machine or a template edit) is picked up by every test
 // below that iterates "all committed profiles" without a matching edit
 // here. Deliberately includes linux.example.json: the template is a
 // committed *.json file under profiles/ like any other.
@@ -164,8 +164,8 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
   // specific config field that caused the divergence directly against the
   // committed files, independent of any CLI/git plumbing. profileFiles is
   // derived structurally (readdirSync, see listProfileFiles above), so it
-  // always includes linux.example.json — the copy-paste source for any new
-  // machine — without listing filenames by hand: a future template edit
+  // always includes linux.example.json (the copy-paste source for any new
+  // machine) without listing filenames by hand: a future template edit
   // that reintroduces a per-machine placeholder (as this template
   // originally had, mirroring the pre-fix macbook/mac-mini profiles) is
   // caught here too, not just on the profiles already in active use.
@@ -230,7 +230,7 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
   }
 
   // Same pin for the machine-state entry, closing the identical #64
-  // coverage gap — every committed profile, including linux.example.json:
+  // coverage gap for every committed profile, including linux.example.json:
   // the template now carries the entry too (placeholder <linux-username>
   // source), precisely so a future third machine copied from it starts with
   // the entry present instead of repeating the hand-patch divergence
@@ -262,17 +262,17 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
 // (real profiles' "rootDir/stateDir use a resolved absolute path, not '~'"
 // paragraph; the template's identical paragraph): rootDir/stateDir must be
 // absolute, must not start with '~' (agent-memory-sync's config loader
-// never expands it — see resolveRunConfig() in src/config/loader.ts, which
+// never expands it; see resolveRunConfig() in src/config/loader.ts, which
 // treats a leading '~' as a literal path segment, not the home directory),
 // and stateDir must sit OUTSIDE rootDir (otherwise the recursive '.'
-// syncPaths walk would also pick up this tool's own state — queue/base/tmp
-// — and try to sync it as memory content). profileFiles is the same
+// syncPaths walk would also pick up this tool's own state (queue/base/tmp)
+// and try to sync it as memory content). profileFiles is the same
 // structurally-derived list used above, so linux.example.json is included:
 // its placeholder segments (e.g. '<linux-username>', '<linux-hostname>')
 // keep both paths absolute-shaped (still start with '/') and un-prefixed by
 // '~', and its stateDir/rootDir still resolve to different subtrees, so all
 // three checks hold for the template's placeholder values with no
-// special-casing — these are pure string checks, never filesystem lookups,
+// special-casing: these are pure string checks, never filesystem lookups,
 // so an unresolved placeholder segment does not make them fail or need to
 // be skipped.
 test("all committed profiles keep rootDir/stateDir absolute, un-expanded (no leading '~'), and stateDir outside rootDir", () => {
