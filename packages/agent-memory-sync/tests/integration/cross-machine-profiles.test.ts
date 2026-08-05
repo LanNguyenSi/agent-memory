@@ -20,30 +20,59 @@
 // Those two sources get remapped (remapAbsoluteSyncPathsIntoSandbox below)
 // into per-machine fake-$HOME directories under this test's own sandbox
 // before the CLI ever runs, and assertSyncPathSourcesWithinSandbox asserts
-// every absolute syncPaths source actually landed under the sandbox root
-// before any sync executes. Without this, the test is not hermetic: it
-// silently reads/writes whatever machine-state/frictions.json content
-// happens to exist under the REAL path baked into the committed profile
-// (agent-tasks 112a0864) — on a machine whose home genuinely is
-// /Users/lannguyensi (e.g. the mini itself), that is live operational
-// content (measured: an unmodified run of this file copies the real
-// ~/.harness/machine-state/mac-mini.json and ~/.harness/frictions/mac-mini.json
-// verbatim into an uncleaned bare git repo under the OS tmpdir). On a machine
-// whose home is something else (e.g. the MacBook, /Users/lan), the mini
-// profile's hardcoded /Users/lannguyensi/... source instead makes a pull step
-// try to mkdir a path outside any real home the current user can write to —
-// the EACCES this whole task starts from. Remapping removes both failure
-// modes: every syncPaths source used by the CLI in this test is either
-// relative to the sandboxed --root-dir (the "." memory entry, via
-// --root-dir/--state-dir/--remote below) or explicitly rewritten into the
-// sandbox (machine-state, frictions), so nothing this test does can touch a
-// real machine's filesystem, regardless of what machine it runs on.
+// every syncPaths source — absolute sources directly, the "." memory
+// entry's relative source resolved against the sandboxed rootDir — actually
+// lands under the sandbox root before any sync executes. Without this, the
+// test is not hermetic: it silently reads/writes whatever
+// machine-state/frictions.json content happens to exist under the REAL
+// path baked into the committed profile (agent-tasks 112a0864) — on a
+// machine whose home genuinely is /Users/lannguyensi (e.g. the mini
+// itself), that is live operational content (measured: an unmodified run
+// of this file copies the real ~/.harness/machine-state/mac-mini.json and
+// ~/.harness/frictions/mac-mini.json verbatim into an uncleaned bare git
+// repo under the OS tmpdir). On a machine whose home is something else
+// (e.g. the MacBook, /Users/lan), the mini profile's hardcoded
+// /Users/lannguyensi/... source instead makes a pull step try to mkdir a
+// path outside any real home the current user can write to — the EACCES
+// this whole task starts from. Remapping removes both failure modes.
+//
+// rootDir/stateDir/remoteUrl get the same treatment for a related but
+// distinct reason: nothing in the CLI reads them from the derived config
+// today — resolveRunConfig's merge order (src/config/loader.ts) puts
+// CLI-flag overrides last, so the --root-dir/--state-dir/--remote flags
+// machineArgs below always passes win over whatever the config file says.
+// Hermeticity for these three used to rest entirely on machineArgs always
+// passing all three flags, with nothing asserting it — silently dropping
+// one would have pushed straight into the REAL values the committed
+// profile still carries verbatim in its config (rootDir: the operator's
+// real memory directory, currently ~270 live files; remoteUrl: the real
+// production bare repo; stateDir: the real state dir). Two things close
+// that, for defense in depth: (1) remapAbsoluteSyncPathsIntoSandbox also
+// rewrites rootDir/stateDir/remoteUrl in the derived config to the same
+// sandboxed values passed as CLI flags (an observable no-op today given
+// the merge order above, but it removes the live paths from the config
+// file this test hands to --config entirely), and (2) machineArgs itself
+// now asserts each of --root-dir/--state-dir/--remote resolves under the
+// sandbox root before returning the CLI argv, so a future call site that
+// drops or mistypes one of them fails this test immediately, before any
+// CLI invocation, instead of silently reaching a real path.
+//
+// Between the CLI-flag-level guard in machineArgs and the config-level
+// guard in assertSyncPathSourcesWithinSandbox, every path the CLI can act
+// on in this test — --root-dir/--state-dir/--remote, the "." memory
+// entry's source (relative to rootDir), and the machine-state/frictions
+// entries' rewritten absolute sources — resolves under the sandbox root,
+// so nothing this test does can touch a real machine's filesystem,
+// regardless of what machine it runs on. The flags, the config rewrite,
+// and the guard together sandbox rootDir/stateDir/remoteUrl; no single one
+// of them is load-bearing alone.
 //
 // repositorySubdir and every other syncPaths field (kind, destination,
-// ownerScoped, and the "." memory entry's source) still come from the real
-// files, unmodified — this test still overrides only --root-dir, --state-dir
-// and --remote at the CLI-flag level, same as before; the syncPaths source
-// remap happens one layer up, in the config file this test hands to --config.
+// ownerScoped) still come from the real files, unmodified — only the
+// machine-state/frictions sources and rootDir/stateDir/remoteUrl are
+// rewritten; the remap happens one layer up, in the config file this test
+// hands to --config, with the CLI-flag values (machineArgs) as the
+// actually-enforced defense.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { readdirSync } = require("node:fs");
@@ -85,14 +114,47 @@ function listProfileFiles(): string[] {
   return files;
 }
 
+// Resolves `candidate` and asserts it lands under `sandboxRoot` (exactly
+// equal, or as a descendant path). The one choke point every
+// sandbox-containment check in this file goes through, so
+// assertSyncPathSourcesWithinSandbox (config-file syncPaths sources) and
+// machineArgs (--root-dir/--state-dir/--remote CLI flags) apply the exact
+// same resolve+startsWith logic instead of two implementations that could
+// drift apart.
+function assertPathWithinSandbox(candidate: string, sandboxRoot: string, label: string): void {
+  const resolvedSandboxRoot = path.resolve(sandboxRoot);
+  const resolvedCandidate = path.resolve(candidate);
+  const withinSandbox =
+    resolvedCandidate === resolvedSandboxRoot || resolvedCandidate.startsWith(`${resolvedSandboxRoot}${path.sep}`);
+  assert.ok(
+    withinSandbox,
+    `${label}: '${candidate}' resolves to '${resolvedCandidate}', OUTSIDE the test sandbox root ` +
+      `'${resolvedSandboxRoot}' — refusing to let this test touch a path that could be a real machine's.`
+  );
+}
+
+// Asserts rootDir/stateDir/remoteDir resolve under `sandboxRoot` BEFORE
+// building the CLI argv, so a call site that drops or mistypes one of
+// --root-dir/--state-dir/--remote (the flags that make the CLI ignore
+// whatever the derived config's own rootDir/stateDir/remoteUrl say, per
+// resolveRunConfig's merge order in src/config/loader.ts) fails this test
+// immediately, before any CLI invocation, instead of silently reaching a
+// real machine path — see the file-level comment above for why this
+// mattered enough to add as a second, independent guard alongside the
+// config-file rewrite in remapAbsoluteSyncPathsIntoSandbox.
 function machineArgs(
   profileName: string,
   configPath: string,
   rootDir: string,
   stateDir: string,
   remoteDir: string,
+  sandboxRoot: string,
   extra: string[]
 ): string[] {
+  assertPathWithinSandbox(rootDir, sandboxRoot, `machineArgs('${profileName}') --root-dir`);
+  assertPathWithinSandbox(stateDir, sandboxRoot, `machineArgs('${profileName}') --state-dir`);
+  assertPathWithinSandbox(remoteDir, sandboxRoot, `machineArgs('${profileName}') --remote`);
+
   return [
     "run",
     profileName,
@@ -119,31 +181,32 @@ function machineArgs(
 const HOME_ABSOLUTE_SYNC_DESTINATIONS = ["machine-state", "frictions"];
 
 // Fails loudly (rather than silently reading/writing a real machine's files)
-// if any absolute syncPaths source in `settings` resolves outside
-// `sandboxRoot`. Called right after remapAbsoluteSyncPathsIntoSandbox below,
-// before any CLI invocation, so a remap that silently no-ops (e.g. a future
-// destination rename this test's remap logic doesn't know about) fails the
-// test immediately instead of quietly falling through to a real path.
+// if any syncPaths source in `settings` resolves outside `sandboxRoot` — an
+// absolute source is checked directly; a relative source (e.g. the "."
+// memory entry, or an escape attempt like "../../elsewhere") is resolved
+// against `sandboxedRootDir` first, the same base directory the CLI itself
+// would resolve it against once --root-dir is applied, so a relative source
+// can't slip past this guard just by not being absolute. Called right after
+// remapAbsoluteSyncPathsIntoSandbox below, before any CLI invocation, so a
+// remap that silently no-ops (e.g. a future destination rename this test's
+// remap logic doesn't know about) fails the test immediately instead of
+// quietly falling through to a real path.
 function assertSyncPathSourcesWithinSandbox(
   settings: { syncPaths?: Array<Record<string, unknown>> },
   sandboxRoot: string,
+  sandboxedRootDir: string,
   label: string
 ): void {
-  const resolvedSandboxRoot = path.resolve(sandboxRoot);
   for (const entry of settings.syncPaths || []) {
     const source = entry.source;
-    if (typeof source !== "string" || !path.isAbsolute(source)) {
+    if (typeof source !== "string") {
       continue;
     }
-    const resolvedSource = path.resolve(source);
-    const withinSandbox =
-      resolvedSource === resolvedSandboxRoot || resolvedSource.startsWith(`${resolvedSandboxRoot}${path.sep}`);
-    assert.ok(
-      withinSandbox,
-      `${label}: syncPaths entry with destination '${String(entry.destination)}' has an absolute source ` +
-        `'${source}' OUTSIDE the test sandbox root '${resolvedSandboxRoot}' — this test must never read or ` +
-        "write a real machine path (e.g. a real ~/.harness/machine-state or ~/.harness/frictions); the " +
-        "sandbox remap failed or was bypassed."
+    const candidate = path.isAbsolute(source) ? source : path.resolve(sandboxedRootDir, source);
+    assertPathWithinSandbox(
+      candidate,
+      sandboxRoot,
+      `${label}: syncPaths entry with destination '${String(entry.destination)}' has source '${source}'`
     );
   }
 }
@@ -151,16 +214,23 @@ function assertSyncPathSourcesWithinSandbox(
 // Loads the real committed profile at `realConfigPath`, rewrites the
 // 'source' of its machine-state/frictions syncPaths entries (the only
 // hardcoded machine-absolute paths any profile carries) to point inside a
-// per-machine fake-$HOME under `sandboxRoot`, asserts the result is fully
-// sandboxed, and writes it to a new config file this test hands to --config
-// in place of the real one. Every other field of every entry (kind,
-// destination, ownerScoped, and the "." memory entry's source), plus
-// repositorySubdir and everything else in the profile, is copied through
-// unmodified — only the two absolute sources move.
+// per-machine fake-$HOME under `sandboxRoot`, ALSO rewrites the profile's
+// top-level rootDir/stateDir/remoteUrl to the sandboxed values the caller
+// passes in (`sandboxedRootDir`/`sandboxedStateDir`/`sandboxedRemoteUrl` —
+// the same values machineArgs will pass as --root-dir/--state-dir/--remote;
+// see the file-level comment above for why this exists in addition to the
+// CLI flags), asserts the result is fully sandboxed, and writes it to a new
+// config file this test hands to --config in place of the real one. Every
+// other field of every entry (kind, destination, ownerScoped, and the "."
+// memory entry's source), plus repositorySubdir and everything else in the
+// profile, is copied through unmodified.
 function remapAbsoluteSyncPathsIntoSandbox(
   realConfigPath: string,
   sandboxRoot: string,
-  machineLabel: string
+  machineLabel: string,
+  sandboxedRootDir: string,
+  sandboxedStateDir: string,
+  sandboxedRemoteUrl: string
 ): { configPath: string; sandboxSourceByDestination: Record<string, string> } {
   const settings = JSON.parse(readText(realConfigPath));
   const fakeHome = path.join(sandboxRoot, `${machineLabel}-fake-home`);
@@ -181,9 +251,37 @@ function remapAbsoluteSyncPathsIntoSandbox(
     return { ...entry, source: sandboxSource };
   });
 
+  // Opaque-failure guard: a syncPaths entry the remap above never matched
+  // (e.g. a committed profile that dropped or renamed a machine-state/
+  // frictions entry) would silently leave sandboxSourceByDestination missing
+  // that key, and every downstream test assertion keyed off it would either
+  // throw a confusing "undefined is not a directory" or — worse — read
+  // `undefined` and skip a check outright. Name the missing destination
+  // explicitly instead.
+  for (const destination of HOME_ABSOLUTE_SYNC_DESTINATIONS) {
+    assert.ok(
+      sandboxSourceByDestination[destination],
+      `remapped profile for '${machineLabel}' (source: ${realConfigPath}) has no syncPaths entry for ` +
+        `destination '${destination}' — remapAbsoluteSyncPathsIntoSandbox found nothing to rewrite, so this ` +
+        "destination's sandboxed source directory was never created."
+    );
+  }
+
+  // Rewrite rootDir/stateDir/remoteUrl into the config file itself. The CLI
+  // never reads these from the config here (the --root-dir/--state-dir/
+  // --remote flags machineArgs passes always win — see the file-level
+  // comment), so this is an observable no-op today; it exists so the
+  // derived config this test hands to --config never carries the real
+  // operator paths verbatim, as defense in depth alongside the CLI-flag
+  // guard in machineArgs.
+  settings.rootDir = sandboxedRootDir;
+  settings.stateDir = sandboxedStateDir;
+  settings.remoteUrl = sandboxedRemoteUrl;
+
   assertSyncPathSourcesWithinSandbox(
     settings,
     sandboxRoot,
+    sandboxedRootDir,
     `remapped profile for '${machineLabel}' (source: ${realConfigPath})`
   );
 
@@ -223,8 +321,22 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   // is fully sandboxed; nothing below this point can read or write a real
   // machine's ~/.harness — see the file-level comment above for the leak
   // this closes (agent-tasks 112a0864).
-  const macbookRemap = remapAbsoluteSyncPathsIntoSandbox(path.join(PROFILES_DIR, "macbook.json"), root, "macbook");
-  const miniRemap = remapAbsoluteSyncPathsIntoSandbox(path.join(PROFILES_DIR, "mac-mini.json"), root, "mac-mini");
+  const macbookRemap = remapAbsoluteSyncPathsIntoSandbox(
+    path.join(PROFILES_DIR, "macbook.json"),
+    root,
+    "macbook",
+    macbookRoot,
+    macbookState,
+    remoteDir
+  );
+  const miniRemap = remapAbsoluteSyncPathsIntoSandbox(
+    path.join(PROFILES_DIR, "mac-mini.json"),
+    root,
+    "mac-mini",
+    miniRoot,
+    miniState,
+    remoteDir
+  );
   const macbookConfigPath = macbookRemap.configPath;
   const miniConfigPath = miniRemap.configPath;
 
@@ -253,9 +365,9 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   writeText(path.join(miniRoot, "MEMORY.md"), "mini memory\n");
 
   const macbookArgs = (...extra: string[]) =>
-    machineArgs("macbook", macbookConfigPath, macbookRoot, macbookState, remoteDir, extra);
+    machineArgs("macbook", macbookConfigPath, macbookRoot, macbookState, remoteDir, root, extra);
   const miniArgs = (...extra: string[]) =>
-    machineArgs("mac-mini", miniConfigPath, miniRoot, miniState, remoteDir, extra);
+    machineArgs("mac-mini", miniConfigPath, miniRoot, miniState, remoteDir, root, extra);
 
   // Seed: the mini (source of truth) pushes first, mirroring the real setup
   // order in docs/machine-setup.md.
@@ -284,11 +396,18 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
       path.join(root, "macbook-probe-workspace"),
       path.join(root, "macbook-probe-state"),
       remoteDir,
+      root,
       ["--mode", "pull"]
     )
   );
   const macbookProbePullPayload = JSON.parse(macbookProbePull.stdout);
   assert.equal(macbookProbePullPayload.runs[0].status, "applied");
+  assert.notEqual(
+    macbookProbePullPayload.runs[0].appliedFiles.length,
+    0,
+    "macbook probe pull reported status 'applied' but appliedFiles is empty — status alone doesn't prove the " +
+      "mini's seed push actually materialized anything for macbook"
+  );
 
   const macbookMachineStateDir = macbookRemap.sandboxSourceByDestination["machine-state"];
   const macbookFrictionsDir = macbookRemap.sandboxSourceByDestination["frictions"];
