@@ -227,7 +227,10 @@ empty/stale local workspace as if it were authoritative.
    Claude Code slug for `rootDir` — do not guess it from the other
    profiles' slugs, since it encodes this machine's own OS username and
    checkout path (see the namespace-divergence note inside any existing
-   profile file).
+   profile file). The template's `syncPaths` already includes the
+   `machine-state` entry (see (e) below) alongside `memory` and
+   `frictions` — fill in its `<linux-username>` placeholder like the rest
+   of the file rather than adding the entry by hand.
 4. First pull so the machine starts from the mini's current state:
    ```bash
    agent-memory-sync run <profile-name> --config profiles/linux.json --mode pull
@@ -333,9 +336,10 @@ bullet at the top of this document.
 ## e) machine-state payload (toolchain snapshots)
 
 Every committed machine profile (`profiles/mac-mini.json`,
-`profiles/macbook.json`, `profiles/linux.json`)
-carries a **second, independent** `syncPaths` entry alongside the `memory`
-one described at the top of this document:
+`profiles/macbook.json`, `profiles/linux.json`) — and the template,
+`profiles/linux.example.json` — carries a **second, independent**
+`syncPaths` entry alongside the `memory` one described at the top of this
+document:
 
 ```json
 { "source": "/Users/<user>/.harness/machine-state", "destination": "machine-state", "kind": "directory" }
@@ -350,7 +354,11 @@ treats an absolute `source` as-is instead of resolving it against `rootDir`,
 so this entry syncs on its own schedule independent of the memory tree; both
 entries still land under the same shared `pandora/` remote tree
 (`repositorySubdir`), just under different top-level destinations
-(`pandora/memory/...` vs. `pandora/machine-state/...`).
+(`pandora/memory/...` vs. `pandora/machine-state/...`). In
+`profiles/linux.example.json` the entry's `source` uses the same
+`<linux-username>` placeholder as `rootDir`/`stateDir` (see (c) above) —
+copying the template and filling in that one placeholder is all a new
+machine needs to do here, rather than adding this entry from scratch.
 
 **Payload convention — one file per machine, owner-writes-only.** Each
 machine writes exactly one JSON file under its own `machine-state/`,
@@ -403,9 +411,9 @@ exist ahead of any sync.
 Every committed profile (`profiles/mac-mini.json`, `profiles/macbook.json`,
 `profiles/linux.json`, `profiles/linux.example.json`) also carries an
 **independent** `syncPaths` entry pointing at `~/.harness/frictions` — the
-third entry in `mac-mini.json`/`macbook.json`/`linux.json` (after `memory`
-and `machine-state`), and the second in `linux.example.json` (that template
-does not yet include a `machine-state` entry):
+third entry in every one of them, after `memory` and `machine-state` (see
+(e) above; the template carries a placeholder `machine-state` entry too, so
+its `syncPaths` array has the same three-entry shape as the real profiles):
 
 ```json
 { "source": "/Users/<user>/.harness/frictions", "destination": "frictions", "kind": "directory" }

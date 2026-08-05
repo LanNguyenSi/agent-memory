@@ -23,6 +23,18 @@ const { cloneRemote, createSandbox, fileExists, initBareRemote, readText, runCli
 
 const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 
+// Derives the committed profile file list structurally (readdirSync over
+// profiles/*.json) instead of a hand-maintained array, so a future profile
+// — including a new machine or a template edit — is picked up by every test
+// below that iterates "all committed profiles" without a matching edit
+// here. Deliberately includes linux.example.json: the template is a
+// committed *.json file under profiles/ like any other.
+function listProfileFiles(): string[] {
+  return readdirSync(PROFILES_DIR)
+    .filter((name: string) => name.endsWith(".json"))
+    .sort();
+}
+
 function machineArgs(
   profileName: string,
   configPath: string,
@@ -129,13 +141,14 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
 test("all committed profiles (macbook, mac-mini, linux, linux.example) declare the same repositorySubdir", () => {
   // A narrower, faster companion to the end-to-end test above: pins the
   // specific config field that caused the divergence directly against the
-  // committed files, independent of any CLI/git plumbing. Includes
-  // linux.example.json — the copy-paste source for any new machine — so a
-  // future template edit that reintroduces a per-machine placeholder (as
-  // this template originally had, mirroring the pre-fix macbook/mac-mini
-  // profiles) is caught here too, not just on the profiles already in
-  // active use.
-  const profileFiles = ["macbook.json", "mac-mini.json", "linux.json", "linux.example.json"];
+  // committed files, independent of any CLI/git plumbing. profileFiles is
+  // derived structurally (readdirSync, see listProfileFiles above), so it
+  // always includes linux.example.json — the copy-paste source for any new
+  // machine — without listing filenames by hand: a future template edit
+  // that reintroduces a per-machine placeholder (as this template
+  // originally had, mirroring the pre-fix macbook/mac-mini profiles) is
+  // caught here too, not just on the profiles already in active use.
+  const profileFiles = listProfileFiles();
   const settingsByFile = Object.fromEntries(
     profileFiles.map((file) => [file, JSON.parse(readText(path.join(PROFILES_DIR, file)))])
   );
@@ -195,11 +208,16 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
     );
   }
 
-  // Same pin for the pre-existing machine-state entry, closing the identical
-  // #64 coverage gap — every committed machine profile, but not
-  // linux.example.json, since the template has never carried a machine-state
-  // entry (linux.json adds it deliberately; see machine-setup.md section f).
-  for (const file of ["macbook.json", "mac-mini.json", "linux.json"]) {
+  // Same pin for the machine-state entry, closing the identical #64
+  // coverage gap — every committed profile, including linux.example.json:
+  // the template now carries the entry too (placeholder <linux-username>
+  // source), precisely so a future third machine copied from it starts with
+  // the entry present instead of repeating the hand-patch divergence
+  // linux.json/macbook.json/mac-mini.json needed before this fix (agent-tasks
+  // 10df0d9d; see machine-setup.md section e)/f)). The endsWith check below
+  // tolerates the template's placeholder segment (the path is still
+  // absolute-shaped and still ends with the literal suffix).
+  for (const file of profileFiles) {
     const machineStateEntries = findEntriesByDestination(settingsByFile[file].syncPaths, "machine-state");
     assert.equal(
       machineStateEntries.length,
@@ -219,16 +237,69 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
   }
 });
 
+// Pins the three path invariants documented in every profile's "//" field
+// (real profiles' "rootDir/stateDir use a resolved absolute path, not '~'"
+// paragraph; the template's identical paragraph): rootDir/stateDir must be
+// absolute, must not start with '~' (agent-memory-sync's config loader
+// never expands it — see resolveRunConfig() in src/config/loader.ts, which
+// treats a leading '~' as a literal path segment, not the home directory),
+// and stateDir must sit OUTSIDE rootDir (otherwise the recursive '.'
+// syncPaths walk would also pick up this tool's own state — queue/base/tmp
+// — and try to sync it as memory content). profileFiles is the same
+// structurally-derived list used above, so linux.example.json is included:
+// its placeholder segments (e.g. '<linux-username>', '<linux-hostname>')
+// keep both paths absolute-shaped (still start with '/') and un-prefixed by
+// '~', and its stateDir/rootDir still resolve to different subtrees, so all
+// three checks hold for the template's placeholder values with no
+// special-casing — these are pure string checks, never filesystem lookups,
+// so an unresolved placeholder segment does not make them fail or need to
+// be skipped.
+test("all committed profiles keep rootDir/stateDir absolute, un-expanded (no leading '~'), and stateDir outside rootDir", () => {
+  const profileFiles = listProfileFiles();
+  const settingsByFile = Object.fromEntries(
+    profileFiles.map((file) => [file, JSON.parse(readText(path.join(PROFILES_DIR, file)))])
+  );
+
+  for (const file of profileFiles) {
+    const { rootDir, stateDir } = settingsByFile[file];
+
+    assert.ok(
+      typeof rootDir === "string" && path.isAbsolute(rootDir),
+      `profiles/${file} rootDir must be an absolute path, got: ${JSON.stringify(rootDir)}`
+    );
+    assert.ok(
+      typeof stateDir === "string" && path.isAbsolute(stateDir),
+      `profiles/${file} stateDir must be an absolute path, got: ${JSON.stringify(stateDir)}`
+    );
+    assert.ok(
+      !(rootDir as string).startsWith("~"),
+      `profiles/${file} rootDir must not start with '~' (the config loader never expands it), got: ${rootDir}`
+    );
+    assert.ok(
+      !(stateDir as string).startsWith("~"),
+      `profiles/${file} stateDir must not start with '~' (the config loader never expands it), got: ${stateDir}`
+    );
+
+    const rootDirWithSep = (rootDir as string).endsWith(path.sep) ? (rootDir as string) : (rootDir as string) + path.sep;
+    assert.ok(
+      stateDir !== rootDir && !(stateDir as string).startsWith(rootDirWithSep),
+      `profiles/${file} stateDir must sit OUTSIDE rootDir, got rootDir: ${rootDir}, stateDir: ${stateDir}`
+    );
+  }
+});
+
 // Pins Defect B's fix (agent-tasks 06d09cde / .ai/runs/2026-08-03-sync-conflict-markers-echo,
 // D-002/D-003): machine-state and frictions are one-owner-file-per-machine
 // destinations, so push must never re-offer a peer's file it only pulled —
 // ownerScoped: true on both entries in every real machine profile is what
 // makes collectLocalSyncFiles' ownerFilter (src/memory-sync/config.ts)
 // actually engage. Deliberately scoped to the same 3 real profiles as the
-// machine-state pin above, not linux.example.json — the template documents
-// the convention but was never a live sync target, so it carries no
-// machine-state entry at all and this task's brief only requires the flag on
-// "die 3 committeten Profilen".
+// machine-state pin above, not linux.example.json — the template's
+// machine-state entry does set ownerScoped: true (mirroring the real
+// profiles, agent-tasks 10df0d9d), but its frictions entry still does not,
+// so including the template here would fail on that entry, not the one this
+// comment is about; this task's brief only requires the flag on "die 3
+// committeten Profilen".
 test("macbook, mac-mini, and linux profiles set ownerScoped: true on both their machine-state and frictions entries", () => {
   const profileFiles = ["macbook.json", "mac-mini.json", "linux.json"];
   const settingsByFile = Object.fromEntries(

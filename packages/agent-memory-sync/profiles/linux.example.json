@@ -51,6 +51,19 @@
     "see isHiddenEntryName in src/memory-sync/config.ts and",
     "src/memory-sync/git-client.ts.",
     "",
+    "syncPaths' SECOND entry is machine-state (absolute source",
+    "/home/<linux-username>/.harness/machine-state, destination",
+    "'machine-state'), carrying this machine's toolchain snapshot for the",
+    "cross-machine parity check run by the harness companion 'session-start",
+    "toolchain-parity' — see docs/machine-setup.md section e) for the full",
+    "payload convention (one file per machine, owner-writes-only) and",
+    "section f) for the THIRD entry, frictions. It sets \"ownerScoped\": true,",
+    "matching the real linux.json/macbook.json/mac-mini.json profiles, so",
+    "push only ever offers this machine's own <profile>.json under",
+    "machine-state/ and never a peer's file this machine merely pulled —",
+    "see collectLocalSyncFiles' ownerFilter option in",
+    "src/memory-sync/config.ts.",
+    "",
     "stateDir is set OUTSIDE rootDir (a separate ~/.agent-memory-sync tree),",
     "which matters now that syncPaths covers the whole rootDir: if stateDir",
     "stayed nested inside rootDir, the recursive walk would also pick up",
@@ -82,6 +95,7 @@
   "reachabilityTimeoutMs": 5000,
   "syncPaths": [
     { "source": ".", "destination": "memory", "kind": "directory" },
+    { "source": "/home/<linux-username>/.harness/machine-state", "destination": "machine-state", "kind": "directory", "ownerScoped": true },
     { "source": "/home/<linux-username>/.harness/frictions", "destination": "frictions", "kind": "directory" }
   ]
 }
