@@ -114,6 +114,7 @@ Commands signal failure by raising/returning an error - they never call `os.exit
 | `3` | Configuration error (bad config file, missing required setting) |
 | `4` | Runtime error (external service unavailable, permission denied) |
 | `5` | Not found (resource the command expected does not exist) |
+| `6` | Queue escalation (the local queue has not drained within queueEscalationThresholdMs) |
 
 Error messages follow the pattern: `error: <what went wrong>. <how to fix it>.`
 

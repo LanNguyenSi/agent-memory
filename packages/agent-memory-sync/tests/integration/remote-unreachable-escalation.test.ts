@@ -201,3 +201,243 @@ test("push still queues cleanly when an unsupported-scheme remote (precheck assu
   assert.equal(fileExists(queueDirFor(workspaceRoot)), true);
   assert.equal(readdirSync(queueDirFor(workspaceRoot)).length, 1);
 });
+
+// Reviewer-named positive test (agent-tasks 11424b5e fix round, finding
+// #11): escalation must fire from the catch-all git-failure path
+// (push.ts's catch block around GitClient.lookupRemoteHead/push, ~line
+// 225-234), not only from the reachability-precheck skip path every test
+// above exercises. Reuses AC4's precheck-bypass mechanism above (an
+// unsupported-scheme remote the precheck assumes reachable, so the failure
+// only ever surfaces once the real git operation runs and throws inside the
+// try block) — but this time with the queue already backdated past the
+// threshold, so the SAME checkQueueEscalation call now runs from inside the
+// catch block instead of the reachability-precheck branch.
+test("escalation also fires from the catch-all git-failure path, not only the reachability-precheck path", () => {
+  const root = createSandbox("escalation-catch-path");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const bypassRemoteUrl = "git://127.0.0.1:1/definitely-not-a-real-remote.git";
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, bypassRemoteUrl));
+
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
+
+  backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
+  const secondRun = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(
+    secondRun.status,
+    6,
+    `expected escalation via the catch-all git-failure path. stderr: ${secondRun.stderr}`
+  );
+  assert.match(secondRun.stderr, /remote has been unreachable for/);
+  assert.match(secondRun.stderr, /permanently misconfigured/);
+
+  // The escalating tick's own snapshot must still be safely persisted.
+  const queuedEntries = readdirSync(queueDirFor(workspaceRoot));
+  assert.equal(queuedEntries.length, 2, `expected both snapshots to remain queued, found: ${queuedEntries.join(", ")}`);
+});
+
+// ─── Clock-skew guard: an implausibly large age skips escalation ────────────
+//
+// Reviewer finding (MEDIUM #3): a queued manifest's `createdAt` is a
+// wall-clock ISO timestamp, so oldestQueuedSnapshotAgeMs is only ever as
+// trustworthy as this machine's system clock was AT ENQUEUE TIME. A machine
+// that enqueued under a wrong-in-the-past clock must not turn crash-loud the
+// moment NTP corrects it forward. checkQueueEscalation (push.ts) guards this
+// with a sanity ceiling (30x the effective threshold) — past it, the tick
+// stays a clean, silent-except-for-one-note "queued" outcome instead of
+// escalating.
+test("push does not escalate when the oldest queued snapshot's age is implausibly large (clock-skew guard) — stays exit 0 with a diagnostic note", () => {
+  const root = createSandbox("escalation-clock-skew");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, offlineRemoteDir));
+
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
+
+  // 100x the real 24h production default — well past the 30x sanity
+  // ceiling, so this must be treated as an implausible clock artifact, not
+  // 100 days of genuine remote unavailability.
+  backdateQueuedSnapshots(workspaceRoot, 100 * 24 * 60 * 60 * 1000);
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const secondPayload = JSON.parse(secondRun.stdout);
+
+  assert.equal(secondRun.status, 0, `expected a clean exit 0 despite the implausible age. stderr: ${secondRun.stderr}`);
+  assert.equal(secondPayload.runs[0].status, "queued");
+  assert.ok(
+    (secondPayload.runs[0].notes || []).some((note: string) => /implausible/.test(note)),
+    `expected a clock-skew diagnostic note, got: ${JSON.stringify(secondPayload.runs[0].notes)}`
+  );
+});
+
+// A plain 25h age (well under the 30x sanity ceiling) must still escalate —
+// this is the SAME assertion the "push crashes loud..." AC1 test above
+// already makes; restated here in the same section as the guard's negative
+// case per the fix-round brief, without duplicating the full test body.
+test("push still escalates a plain 25h age — the clock-skew guard does not swallow genuine escalations", () => {
+  const root = createSandbox("escalation-clock-skew-normal");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, offlineRemoteDir));
+
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
+
+  backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
+  const secondRun = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(secondRun.status, 6, `expected the escalation's own exit code. stderr: ${secondRun.stderr}`);
+  assert.match(secondRun.stderr, /remote has been unreachable for/);
+});
+
+// ─── Config wiring: queueEscalationThresholdMs must actually reach
+//     checkQueueEscalation (MEDIUM finding #2 — mutation-invisible before
+//     this fix: every prior test above uses the 24h default, so unwiring
+//     the config/env override entirely at loader.ts still left every
+//     existing test green). Each case below backdates the queued manifest
+//     to an age LESS than the real 24h default but MORE than the override
+//     configured — so a run that silently fell back to the default instead
+//     of honoring the override would wrongly stay exit 0 here, catching
+//     exactly the mutation this finding names. See the mutation-verify note
+//     in the fix-round summary for the actual red/green run against this
+//     pair. ──────────────────────────────────────────────────────────────
+
+const CONFIG_WIRING_OVERRIDE_MS = 60 * 60 * 1000; // 1h — well under 24h
+const CONFIG_WIRING_BACKDATE_MS = 2 * 60 * 60 * 1000; // 2h — under 24h, over the 1h override
+
+test("queueEscalationThresholdMs from the project config file is actually wired through", () => {
+  const root = createSandbox("escalation-config-override");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, offlineRemoteDir),
+    queueEscalationThresholdMs: CONFIG_WIRING_OVERRIDE_MS
+  });
+
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
+
+  backdateQueuedSnapshots(workspaceRoot, CONFIG_WIRING_BACKDATE_MS);
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
+  const secondRun = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(
+    secondRun.status,
+    6,
+    `expected the configured 1h override to escalate at 2h old (would stay exit 0 under the unwired 24h ` +
+      `default). stderr: ${secondRun.stderr}`
+  );
+  assert.match(secondRun.stderr, /remote has been unreachable for/);
+});
+
+test("queueEscalationThresholdMs from AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS is actually wired through", () => {
+  const root = createSandbox("escalation-env-override");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const env = {
+    ...process.env,
+    AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS: String(CONFIG_WIRING_OVERRIDE_MS)
+  };
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, offlineRemoteDir));
+
+  const firstRun = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
+    { env }
+  );
+  assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
+
+  backdateQueuedSnapshots(workspaceRoot, CONFIG_WIRING_BACKDATE_MS);
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
+  const secondRun = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
+    { env, expectFailure: true }
+  );
+
+  assert.equal(
+    secondRun.status,
+    6,
+    `expected the env override to escalate at 2h old. stderr: ${secondRun.stderr}`
+  );
+  assert.match(secondRun.stderr, /remote has been unreachable for/);
+});
+
+test("an invalid AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS value fails loud with a config error, not a silent fallback", () => {
+  const root = createSandbox("escalation-env-invalid");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const env = { ...process.env, AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS: "not-a-number" };
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "content\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, path.join(root, "unused-remote.git")));
+
+  const result = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
+    { env, expectFailure: true }
+  );
+
+  assert.equal(result.status, 3, `expected a config error exit code. stderr: ${result.stderr}`);
+  assert.match(result.stderr, /AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS/);
+  assert.match(result.stderr, /positive integer/);
+});
+
+// ─── Off switch: null disables escalation entirely (MEDIUM finding #8) ──────
+test("queueEscalationThresholdMs: null disables escalation entirely — an ancient queue stays exit 0", () => {
+  const root = createSandbox("escalation-disabled");
+  const offlineRemoteDir = path.join(root, "missing-remote.git");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, offlineRemoteDir),
+    queueEscalationThresholdMs: null
+  });
+
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
+
+  // Far older than the real 24h default — would escalate under any finite
+  // threshold, including the default this machine would otherwise fall
+  // back to.
+  backdateQueuedSnapshots(workspaceRoot, 365 * 24 * 60 * 60 * 1000);
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const secondPayload = JSON.parse(secondRun.stdout);
+
+  assert.equal(secondRun.status, 0, `expected escalation to stay disabled. stderr: ${secondRun.stderr}`);
+  assert.equal(secondPayload.runs[0].status, "queued");
+});

@@ -3,7 +3,7 @@ const {
   requireRemoteUrl,
   resolveRunConfig
 } = require("../config/loader");
-const { CliError, isCliError } = require("../errors");
+const { CliError, RemoteQueueEscalationError, formatErrorMessage, isCliError } = require("../errors");
 const { performPull } = require("../memory-sync/pull");
 const { performPush } = require("../memory-sync/push");
 const { summarizeOperation } = require("../memory-sync/preview");
@@ -96,13 +96,56 @@ function registerRunCommand(program: import("commander").Command): void {
 
       const runs: Array<Record<string, unknown>> = [];
       let remainingRuns = maxRuns || (runConfig.schedule ? Number.POSITIVE_INFINITY : 1);
+      // Set once a scheduled tick escalates (RemoteQueueEscalationError) so
+      // the whole invocation still exits 6 after the loop below finishes —
+      // see the try/catch inside the loop for why a scheduled run does not
+      // stop ticking the moment that happens.
+      let queueEscalationError: unknown = null;
 
       while (remainingRuns > 0) {
         if (options.dryRun) {
           writeDryRun(`executing ${runConfig.mode} for profile '${runConfig.profile}'`, outputOptions);
         }
 
-        const execution = await executeMode(runConfig, { dryRun: options.dryRun }, outputOptions);
+        let execution: Record<string, unknown>;
+        try {
+          execution = await executeMode(runConfig, { dryRun: options.dryRun }, outputOptions);
+        } catch (error) {
+          // Single run (no --schedule): preserve the pre-fix behavior
+          // exactly — RemoteQueueEscalationError (and everything else)
+          // propagates immediately, uncaught, straight out of this action
+          // handler to main.ts's top-level catch, with writeResult() below
+          // never reached. Immediate exit 6, same as before this fix.
+          //
+          // Scheduled run: an escalating tick must not kill the scheduler
+          // outright. run --schedule IS its own supervisor/replay loop — a
+          // tick that escalated failed to drain the queue on THIS tick, but
+          // the queue is still safely persisted and a later tick, once the
+          // remote recovers, is exactly what replays it. Dying on the first
+          // escalation stranded every remaining tick from ever getting that
+          // chance (measured: exit 6 after tick 1 of 3, zero stdout, no
+          // further ticks ran at all). So: record it, keep ticking, and
+          // still exit 6 once the loop ends — just after every remaining
+          // tick had its shot, and after writeResult() below has run so a
+          // --output json consumer still sees every tick that did complete.
+          if (!runConfig.schedule || !(error instanceof RemoteQueueEscalationError)) {
+            throw error;
+          }
+
+          queueEscalationError = error;
+          execution = {
+            kind: runConfig.mode,
+            status: "escalated",
+            remoteHeadBefore: null,
+            remoteHeadAfter: null,
+            appliedFiles: [],
+            mergedFiles: [],
+            conflictFiles: [],
+            queuedSnapshotId: null,
+            notes: [formatErrorMessage(error)]
+          };
+        }
+
         runs.push(execution);
         remainingRuns -= 1;
 
@@ -128,6 +171,10 @@ function registerRunCommand(program: import("commander").Command): void {
       };
 
       writeResult(payload, runConfig.outputFormat, () => runs.map(summarizeOperation).join("\n"));
+
+      if (queueEscalationError) {
+        throw queueEscalationError;
+      }
     });
 }
 

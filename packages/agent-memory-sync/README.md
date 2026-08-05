@@ -131,14 +131,23 @@ Environment=AGENT_MEMORY_SYNC_BRANCH=main
 ExecStart=/usr/local/bin/agent-memory-sync watch --verbose
 Restart=on-failure
 RestartSec=5s
-StartLimitIntervalSec=300
-StartLimitBurst=10
+StartLimitIntervalSec=1800
+StartLimitBurst=30
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the failures that still exit non-zero — a config/data error raised before the remote working copy is prepared (e.g. a required `syncPaths` entry missing), or any other git-level failure while preparing/committing that working copy (a full disk, a corrupted git config, a broken commit hook, ...) — so a persistently broken cause does not crashloop forever; a remote that is merely unreachable or rejecting the push (see below) no longer exits at all, so it never spends this budget. The one exception is [queue escalation](#queue-escalation-a-permanently-broken-remote-does-not-queue-forever): once the queue has been failing to drain past `queueEscalationThresholdMs` (default 24h), a tick DOES exit non-zero again — but only on a real local edit (`watch` is edge-triggered), so it does not spend this budget any faster than this machine's memory actually changes while the remote stays broken. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on one of those failures.
+
+Honest arithmetic, measured: one crash-restart cycle (a failed start plus `RestartSec`) is ~11s. Under the original `StartLimitBurst=10` / `StartLimitIntervalSec=300` pairing shown in earlier revisions of this doc, 10 crashes exhausted the budget in ~110s — well inside a single ordinary "edit the config, restart, still broken, edit again" debugging session. Once the burst is exhausted, systemd does not just pause the restart loop, it marks the unit `failed` and **stops trying entirely**, even after the underlying cause is fixed, until the failure counter is explicitly cleared:
+
+```bash
+systemctl reset-failed agent-memory-sync-watch.service
+systemctl restart agent-memory-sync-watch.service   # reset-failed only clears the counter, it does not start the unit
+```
+
+The sample unit above raises the pairing to `StartLimitIntervalSec=1800` / `StartLimitBurst=30` (~30 crashes × ~11s ≈ 330s, under 6 minutes of continuous crash-looping) so ordinary iterative config editing has realistic headroom before landing in `failed`, while a genuinely broken cause still gets capped well short of looping forever. macOS's `ThrottleInterval` (see `docs/launchd/com.agent-memory-sync.watch.plist.template`) is not a direct analogue: it only enforces a minimum gap between respawns and has no burst counter or give-up state at all, so a broken `watch` LaunchAgent keeps retrying indefinitely instead of ever reaching a terminal `failed` state that needs a manual reset.
 
 macOS equivalent (LaunchAgent instead of systemd): see
 [`docs/launchd/com.agent-memory-sync.watch.plist.template`](docs/launchd/com.agent-memory-sync.watch.plist.template)
@@ -347,7 +356,14 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   host that accepts a connection but cannot serve the repository) does not queue silently
   forever. Below the threshold nothing changes: silent, exit `0`, every tick — a merely offline
   machine is unaffected. See [watch's "Queue escalation" section](#queue-escalation-a-permanently-broken-remote-does-not-queue-forever)
-  for the full rationale
+  for the full rationale. Set `queueEscalationThresholdMs` to `null` (config file, or
+  `config set queueEscalationThresholdMs null`) to disable this check entirely — mirrors
+  `reachabilityCheckCommand`'s null-is-a-real-value convention above. The queue then keeps
+  queuing silently, exit `0`, forever, regardless of age; a computed age past a 30x-threshold
+  sanity ceiling is also never escalated even with a finite threshold configured, since an age
+  that implausible more likely reflects this machine's clock having been wrong when the
+  snapshot was queued than a genuinely stuck remote — a diagnostic note is emitted on that
+  otherwise-silent "queued" outcome instead
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers
 - `--dry-run` previews the result without changing local files or the remote repository
 

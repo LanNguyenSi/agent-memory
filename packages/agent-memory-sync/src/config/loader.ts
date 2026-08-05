@@ -37,7 +37,12 @@ interface UserConfig {
   gitBinary?: string;
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
-  queueEscalationThresholdMs?: number;
+  // `undefined` (key absent) falls through the DEFAULTS/env/config-file merge
+  // chain to the default threshold; explicit `null` is a distinct, real
+  // value meaning "escalation disabled" — mirrors reachabilityCheckCommand's
+  // null-is-a-real-value convention. See validateQueueEscalationThresholdMs
+  // and push.ts's resolveQueueEscalationThresholdMs.
+  queueEscalationThresholdMs?: number | null;
 }
 
 interface LoadedConfig {
@@ -63,7 +68,7 @@ interface RunConfig extends UserConfig {
   mode: RunMode;
   reachabilityTimeoutMs: number;
   reachabilityCheckCommand: string[] | null;
-  queueEscalationThresholdMs: number;
+  queueEscalationThresholdMs: number | null;
 }
 
 interface RunConfigOverrides {
@@ -84,7 +89,7 @@ interface RunConfigOverrides {
   mode?: RunMode;
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
-  queueEscalationThresholdMs?: number;
+  queueEscalationThresholdMs?: number | null;
 }
 
 const DEFAULT_SYNC_PATHS: SyncPathConfig[] = [
@@ -172,11 +177,7 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
       DEFAULT_REACHABILITY_TIMEOUT_MS
     ),
     reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand),
-    queueEscalationThresholdMs: validatePositiveInteger(
-      merged.queueEscalationThresholdMs,
-      "queueEscalationThresholdMs",
-      DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
-    )
+    queueEscalationThresholdMs: validateQueueEscalationThresholdMs(merged.queueEscalationThresholdMs)
   };
 }
 
@@ -507,6 +508,18 @@ function validatePositiveInteger(value: number | undefined, key: string, fallbac
   return value;
 }
 
+// Explicit `null` is a real, distinct value here (see UserConfig.queueEscalation
+// ThresholdMs's comment) meaning "escalation disabled" — passed straight
+// through, not defaulted. Anything else still goes through the same
+// positive-integer validation `reachabilityTimeoutMs` uses.
+function validateQueueEscalationThresholdMs(value: number | null | undefined): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  return validatePositiveInteger(value, "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
+}
+
 function normalizeReachabilityCheckCommand(value?: string[] | null): string[] | null {
   if (!value) {
     return null;
@@ -548,11 +561,9 @@ function parseConfigValue(key: string, value: string): unknown {
     case "reachabilityTimeoutMs":
       return validatePositiveInteger(Number(value), "reachabilityTimeoutMs", DEFAULT_REACHABILITY_TIMEOUT_MS);
     case "queueEscalationThresholdMs":
-      return validatePositiveInteger(
-        Number(value),
-        "queueEscalationThresholdMs",
-        DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
-      );
+      return value === "null"
+        ? null
+        : validatePositiveInteger(Number(value), "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
     case "reachabilityCheckCommand":
       return value === "null"
         ? null

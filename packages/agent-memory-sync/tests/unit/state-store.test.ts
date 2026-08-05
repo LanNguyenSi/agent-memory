@@ -76,6 +76,34 @@ test("oldestQueuedSnapshotAgeMs: a queued directory with a missing/corrupt manif
   assert.equal(store.oldestQueuedSnapshotAgeMs(), null);
 });
 
+// Reviewer-named test (agent-tasks 11424b5e fix round, LOW finding #7): pins
+// the other half of the one-way-bias trade-off documented above
+// oldestQueuedSnapshotAgeMs — a corrupt manifest must not suppress
+// escalation as long as at least one genuinely old manifest survives
+// intact. Without this, a naive implementation that defaulted a corrupt
+// manifest's timestamp to "now" instead of excluding it would drag the
+// MIN() toward the present and hide a real stuck queue.
+test("oldestQueuedSnapshotAgeMs: a mix of some corrupt manifests and one older valid manifest still reports the valid one's age, not null", () => {
+  const store = new StateStore(sandbox("mixed-corrupt"), "default");
+  const older = new Date("2026-01-01T00:00:00.000Z");
+
+  const survivingId = store.enqueueSnapshot({ localFiles: { "a.md": "one" }, baseFiles: {} });
+  const corruptId = store.enqueueSnapshot({ localFiles: { "b.md": "two" }, baseFiles: {} });
+
+  const survivingManifestPath = path.join(store.queueDir(), survivingId, "manifest.json");
+  const survivingManifest = JSON.parse(readFileSync(survivingManifestPath, "utf8"));
+  writeFileSync(
+    survivingManifestPath,
+    JSON.stringify({ ...survivingManifest, createdAt: older.toISOString() }, null, 2)
+  );
+
+  const corruptManifestPath = path.join(store.queueDir(), corruptId, "manifest.json");
+  writeFileSync(corruptManifestPath, "{ not valid json");
+
+  const referenceTime = older.getTime() + 5000;
+  assert.equal(store.oldestQueuedSnapshotAgeMs(referenceTime), 5000);
+});
+
 test("oldestQueuedSnapshotAgeMs: clears back to null after removeQueuedSnapshot empties the queue", () => {
   const store = new StateStore(sandbox("cleared"), "default");
   const id = store.enqueueSnapshot({ localFiles: { "a.md": "one" }, baseFiles: {} });

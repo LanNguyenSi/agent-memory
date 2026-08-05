@@ -16,6 +16,19 @@ const path = require("node:path");
 // repository) can hide before an operator is guaranteed to see it within a
 // day. See push.ts's checkQueueEscalation and errors.ts's
 // RemoteQueueEscalationError for how this value is consumed.
+//
+// Wall-clock dependency: oldestQueuedSnapshotAgeMs derives this entirely
+// from each queued manifest.json's `createdAt` (an ISO wall-clock timestamp
+// written at enqueue time) compared against `Date.now()` at read time — so
+// the age this threshold is measured against is only ever as trustworthy as
+// this machine's system clock was AT ENQUEUE TIME, not some monotonic
+// duration. A machine that enqueued snapshots under a wrong-in-the-past
+// clock (a dead RTC battery, a container that started before NTP synced,
+// ...) computes an implausibly large age the moment NTP corrects the clock
+// forward, even though the remote may not have been unreachable that long at
+// all. checkQueueEscalation in push.ts guards against exactly this with a
+// sanity ceiling (30x the effective threshold) above which it skips
+// escalating and emits a diagnostic note instead of crashing loud.
 const DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 interface SyncState {
@@ -128,6 +141,23 @@ class StateStore {
   // tick that failed to reach the remote in the current unbroken failure
   // streak; it resets to null the moment a push actually succeeds. See
   // push.ts's checkQueueEscalation for how this is used.
+  //
+  // One-way bias, worth naming: because a missing/corrupt manifest is
+  // EXCLUDED from the age computation above rather than treated as
+  // "infinitely old", the result is always biased toward UNDER-estimating
+  // the true queue age, never over-estimating it. If the OLDEST snapshots
+  // happen to be the ones whose manifests got corrupted (e.g. a partial disk
+  // failure hit only the earliest entries), the computed age silently
+  // collapses to that of the oldest SURVIVING valid manifest — which may be
+  // much newer — and, in the limit, if every manifest is corrupt, this
+  // returns null exactly as if the queue were empty, suppressing escalation
+  // entirely even though a genuinely stuck queue is still sitting there.
+  // This is a deliberate defensive choice (a corrupt manifest must not
+  // itself manufacture a false escalation), but it can never cause a FALSE
+  // escalation, only a missed one. See the "a mix of some corrupt manifests
+  // and one older valid manifest" test in tests/unit/state-store.test.ts,
+  // which pins the other half of this trade-off: as long as at least one old
+  // manifest survives intact, escalation still fires from it.
   oldestQueuedSnapshotAgeMs(referenceTime: number = Date.now()): number | null {
     this.ensure();
     const createdTimestamps = readdirSync(this.queueDir(), { withFileTypes: true })

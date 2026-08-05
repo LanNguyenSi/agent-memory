@@ -312,8 +312,19 @@ empty/stale local workspace as if it were authoritative.
    `Persistent=true` catches up a missed tick (e.g. the machine was off)
    shortly after boot instead of waiting a full interval. A tick that fires
    while the mini is unreachable is a fast, clean no-op — same reachability
-   precheck `run` always uses — so a short 15-minute interval is safe; it
-   will not pile up overlapping ssh attempts or spam logs. Install with:
+   precheck `run` always uses — so a short 15-minute interval is safe below
+   the queue escalation threshold (see the "Queue escalation" bullet above):
+   it will not pile up overlapping ssh attempts or spam logs. That stops
+   being true once the OLDEST queued snapshot crosses
+   `queueEscalationThresholdMs` (default 24h, ~96 missed ticks at this
+   interval) — from then on, each 15-minute tick exits non-zero (`6`) with a
+   clear stderr message instead of a silent no-op. Because this is a
+   `Type=oneshot` service fired by a `.timer`, not a `Restart=on-failure`
+   daemon, the timer keeps firing it again every 15 minutes regardless of
+   that failure, so expect one failure line in `journalctl -u
+   agent-memory-sync-sync.service` per tick until the remote is fixed — that
+   repeated visibility is the intended outcome of escalation, not log spam
+   to suppress. Install with:
    `systemctl daemon-reload && systemctl enable --now agent-memory-sync-sync.timer`.
 
 ## d) Restore / rollback
