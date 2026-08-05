@@ -342,7 +342,7 @@ Every committed machine profile (`profiles/mac-mini.json`,
 document:
 
 ```json
-{ "source": "/Users/<user>/.harness/machine-state", "destination": "machine-state", "kind": "directory" }
+{ "source": "/Users/<user>/.harness/machine-state", "destination": "machine-state", "kind": "directory", "ownerScoped": true }
 ```
 
 Unlike the `memory` entry, `source` here is an **absolute path outside
@@ -363,7 +363,12 @@ machine needs to do here, rather than adding this entry from scratch.
 **Payload convention — one file per machine, owner-writes-only.** Each
 machine writes exactly one JSON file under its own `machine-state/`,
 named after its own profile (`machine-state/mac-mini.json`,
-`machine-state/macbook.json`, ...). A machine never writes to another
+`machine-state/macbook.json`, ...). This is enforced, not just documented:
+the syncPaths entry above sets `"ownerScoped": true`, which is the
+mechanism that makes push only ever offer this machine's own
+`<profile>.json`, never a peer's file this machine merely pulled (see
+`collectLocalSyncFiles`'s `ownerFilter` option in
+`src/memory-sync/config.ts`). A machine never writes to another
 machine's file — this makes *content* conflicts on this path structurally
 impossible (`inline-markers` conflict resolution is never invoked here in
 practice, unlike the `memory` tree where concurrent edits are expected).
@@ -416,7 +421,7 @@ third entry in every one of them, after `memory` and `machine-state` (see
 its `syncPaths` array has the same three-entry shape as the real profiles):
 
 ```json
-{ "source": "/Users/<user>/.harness/frictions", "destination": "frictions", "kind": "directory" }
+{ "source": "/Users/<user>/.harness/frictions", "destination": "frictions", "kind": "directory", "ownerScoped": true }
 ```
 
 Same convention as the machine-state payload in section e) above: one file

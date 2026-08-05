@@ -39,7 +39,7 @@
     "recorded as a cosmetic label inside this machine's state.json. Fill it",
     "in anyway, for a self-documenting invocation and a correct label.",
     "",
-    "syncPaths is a single directory entry covering the ENTIRE rootDir",
+    "syncPaths' FIRST entry is a directory entry covering the ENTIRE rootDir",
     "(source '.'), so every file agent-memory-sync finds there is synced,",
     "including future subdirectories, without listing individual",
     "files/folders by name. destination is the non-'.' literal 'memory', not",
@@ -57,12 +57,12 @@
     "cross-machine parity check run by the harness companion 'session-start",
     "toolchain-parity' — see docs/machine-setup.md section e) for the full",
     "payload convention (one file per machine, owner-writes-only) and",
-    "section f) for the THIRD entry, frictions. It sets \"ownerScoped\": true,",
-    "matching the real linux.json/macbook.json/mac-mini.json profiles, so",
-    "push only ever offers this machine's own <profile>.json under",
-    "machine-state/ and never a peer's file this machine merely pulled —",
-    "see collectLocalSyncFiles' ownerFilter option in",
-    "src/memory-sync/config.ts.",
+    "section f) for the THIRD entry, frictions. Both entries set",
+    "\"ownerScoped\": true, matching the real linux.json/macbook.json/",
+    "mac-mini.json profiles, so push only ever offers this machine's own",
+    "<profile>.json under machine-state/ or frictions/ and never a peer's",
+    "file this machine merely pulled; see collectLocalSyncFiles'",
+    "ownerFilter option in src/memory-sync/config.ts.",
     "",
     "stateDir is set OUTSIDE rootDir (a separate ~/.agent-memory-sync tree),",
     "which matters now that syncPaths covers the whole rootDir: if stateDir",
@@ -96,6 +96,6 @@
   "syncPaths": [
     { "source": ".", "destination": "memory", "kind": "directory" },
     { "source": "/home/<linux-username>/.harness/machine-state", "destination": "machine-state", "kind": "directory", "ownerScoped": true },
-    { "source": "/home/<linux-username>/.harness/frictions", "destination": "frictions", "kind": "directory" }
+    { "source": "/home/<linux-username>/.harness/frictions", "destination": "frictions", "kind": "directory", "ownerScoped": true }
   ]
 }

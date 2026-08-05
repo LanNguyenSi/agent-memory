@@ -29,10 +29,31 @@ const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 // below that iterates "all committed profiles" without a matching edit
 // here. Deliberately includes linux.example.json: the template is a
 // committed *.json file under profiles/ like any other.
+//
+// A purely structural derivation loses deletion/rename detection though:
+// an empty or partially-emptied profiles/ directory would silently make
+// every test below iterate over fewer (or zero) files and report green
+// instead of catching the loss. The non-vacuity guard below restores that
+// detection while still auto-picking-up any future profile: it requires
+// at least the 4 known files to be present, by name, on every call.
 function listProfileFiles(): string[] {
-  return readdirSync(PROFILES_DIR)
+  const files = readdirSync(PROFILES_DIR)
     .filter((name: string) => name.endsWith(".json"))
     .sort();
+
+  const knownProfiles = ["macbook.json", "mac-mini.json", "linux.json", "linux.example.json"];
+  assert.ok(
+    files.length >= 4,
+    `profiles/ must contain at least the ${knownProfiles.length} known machine profiles, found ${files.length}: ${JSON.stringify(files)} (PROFILES_DIR: ${PROFILES_DIR})`
+  );
+  const missing = knownProfiles.filter((name) => !files.includes(name));
+  assert.equal(
+    missing.length,
+    0,
+    `profiles/ is missing known machine profile(s): ${JSON.stringify(missing)}, found: ${JSON.stringify(files)} (PROFILES_DIR: ${PROFILES_DIR})`
+  );
+
+  return files;
 }
 
 function machineArgs(
@@ -280,9 +301,9 @@ test("all committed profiles keep rootDir/stateDir absolute, un-expanded (no lea
       `profiles/${file} stateDir must not start with '~' (the config loader never expands it), got: ${stateDir}`
     );
 
-    const rootDirWithSep = (rootDir as string).endsWith(path.sep) ? (rootDir as string) : (rootDir as string) + path.sep;
+    const rel = path.posix.relative(path.posix.normalize(rootDir as string), path.posix.normalize(stateDir as string));
     assert.ok(
-      stateDir !== rootDir && !(stateDir as string).startsWith(rootDirWithSep),
+      rel !== "" && (rel.startsWith("../") || path.posix.isAbsolute(rel)),
       `profiles/${file} stateDir must sit OUTSIDE rootDir, got rootDir: ${rootDir}, stateDir: ${stateDir}`
     );
   }
@@ -291,17 +312,20 @@ test("all committed profiles keep rootDir/stateDir absolute, un-expanded (no lea
 // Pins Defect B's fix (agent-tasks 06d09cde / .ai/runs/2026-08-03-sync-conflict-markers-echo,
 // D-002/D-003): machine-state and frictions are one-owner-file-per-machine
 // destinations, so push must never re-offer a peer's file it only pulled —
-// ownerScoped: true on both entries in every real machine profile is what
+// ownerScoped: true on both entries in every committed profile is what
 // makes collectLocalSyncFiles' ownerFilter (src/memory-sync/config.ts)
-// actually engage. Deliberately scoped to the same 3 real profiles as the
-// machine-state pin above, not linux.example.json — the template's
-// machine-state entry does set ownerScoped: true (mirroring the real
-// profiles, agent-tasks 10df0d9d), but its frictions entry still does not,
-// so including the template here would fail on that entry, not the one this
-// comment is about; this task's brief only requires the flag on "die 3
-// committeten Profilen".
-test("macbook, mac-mini, and linux profiles set ownerScoped: true on both their machine-state and frictions entries", () => {
-  const profileFiles = ["macbook.json", "mac-mini.json", "linux.json"];
+// actually engage. profileFiles is the same structurally-derived list used
+// by the tests above (see listProfileFiles), so it now includes
+// linux.example.json too: an earlier revision of this test hand-scoped the
+// list to the 3 real profiles and excluded the template, because the
+// template's machine-state entry set ownerScoped: true (mirroring the real
+// profiles, agent-tasks 10df0d9d) while its frictions entry still did not;
+// including the template would have failed on that entry alone. The
+// template's frictions entry now sets ownerScoped: true too, closing that
+// gap, so the exclusion is no longer needed and a future regression in the
+// template is caught here like any real profile.
+test("all committed profiles set ownerScoped: true on both their machine-state and frictions entries", () => {
+  const profileFiles = listProfileFiles();
   const settingsByFile = Object.fromEntries(
     profileFiles.map((file) => [file, JSON.parse(readText(path.join(PROFILES_DIR, file)))])
   );
