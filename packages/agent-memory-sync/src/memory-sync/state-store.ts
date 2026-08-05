@@ -1,6 +1,23 @@
 const { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 
+// Default escalation threshold for StateStore.oldestQueuedSnapshotAgeMs
+// consumers (see push.ts's checkQueueEscalation): how long the queue may
+// keep failing to drain before a tick that would otherwise be a clean,
+// silent "queued" outcome instead crashes loud. 24h, derived from this
+// package's own committed launchd/systemd periodic-sync tick interval — 900s
+// (docs/launchd/com.agent-memory-sync.sync.plist.template's StartInterval)
+// and the equivalent systemd OnUnitActiveSec=15min
+// (docs/machine-setup.md section (c)) — 24h is 96 consecutive missed ticks
+// at that cadence, comfortably longer than the "MacBook closed overnight"
+// steady state both templates are written to tolerate silently, while still
+// bounding how long a genuinely broken remote (wrong remoteUrl, a renamed
+// repository path, a host that accepts a connection but cannot serve the
+// repository) can hide before an operator is guaranteed to see it within a
+// day. See push.ts's checkQueueEscalation and errors.ts's
+// RemoteQueueEscalationError for how this value is consumed.
+const DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
 interface SyncState {
   version: number;
   profile: string;
@@ -94,6 +111,50 @@ class StateStore {
     rmSync(path.join(this.queueDir(), id), { recursive: true, force: true });
   }
 
+  // Age, in milliseconds, of the OLDEST currently-queued snapshot — derived
+  // entirely from each snapshot's manifest.json `createdAt` (already written
+  // by enqueueSnapshot above on every enqueue), so this needs no new
+  // persisted state. Returns null when the queue is empty (nothing to
+  // escalate) or when every manifest is missing/unparsable (defensive: a
+  // corrupt manifest must not be treated as "infinitely old" and force a
+  // spurious escalation).
+  //
+  // Why this reflects "how long has the remote been continuously
+  // unreachable" rather than just "how long has the oldest single snapshot
+  // sat here": a successful push clears every queued snapshot in one shot
+  // (see the `removeQueuedSnapshot` loop in performPush,
+  // src/memory-sync/push.ts, run only after `gitClient.push` succeeds) — so
+  // the oldest surviving snapshot's age is exactly the time since the FIRST
+  // tick that failed to reach the remote in the current unbroken failure
+  // streak; it resets to null the moment a push actually succeeds. See
+  // push.ts's checkQueueEscalation for how this is used.
+  oldestQueuedSnapshotAgeMs(referenceTime: number = Date.now()): number | null {
+    this.ensure();
+    const createdTimestamps = readdirSync(this.queueDir(), { withFileTypes: true })
+      .filter((entry: { isDirectory: () => boolean }) => entry.isDirectory())
+      .map((entry: { name: string }) => {
+        const manifestPath = path.join(this.queueDir(), entry.name, "manifest.json");
+        if (!existsSync(manifestPath)) {
+          return null;
+        }
+        let manifest: { createdAt?: string };
+        try {
+          manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        } catch {
+          return null;
+        }
+        const parsed = manifest.createdAt ? Date.parse(manifest.createdAt) : NaN;
+        return Number.isFinite(parsed) ? parsed : null;
+      })
+      .filter((value: number | null): value is number => value !== null);
+
+    if (createdTimestamps.length === 0) {
+      return null;
+    }
+
+    return Math.max(0, referenceTime - Math.min(...createdTimestamps));
+  }
+
   clearTemp(): void {
     rmSync(this.tempDir(), { recursive: true, force: true });
     mkdirSync(this.tempDir(), { recursive: true });
@@ -181,5 +242,6 @@ function walkFiles(rootDir: string): string[] {
 }
 
 module.exports = {
-  StateStore
+  StateStore,
+  DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
 };

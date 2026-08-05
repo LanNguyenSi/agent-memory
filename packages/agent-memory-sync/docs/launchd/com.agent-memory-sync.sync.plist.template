@@ -53,6 +53,19 @@
     no-op — `run --mode sync`'s own reachability precheck (default 4s
     bound; see src/memory-sync/reachability.ts) means this never hangs or
     piles up overlapping ssh attempts.
+
+    Queue escalation: this template's 900s StartInterval is also the tick
+    cadence the queue-escalation default threshold is sized against — see
+    src/memory-sync/state-store.ts's DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+    (24h = 96 of these ticks) and docs/machine-setup.md's "Queue escalation"
+    bullet. If the oldest snapshot in stateDir/queue is older than that
+    threshold — i.e. the remote has been unreachable for the whole 24h, not
+    just this one tick — a `run --mode sync` tick exits non-zero (6) instead
+    of its usual clean 0, with a clear stderr message; that failure is
+    visible via `launchctl print`'s last-exit-status and this job's
+    StandardErrorPath log, without launchd respawning anything (this
+    template has no KeepAlive — it is a plain periodic tick, so a failed run
+    just tries again at the next StartInterval).
 -->
 <plist version="1.0">
 <dict>

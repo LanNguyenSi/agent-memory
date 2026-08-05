@@ -3,11 +3,11 @@ const {
   filterOwnerScopedBaseMap,
   toRepositoryRelativePath
 } = require("./config");
-const { RemoteUnavailableError } = require("../errors");
+const { RemoteUnavailableError, RemoteQueueEscalationError } = require("../errors");
 const { GitClient } = require("./git-client");
 const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
-const { StateStore } = require("./state-store");
+const { StateStore, DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("./state-store");
 
 interface PushOptions {
   dryRun: boolean;
@@ -35,6 +35,14 @@ interface PushConfig {
   gitBinary: string;
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
+  // How long the queue may keep failing to drain (oldest queued snapshot's
+  // age — see StateStore.oldestQueuedSnapshotAgeMs) before a tick that would
+  // otherwise be a clean, silent "queued" outcome instead throws
+  // RemoteQueueEscalationError and crashes loud. Defaults to
+  // DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS (24h) — see that constant's
+  // comment in state-store.ts for the full rationale, including the real
+  // launchd/systemd tick interval it is sized against.
+  queueEscalationThresholdMs?: number;
   syncPaths: Array<{
     source: string;
     destination?: string;
@@ -138,7 +146,8 @@ async function performPush(config: PushConfig, options: PushOptions) {
         stateStore,
         currentLocalMap,
         currentBaseMap,
-        `remote unreachable (${reachability.reason}); stored the current local snapshot for replay on the next successful run`
+        `remote unreachable (${reachability.reason}); stored the current local snapshot for replay on the next successful run`,
+        config.queueEscalationThresholdMs ?? DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
       ),
       ownerScopedWarnings
     );
@@ -218,7 +227,8 @@ async function performPush(config: PushConfig, options: PushOptions) {
         stateStore,
         currentLocalMap,
         currentBaseMap,
-        "remote unavailable; stored the current local snapshot for replay on the next successful run"
+        "remote unavailable; stored the current local snapshot for replay on the next successful run",
+        config.queueEscalationThresholdMs ?? DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
       ),
       ownerScopedWarnings
     );
@@ -244,17 +254,26 @@ function appendNotes<T extends { notes?: string[] }>(result: T, extraNotes: stri
 // Shared by the reachability-precheck skip path and the catch-all fallback
 // below: stash the current local state as a new queued snapshot (existing
 // queued snapshots are left untouched — they are only cleared after a
-// successful push) and report a clean "queued" result.
+// successful push), then check whether the queue has now been failing to
+// drain for longer than queueEscalationThresholdMs (see
+// checkQueueEscalation below) before reporting a clean "queued" result —
+// escalation takes priority: it throws instead of returning, so a caller
+// that has crossed the threshold never sees a benign-looking "queued"
+// outcome for that tick, even though the snapshot itself is safely persisted
+// either way.
 function enqueueCurrentSnapshot(
   stateStore: InstanceType<typeof StateStore>,
   currentLocalMap: Record<string, string>,
   currentBaseMap: Record<string, string | null>,
-  note: string
+  note: string,
+  queueEscalationThresholdMs: number
 ) {
   const queuedSnapshotId = stateStore.enqueueSnapshot({
     localFiles: currentLocalMap,
     baseFiles: currentBaseMap
   });
+
+  checkQueueEscalation(stateStore, queueEscalationThresholdMs);
 
   return {
     kind: "push",
@@ -267,6 +286,48 @@ function enqueueCurrentSnapshot(
     queuedSnapshotId,
     notes: [note]
   };
+}
+
+// Age-based escalation (see DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS in
+// state-store.ts for the full "why age, not a counter" rationale and the
+// real launchd/systemd tick interval the default is sized against). Runs
+// after every enqueue; throws RemoteQueueEscalationError — crashing the
+// current tick loud, same supervisor-restart surface as a non-network
+// failure — once the OLDEST queued snapshot is older than the threshold, i.e.
+// once the remote has been continuously unreachable for that long, not just
+// unreachable on this one tick. Below the threshold this is a no-op, so a
+// machine that is merely offline (a laptop closed overnight, a flight, a
+// weekend) keeps queuing exactly as before this rework: silently, exit 0,
+// every tick.
+function checkQueueEscalation(stateStore: InstanceType<typeof StateStore>, thresholdMs: number): void {
+  const oldestAgeMs = stateStore.oldestQueuedSnapshotAgeMs();
+  if (oldestAgeMs === null || oldestAgeMs < thresholdMs) {
+    return;
+  }
+
+  const queuedCount = stateStore.listQueuedSnapshots().length;
+  throw new RemoteQueueEscalationError(
+    `remote has been unreachable for ${formatDurationMs(oldestAgeMs)}, past the ` +
+      `${formatDurationMs(thresholdMs)} queue escalation threshold (${queuedCount} snapshot(s) queued in ` +
+      `${stateStore.queueDir()}). This usually means the remote is permanently misconfigured (wrong remoteUrl, ` +
+      `a renamed repository path, or a host that accepts a connection but cannot serve the repository) rather ` +
+      `than temporarily offline — check remoteUrl/branch/repositorySubdir. Every queued snapshot is still ` +
+      `safely stored and will be replayed automatically once the remote is reachable again; tune the ` +
+      `'queueEscalationThresholdMs' config key if this threshold does not fit this machine's expected offline ` +
+      `windows.`
+  );
+}
+
+function formatDurationMs(ms: number): string {
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+  const totalMinutes = totalSeconds / 60;
+  if (totalMinutes < 60) {
+    return `${totalMinutes.toFixed(1)}m`;
+  }
+  return `${(totalMinutes / 60).toFixed(1)}h`;
 }
 
 function previewPush(

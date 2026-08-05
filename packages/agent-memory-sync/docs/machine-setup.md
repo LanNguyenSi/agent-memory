@@ -56,6 +56,35 @@ This document wires together the pieces already documented individually
   git-level failure while that working copy is being prepared or committed
   (a full disk, a corrupted git config, a broken commit hook, ...) still
   exit non-zero.
+- **Queue escalation: silent-forever is not the same as offline.** The
+  queue-instead-of-crash behavior above is deliberately quiet for a machine
+  that is merely offline (closed overnight, on a flight, a weekend without
+  connectivity) — but a remote that is `RemoteUnavailableError` for a
+  *permanent* reason (a typo'd `remoteUrl`, a renamed bare-repo path on the
+  mini, an SSH host that accepts the connection but can no longer serve
+  `git-upload-pack`) would otherwise look identical: queued, exit `0`,
+  every tick, forever, never actually syncing again. Every enqueue now
+  checks the age of the OLDEST currently-queued snapshot
+  (`stateDir/queue/<id>/manifest.json`'s `createdAt`, already written on
+  every enqueue — no new persisted state) against
+  `queueEscalationThresholdMs` (config file /
+  `AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS`, default 24h). Below the
+  threshold, nothing changes. Once the oldest queued snapshot is older than
+  the threshold — meaning the remote has been *continuously* unreachable for
+  that long, not merely on this one tick, since a successful push clears the
+  whole queue at once — the tick throws instead of returning a clean
+  "queued" result: a clear message on stderr and a non-zero exit (`6`), the
+  same supervisor-restart surface a non-network failure already uses (see
+  the previous bullet). The queued snapshot itself is never lost either way;
+  it stays queued and replays automatically once the remote is reachable
+  again. The 24h default is sized against this document's own committed
+  periodic-sync tick interval — 900s / 15min, see
+  `docs/launchd/com.agent-memory-sync.sync.plist.template`'s `StartInterval`
+  (macOS) and the systemd `OnUnitActiveSec=15min` timer in (c) below (Linux)
+  — 96 missed ticks at that cadence, comfortably past an overnight or
+  weekend offline window while still bounding a genuinely broken remote's
+  silence to about a day. See README.md's "Queue escalation" section under
+  `watch` for the full rationale.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
   *this* machine's local files change; it never reads from the remote. Its

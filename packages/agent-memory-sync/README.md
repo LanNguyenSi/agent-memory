@@ -138,7 +138,7 @@ StartLimitBurst=10
 WantedBy=multi-user.target
 ```
 
-The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the failures that still exit non-zero — a config/data error raised before the remote working copy is prepared (e.g. a required `syncPaths` entry missing), or any other git-level failure while preparing/committing that working copy (a full disk, a corrupted git config, a broken commit hook, ...) — so a persistently broken cause does not crashloop forever; a remote that is merely unreachable or rejecting the push (see below) no longer exits at all, so it never spends this budget. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on one of those failures.
+The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the failures that still exit non-zero — a config/data error raised before the remote working copy is prepared (e.g. a required `syncPaths` entry missing), or any other git-level failure while preparing/committing that working copy (a full disk, a corrupted git config, a broken commit hook, ...) — so a persistently broken cause does not crashloop forever; a remote that is merely unreachable or rejecting the push (see below) no longer exits at all, so it never spends this budget. The one exception is [queue escalation](#queue-escalation-a-permanently-broken-remote-does-not-queue-forever): once the queue has been failing to drain past `queueEscalationThresholdMs` (default 24h), a tick DOES exit non-zero again — but only on a real local edit (`watch` is edge-triggered), so it does not spend this budget any faster than this machine's memory actually changes while the remote stays broken. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on one of those failures.
 
 macOS equivalent (LaunchAgent instead of systemd): see
 [`docs/launchd/com.agent-memory-sync.watch.plist.template`](docs/launchd/com.agent-memory-sync.watch.plist.template)
@@ -172,6 +172,35 @@ for what that safety does and does not cover). For that reason, a periodic
 fallback-machine setup, not an optional extra — see
 [docs/machine-setup.md](docs/machine-setup.md) for the launchd/systemd
 companion jobs.
+
+##### Queue escalation: a permanently broken remote does not queue forever
+
+The queue-instead-of-crash handling above is deliberately silent for a
+remote that is merely *offline* — a laptop closed overnight, on a flight, or
+disconnected for a weekend. But a remote that is *correctly* classified
+`RemoteUnavailableError` can still be **permanently** wrong (a bad
+`remoteUrl`, a renamed repository path, a host that accepts an SSH/TCP
+connection but cannot serve the repository) — without a second signal, that
+looks identical to a laptop on a plane and would queue cleanly, exit `0`,
+forever, never syncing again.
+
+Every enqueue therefore checks the age of the OLDEST currently-queued
+snapshot (`stateDir/queue/<id>/manifest.json`'s `createdAt`, already written
+on every enqueue — no new state) against `queueEscalationThresholdMs`
+(config file / `AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS`, default
+24h). Below the threshold, behavior is unchanged: silent, exit `0`, every
+tick. Once the oldest queued snapshot is older than the threshold — meaning
+the remote has been *continuously* unreachable for that long, not just on
+this one tick, since a successful push clears the whole queue at once — the
+tick throws instead: a clear message on stderr and a non-zero exit (`6`),
+the same supervisor-restart surface a non-network failure already uses. The
+snapshot itself is never lost; it stays queued and is replayed automatically
+once the remote is reachable again. 24h is sized against this package's own
+committed periodic-sync tick interval (900s / 15min — see
+[docs/machine-setup.md](docs/machine-setup.md) and the launchd/systemd
+templates) — 96 missed ticks, comfortably longer than an overnight or
+weekend offline window, still bounding how long a genuinely broken remote
+can hide to about a day.
 
 ##### Push authentication
 
@@ -260,6 +289,7 @@ The `--config` flag overrides the default path.
   "outputFormat": "text",
   "verbose": false,
   "reachabilityTimeoutMs": 4000,
+  "queueEscalationThresholdMs": 86400000,
   "syncPaths": [
     { "source": "MEMORY.md", "destination": "MEMORY.md", "kind": "file" },
     { "source": "logs", "destination": "logs", "kind": "directory" }
@@ -309,6 +339,15 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   separate on/off switch, this is the supported way to opt out
 - failed pushes (including ones skipped by the reachability precheck) are queued locally in
   `stateDir/queue` and replayed on the next successful push
+- if the OLDEST queued snapshot is older than `queueEscalationThresholdMs`
+  (config file / `AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS`, default 24h) — i.e. the
+  remote has been *continuously* unreachable for that long, not just on this one tick — the
+  tick throws instead of returning a clean "queued" result: a message on stderr and exit code
+  `6`, so a permanently misconfigured remote (wrong `remoteUrl`, a renamed repository path, a
+  host that accepts a connection but cannot serve the repository) does not queue silently
+  forever. Below the threshold nothing changes: silent, exit `0`, every tick — a merely offline
+  machine is unaffected. See [watch's "Queue escalation" section](#queue-escalation-a-permanently-broken-remote-does-not-queue-forever)
+  for the full rationale
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers
 - `--dry-run` previews the result without changing local files or the remote repository
 

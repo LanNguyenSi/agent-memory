@@ -3,6 +3,7 @@ const { homedir, hostname } = require("node:os");
 const path = require("node:path");
 const { CliError } = require("../errors");
 const { DEFAULT_REACHABILITY_TIMEOUT_MS } = require("../memory-sync/reachability");
+const { DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("../memory-sync/state-store");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -36,6 +37,7 @@ interface UserConfig {
   gitBinary?: string;
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
+  queueEscalationThresholdMs?: number;
 }
 
 interface LoadedConfig {
@@ -61,6 +63,7 @@ interface RunConfig extends UserConfig {
   mode: RunMode;
   reachabilityTimeoutMs: number;
   reachabilityCheckCommand: string[] | null;
+  queueEscalationThresholdMs: number;
 }
 
 interface RunConfigOverrides {
@@ -81,6 +84,7 @@ interface RunConfigOverrides {
   mode?: RunMode;
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
+  queueEscalationThresholdMs?: number;
 }
 
 const DEFAULT_SYNC_PATHS: SyncPathConfig[] = [
@@ -102,7 +106,8 @@ const DEFAULTS: Omit<RunConfig, "repositorySubdir" | "stateDir" | "remoteUrl" | 
   syncPaths: DEFAULT_SYNC_PATHS,
   gitBinary: "git",
   reachabilityTimeoutMs: DEFAULT_REACHABILITY_TIMEOUT_MS,
-  reachabilityCheckCommand: null
+  reachabilityCheckCommand: null,
+  queueEscalationThresholdMs: DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
 };
 
 function defaultConfigPath(): string {
@@ -166,7 +171,12 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
       "reachabilityTimeoutMs",
       DEFAULT_REACHABILITY_TIMEOUT_MS
     ),
-    reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand)
+    reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand),
+    queueEscalationThresholdMs: validatePositiveInteger(
+      merged.queueEscalationThresholdMs,
+      "queueEscalationThresholdMs",
+      DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+    )
   };
 }
 
@@ -238,7 +248,8 @@ function listConfigKeys(): string[] {
     "syncPaths",
     "gitBinary",
     "reachabilityTimeoutMs",
-    "reachabilityCheckCommand"
+    "reachabilityCheckCommand",
+    "queueEscalationThresholdMs"
   ];
 }
 
@@ -306,6 +317,13 @@ function readEnvConfig(): UserConfig {
       Number(env.AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS),
       "AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS",
       DEFAULT_REACHABILITY_TIMEOUT_MS
+    );
+  }
+  if (env.AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS) {
+    config.queueEscalationThresholdMs = validatePositiveInteger(
+      Number(env.AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS),
+      "AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS",
+      DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
     );
   }
   if (env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND) {
@@ -393,7 +411,9 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
     reachability_timeout_ms: "reachabilityTimeoutMs",
     reachabilityTimeoutMs: "reachabilityTimeoutMs",
     reachability_check_command: "reachabilityCheckCommand",
-    reachabilityCheckCommand: "reachabilityCheckCommand"
+    reachabilityCheckCommand: "reachabilityCheckCommand",
+    queue_escalation_threshold_ms: "queueEscalationThresholdMs",
+    queueEscalationThresholdMs: "queueEscalationThresholdMs"
   };
 
   for (const [key, value] of Object.entries(raw)) {
@@ -527,6 +547,12 @@ function parseConfigValue(key: string, value: string): unknown {
       return validateConflictStrategy(value as ConflictStrategy);
     case "reachabilityTimeoutMs":
       return validatePositiveInteger(Number(value), "reachabilityTimeoutMs", DEFAULT_REACHABILITY_TIMEOUT_MS);
+    case "queueEscalationThresholdMs":
+      return validatePositiveInteger(
+        Number(value),
+        "queueEscalationThresholdMs",
+        DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+      );
     case "reachabilityCheckCommand":
       return value === "null"
         ? null
