@@ -9,12 +9,41 @@
 // flat .md files, so even a same-tree push would have missed most content.
 //
 // This test loads the ACTUAL committed profile files (profiles/macbook.json,
-// profiles/mac-mini.json) via --config, overriding only what a hermetic test
-// must override to avoid touching real machines or the network
-// (--root-dir, --state-dir, --remote) — repositorySubdir and syncPaths come
-// from the real files, unmodified, so a regression in either (e.g.
-// reintroducing a per-machine repositorySubdir, or narrowing syncPaths back
-// to named files/dirs) fails this test.
+// profiles/mac-mini.json), so a regression in repositorySubdir (e.g.
+// reintroducing a per-machine value) or in syncPaths shape (e.g. narrowing
+// back to named files/dirs, dropping an entry, changing 'kind'/'ownerScoped')
+// fails this test — everything about every syncPaths entry is taken from the
+// real files verbatim EXCEPT one field on the two entries whose 'source' is a
+// hardcoded machine-absolute path (machine-state, frictions; e.g.
+// mac-mini.json's "/Users/lannguyensi/.harness/machine-state").
+//
+// Those two sources get remapped (remapAbsoluteSyncPathsIntoSandbox below)
+// into per-machine fake-$HOME directories under this test's own sandbox
+// before the CLI ever runs, and assertSyncPathSourcesWithinSandbox asserts
+// every absolute syncPaths source actually landed under the sandbox root
+// before any sync executes. Without this, the test is not hermetic: it
+// silently reads/writes whatever machine-state/frictions.json content
+// happens to exist under the REAL path baked into the committed profile
+// (agent-tasks 112a0864) — on a machine whose home genuinely is
+// /Users/lannguyensi (e.g. the mini itself), that is live operational
+// content (measured: an unmodified run of this file copies the real
+// ~/.harness/machine-state/mac-mini.json and ~/.harness/frictions/mac-mini.json
+// verbatim into an uncleaned bare git repo under the OS tmpdir). On a machine
+// whose home is something else (e.g. the MacBook, /Users/lan), the mini
+// profile's hardcoded /Users/lannguyensi/... source instead makes a pull step
+// try to mkdir a path outside any real home the current user can write to —
+// the EACCES this whole task starts from. Remapping removes both failure
+// modes: every syncPaths source used by the CLI in this test is either
+// relative to the sandboxed --root-dir (the "." memory entry, via
+// --root-dir/--state-dir/--remote below) or explicitly rewritten into the
+// sandbox (machine-state, frictions), so nothing this test does can touch a
+// real machine's filesystem, regardless of what machine it runs on.
+//
+// repositorySubdir and every other syncPaths field (kind, destination,
+// ownerScoped, and the "." memory entry's source) still come from the real
+// files, unmodified — this test still overrides only --root-dir, --state-dir
+// and --remote at the CLI-flag level, same as before; the syncPaths source
+// remap happens one layer up, in the config file this test hands to --config.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { readdirSync } = require("node:fs");
@@ -81,6 +110,99 @@ function machineArgs(
   ];
 }
 
+// The only two syncPaths destinations any committed profile gives a
+// hardcoded machine-absolute 'source' (see profiles/mac-mini.json /
+// macbook.json / linux.json's "/Users/<user>/.harness/{machine-state,
+// frictions}" entries, pinned unmodified by the second test below). Every
+// other entry (the "." memory entry) is already relative to --root-dir, which
+// this test already sandboxes.
+const HOME_ABSOLUTE_SYNC_DESTINATIONS = ["machine-state", "frictions"];
+
+// Fails loudly (rather than silently reading/writing a real machine's files)
+// if any absolute syncPaths source in `settings` resolves outside
+// `sandboxRoot`. Called right after remapAbsoluteSyncPathsIntoSandbox below,
+// before any CLI invocation, so a remap that silently no-ops (e.g. a future
+// destination rename this test's remap logic doesn't know about) fails the
+// test immediately instead of quietly falling through to a real path.
+function assertSyncPathSourcesWithinSandbox(
+  settings: { syncPaths?: Array<Record<string, unknown>> },
+  sandboxRoot: string,
+  label: string
+): void {
+  const resolvedSandboxRoot = path.resolve(sandboxRoot);
+  for (const entry of settings.syncPaths || []) {
+    const source = entry.source;
+    if (typeof source !== "string" || !path.isAbsolute(source)) {
+      continue;
+    }
+    const resolvedSource = path.resolve(source);
+    const withinSandbox =
+      resolvedSource === resolvedSandboxRoot || resolvedSource.startsWith(`${resolvedSandboxRoot}${path.sep}`);
+    assert.ok(
+      withinSandbox,
+      `${label}: syncPaths entry with destination '${String(entry.destination)}' has an absolute source ` +
+        `'${source}' OUTSIDE the test sandbox root '${resolvedSandboxRoot}' — this test must never read or ` +
+        "write a real machine path (e.g. a real ~/.harness/machine-state or ~/.harness/frictions); the " +
+        "sandbox remap failed or was bypassed."
+    );
+  }
+}
+
+// Loads the real committed profile at `realConfigPath`, rewrites the
+// 'source' of its machine-state/frictions syncPaths entries (the only
+// hardcoded machine-absolute paths any profile carries) to point inside a
+// per-machine fake-$HOME under `sandboxRoot`, asserts the result is fully
+// sandboxed, and writes it to a new config file this test hands to --config
+// in place of the real one. Every other field of every entry (kind,
+// destination, ownerScoped, and the "." memory entry's source), plus
+// repositorySubdir and everything else in the profile, is copied through
+// unmodified — only the two absolute sources move.
+function remapAbsoluteSyncPathsIntoSandbox(
+  realConfigPath: string,
+  sandboxRoot: string,
+  machineLabel: string
+): { configPath: string; sandboxSourceByDestination: Record<string, string> } {
+  const settings = JSON.parse(readText(realConfigPath));
+  const fakeHome = path.join(sandboxRoot, `${machineLabel}-fake-home`);
+  const sandboxSourceByDestination: Record<string, string> = {};
+
+  settings.syncPaths = (settings.syncPaths || []).map((entry: Record<string, unknown>) => {
+    const destination = entry.destination as string;
+    if (
+      !HOME_ABSOLUTE_SYNC_DESTINATIONS.includes(destination) ||
+      typeof entry.source !== "string" ||
+      !path.isAbsolute(entry.source as string)
+    ) {
+      return entry;
+    }
+
+    const sandboxSource = path.join(fakeHome, ".harness", destination);
+    sandboxSourceByDestination[destination] = sandboxSource;
+    return { ...entry, source: sandboxSource };
+  });
+
+  assertSyncPathSourcesWithinSandbox(
+    settings,
+    sandboxRoot,
+    `remapped profile for '${machineLabel}' (source: ${realConfigPath})`
+  );
+
+  const configPath = path.join(sandboxRoot, "configs", `${machineLabel}.json`);
+  writeText(configPath, `${JSON.stringify(settings, null, 2)}\n`);
+  return { configPath, sandboxSourceByDestination };
+}
+
+// Seeds a representative owner file (the "<profile>.json" convention
+// collectLocalSyncFiles' ownerScoped filter looks for — see
+// src/memory-sync/config.ts) inside a remapped sandbox source directory, so
+// push actually has something to offer for that destination: an empty
+// sandbox directory would make the machine-state/frictions sync paths a
+// silent no-op, which is exactly the kind of silent skip this task's spec
+// rules out.
+function seedOwnerFile(sandboxSourceDir: string, ownerFileName: string, payload: Record<string, unknown>): void {
+  writeText(path.join(sandboxSourceDir, ownerFileName), `${JSON.stringify(payload, null, 2)}\n`);
+}
+
 test("macbook and mac-mini profiles share one remote tree and see each other's pushes on pull (hermetic, local bare repo)", () => {
   const root = createSandbox("cross-machine-profiles");
   const remoteDir = initBareRemote(root);
@@ -93,8 +215,39 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   const macbookState = path.join(root, "macbook-state");
   const miniState = path.join(root, "mini-state");
 
-  const macbookConfigPath = path.join(PROFILES_DIR, "macbook.json");
-  const miniConfigPath = path.join(PROFILES_DIR, "mac-mini.json");
+  // Remap the machine-absolute machine-state/frictions syncPaths sources
+  // (real committed values: mac-mini.json's
+  // "/Users/lannguyensi/.harness/{machine-state,frictions}",
+  // macbook.json's "/Users/lan/..." equivalents) into this sandbox before
+  // any CLI invocation. remapAbsoluteSyncPathsIntoSandbox asserts the result
+  // is fully sandboxed; nothing below this point can read or write a real
+  // machine's ~/.harness — see the file-level comment above for the leak
+  // this closes (agent-tasks 112a0864).
+  const macbookRemap = remapAbsoluteSyncPathsIntoSandbox(path.join(PROFILES_DIR, "macbook.json"), root, "macbook");
+  const miniRemap = remapAbsoluteSyncPathsIntoSandbox(path.join(PROFILES_DIR, "mac-mini.json"), root, "mac-mini");
+  const macbookConfigPath = macbookRemap.configPath;
+  const miniConfigPath = miniRemap.configPath;
+
+  // Seed each machine's own owner file for the remapped machine-state/
+  // frictions destinations so push has real, sandbox-owned content to offer
+  // — an empty remapped directory would make this coverage a silent no-op,
+  // which the task spec rules out.
+  seedOwnerFile(macbookRemap.sandboxSourceByDestination["machine-state"], "macbook.json", {
+    machine: "macbook",
+    note: "sandbox machine-state fixture (agent-tasks 112a0864)"
+  });
+  seedOwnerFile(macbookRemap.sandboxSourceByDestination["frictions"], "macbook.json", {
+    machine: "macbook",
+    note: "sandbox frictions fixture (agent-tasks 112a0864)"
+  });
+  seedOwnerFile(miniRemap.sandboxSourceByDestination["machine-state"], "mac-mini.json", {
+    machine: "mac-mini",
+    note: "sandbox machine-state fixture (agent-tasks 112a0864)"
+  });
+  seedOwnerFile(miniRemap.sandboxSourceByDestination["frictions"], "mac-mini.json", {
+    machine: "mac-mini",
+    note: "sandbox frictions fixture (agent-tasks 112a0864)"
+  });
 
   writeText(path.join(macbookRoot, "MEMORY.md"), "macbook memory\n");
   writeText(path.join(miniRoot, "MEMORY.md"), "mini memory\n");
@@ -109,6 +262,48 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   const miniSeed = runCli(miniArgs("--mode", "push"));
   const miniSeedPayload = JSON.parse(miniSeed.stdout);
   assert.equal(miniSeedPayload.runs[0].status, "applied");
+
+  // Cross-machine check, macbook <- mini direction: a fresh "macbook" CLI
+  // invocation (macbook's own remapped config, but a throwaway
+  // --root-dir/--state-dir it has never used before, so its 3-way-merge base
+  // starts empty for every destination) pulls immediately after the mini's
+  // seed push above. Its machine-state/frictions syncPaths sources are the
+  // SAME sandboxed absolute directories macbookRemap resolved (an absolute
+  // source is independent of --root-dir), so this exercises the real
+  // cross-machine materialization of the mini's owner file into macbook's
+  // sandboxed machine-state/frictions dirs — deliberately run here, before
+  // macbook's own real push below, because a machine's OWN push adopts
+  // whatever is already in the remote as its local base without ever writing
+  // it to disk (production behavior, not this task's concern): running the
+  // probe pull afterward would find a base===remote fast path and silently
+  // report nothing applied, which would make this check vacuous.
+  const macbookProbePull = runCli(
+    machineArgs(
+      "macbook",
+      macbookConfigPath,
+      path.join(root, "macbook-probe-workspace"),
+      path.join(root, "macbook-probe-state"),
+      remoteDir,
+      ["--mode", "pull"]
+    )
+  );
+  const macbookProbePullPayload = JSON.parse(macbookProbePull.stdout);
+  assert.equal(macbookProbePullPayload.runs[0].status, "applied");
+
+  const macbookMachineStateDir = macbookRemap.sandboxSourceByDestination["machine-state"];
+  const macbookFrictionsDir = macbookRemap.sandboxSourceByDestination["frictions"];
+  assert.equal(fileExists(path.join(macbookMachineStateDir, "mac-mini.json")), true);
+  assert.equal(
+    JSON.parse(readText(path.join(macbookMachineStateDir, "mac-mini.json"))).machine,
+    "mac-mini",
+    "macbook's sandboxed machine-state dir did not receive the mini's owner file on pull"
+  );
+  assert.equal(fileExists(path.join(macbookFrictionsDir, "mac-mini.json")), true);
+  assert.equal(
+    JSON.parse(readText(path.join(macbookFrictionsDir, "mac-mini.json"))).machine,
+    "mac-mini",
+    "macbook's sandboxed frictions dir did not receive the mini's owner file on pull"
+  );
 
   // A brand-new flat file appears on the MacBook — a plain edit, not a file
   // named in any hardcoded syncPaths list.
@@ -133,6 +328,27 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   );
   assert.equal(fileExists(path.join(miniRoot, "e2e-sync-test.md")), true);
   assert.equal(readText(path.join(miniRoot, "e2e-sync-test.md")), "new file from macbook\n");
+
+  // The mini's pull above also carries the machine-state/frictions
+  // destinations (macbookPush offered macbook's own owner file for both,
+  // ownerScoped): the mini's SANDBOXED machine-state/frictions dirs must now
+  // hold macbook's owner file, proving the remapped syncPaths sources still
+  // exercise the real cross-machine sync path end to end, not just the
+  // memory destination.
+  const miniMachineStateDir = miniRemap.sandboxSourceByDestination["machine-state"];
+  const miniFrictionsDir = miniRemap.sandboxSourceByDestination["frictions"];
+  assert.equal(fileExists(path.join(miniMachineStateDir, "macbook.json")), true);
+  assert.equal(
+    JSON.parse(readText(path.join(miniMachineStateDir, "macbook.json"))).machine,
+    "macbook",
+    "mini's sandboxed machine-state dir did not receive macbook's owner file on pull"
+  );
+  assert.equal(fileExists(path.join(miniFrictionsDir, "macbook.json")), true);
+  assert.equal(
+    JSON.parse(readText(path.join(miniFrictionsDir, "macbook.json"))).machine,
+    "macbook",
+    "mini's sandboxed frictions dir did not receive macbook's owner file on pull"
+  );
 
   // Reverse direction: the mini edits, the MacBook pulls.
   writeText(path.join(miniRoot, "mini-only-note.md"), "note from the mini\n");
