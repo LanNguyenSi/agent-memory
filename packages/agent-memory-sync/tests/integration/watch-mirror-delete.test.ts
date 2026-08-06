@@ -35,7 +35,13 @@ const {
   writeProjectConfig,
   writeText
 } = require("../helpers/cli.ts");
-const { spawnWatch, waitForWatcherReady, withTickDeadline, runWatchTick } = require("../helpers/watch-process.ts");
+const {
+  spawnWatch,
+  waitForWatcherReady,
+  withTickDeadline,
+  runWatchTick,
+  stopWatchProcessGroup
+} = require("../helpers/watch-process.ts");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
   return {
@@ -203,11 +209,7 @@ test("watch tick queues locally when the remote is unreachable, then replays the
     return new Promise<number>((resolve) => {
       offlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
     });
-  }).finally(() => {
-    if (offlineChild.exitCode === null && offlineChild.signalCode === null) {
-      offlineChild.kill("SIGINT");
-    }
-  });
+  }).finally(() => stopWatchProcessGroup(offlineChild));
 
   assert.equal(offlineExitCode, 0, `watch exited non-zero while offline. stderr: ${offlineStderr}`);
   assert.match(offlineStderr, /queued locally/);
@@ -253,11 +255,7 @@ test("watch tick queues locally when the remote is unreachable, then replays the
     return new Promise<number>((resolve) => {
       onlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
     });
-  }).finally(() => {
-    if (onlineChild.exitCode === null && onlineChild.signalCode === null) {
-      onlineChild.kill("SIGINT");
-    }
-  });
+  }).finally(() => stopWatchProcessGroup(onlineChild));
 
   assert.equal(onlineExitCode, 0, `watch exited non-zero while replaying. stderr: ${onlineStderr}`);
   assert.deepEqual(fs.readdirSync(queueDir), [], "expected the queue to be empty after a successful replay");
