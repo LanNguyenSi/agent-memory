@@ -11,9 +11,62 @@ test('legacy memories without new fields still load', () => {
   const memories = loadMemoriesFromDir(fixturesDir);
   const legacy = memories.find((m: Memory) => m.id === 'feedback_legacy');
   assert.ok(legacy, 'legacy fixture should load');
-  assert.equal(legacy.frontmatter.topics, undefined);
+  assert.deepEqual(legacy.frontmatter.topics, [], 'missing topics normalize to []');
   assert.equal(legacy.frontmatter.severity, undefined);
   assert.equal(legacy.frontmatter.triggers, undefined);
+});
+
+test('schema v1: type/topics resolve from metadata. with top-level precedence', () => {
+  const dir = path.join(__dirname, 'fixtures', 'schema-v1');
+  const memories = loadMemoriesFromDir(dir);
+  const byId = new Map<string, Memory>(memories.map((m: Memory) => [m.id, m]));
+  const mustGet = (id: string): Memory => {
+    const m = byId.get(id);
+    if (!m) throw new Error(`fixture ${id} should load`);
+    return m;
+  };
+
+  const metadataOnly = mustGet('metadata-only');
+  assert.equal(metadataOnly.frontmatter.type, 'reference');
+  assert.deepEqual(metadataOnly.frontmatter.topics, ['workflow']);
+  assert.equal(
+    (metadataOnly.frontmatter as unknown as Record<string, unknown>).custom,
+    'kept',
+    'unknown frontmatter fields are tolerated and preserved',
+  );
+
+  const topLevel = mustGet('top-level');
+  assert.equal(topLevel.frontmatter.type, 'feedback');
+  assert.deepEqual(topLevel.frontmatter.topics, ['security']);
+
+  const conflict = mustGet('mixed-conflict');
+  assert.equal(conflict.frontmatter.type, 'project', 'top-level type wins');
+  assert.deepEqual(
+    conflict.frontmatter.topics,
+    ['deployment'],
+    'top-level topics win',
+  );
+
+  assert.equal(byId.has('no-type'), false, 'no type at either location: skipped');
+  assert.equal(memories.length, 3);
+});
+
+test('schema v1: type missing at both locations still warns via debug', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
+  fs.writeFileSync(
+    path.join(tmp, 'meta-no-type.md'),
+    '---\nname: x\ndescription: x\nmetadata:\n  node_type: memory\n---\nbody\n',
+  );
+  process.env.MEMORY_ROUTER_DEBUG = '1';
+  try {
+    const { result, lines } = captureStderr(() => loadMemoriesFromDir(tmp));
+    assert.equal(result.length, 0);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /meta-no-type\.md: missing required field 'type'/);
+  } finally {
+    delete process.env.MEMORY_ROUTER_DEBUG;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('MEMORY.md is skipped by the loader', () => {

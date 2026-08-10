@@ -29,11 +29,23 @@ declare global {
     repoRoot?: string;
   }
 
+  /**
+   * Claude Code auto-memory nests `type`/`topics` under `metadata.`.
+   * The loader resolves both locations (top-level wins) and returns a
+   * normalized frontmatter, so consumers never read `metadata` themselves.
+   */
+  interface MemoryMetadata {
+    type?: MemoryType;
+    topics?: Topic[];
+    [key: string]: unknown;
+  }
+
   interface MemoryFrontmatter {
     name: string;
     description: string;
     type: MemoryType;
     topics?: Topic[];
+    metadata?: MemoryMetadata;
     severity?: Severity;
     triggers?: MemoryTriggers;
     /**

@@ -30,12 +30,19 @@ function parseMemoryFileWithReason(path: string, source: string): ParseResult {
   if (!fm.name) {
     return { ok: false, reason: "missing required field 'name'" };
   }
-  if (!fm.type) {
+
+  // Read liberally, keep canonical: `type`/`topics` may live top-level
+  // (canonical) or under `metadata.` (Claude Code auto-memory format).
+  // Top-level wins on conflict; the returned memory is always normalized.
+  const resolvedType = fm.type ?? fm.metadata?.type;
+  if (!resolvedType) {
     return { ok: false, reason: "missing required field 'type'" };
   }
+  const resolvedTopics = fm.topics ?? fm.metadata?.topics ?? [];
 
   const id = basename(path, extname(path));
-  return { ok: true, memory: { id, path, frontmatter: fm, body } };
+  const frontmatter = { ...fm, type: resolvedType, topics: resolvedTopics };
+  return { ok: true, memory: { id, path, frontmatter, body } };
 }
 
 function parseMemoryFile(path: string, source: string): Memory | null {
