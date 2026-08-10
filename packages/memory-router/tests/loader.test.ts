@@ -51,6 +51,21 @@ test('schema v1: type/topics resolve from metadata. with top-level precedence', 
   assert.equal(memories.length, 3);
 });
 
+test('schema v1: empty top-level type falls back to metadata.type', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
+  fs.writeFileSync(
+    path.join(tmp, 'empty-type.md'),
+    '---\nname: x\ndescription: x\ntype: ""\nmetadata:\n  type: reference\n---\nbody\n',
+  );
+  try {
+    const memories = loadMemoriesFromDir(tmp);
+    assert.equal(memories.length, 1);
+    assert.equal(memories[0].frontmatter.type, 'reference');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('schema v1: type missing at both locations still warns via debug', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
   fs.writeFileSync(

@@ -33,8 +33,10 @@ function parseMemoryFileWithReason(path: string, source: string): ParseResult {
 
   // Read liberally, keep canonical: `type`/`topics` may live top-level
   // (canonical) or under `metadata.` (Claude Code auto-memory format).
-  // Top-level wins on conflict; the returned memory is always normalized.
-  const resolvedType = fm.type ?? fm.metadata?.type;
+  // Top-level wins on conflict (falsy top-level `type` falls back).
+  // Resolution fills the canonical keys but does not validate their shape:
+  // a non-list `topics` passes through so lint can still surface it.
+  const resolvedType = fm.type || fm.metadata?.type;
   if (!resolvedType) {
     return { ok: false, reason: "missing required field 'type'" };
   }
