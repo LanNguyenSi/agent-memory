@@ -89,7 +89,7 @@ memory-router runs three gates in parallel, dedupes hits by memory id, keeps the
 
 ## Memory Frontmatter Extension
 
-Existing Claude Code memory files already use YAML frontmatter (`name`, `description`, `type`). memory-router adds four optional fields:
+Existing Claude Code memory files already use YAML frontmatter. memory-router adds four optional fields:
 
 ```yaml
 ---
@@ -112,6 +112,10 @@ body markdown here
 ```
 
 All new fields are optional. Legacy memories still load and can fire via the Confidence Gate (once wired) or via semantic match.
+
+### Accepted frontmatter locations
+
+Canonically, `type` and `topics` live top-level (as in the example above). Most real Claude Code auto-memories instead nest them under `metadata.` (in the reference corpus as of 2026-08, roughly 230 of 285 files carry only `metadata.type`). The loader accepts both locations; on conflict the top-level value wins. New tooling should write top-level. `type` must be one of `user`, `feedback`, `project`, `reference`: a file with an unknown or non-string type is skipped entirely (visible only with `MEMORY_ROUTER_DEBUG=1`), so a typo'd `type` removes that memory from all gates until `memory-router lint --drift` surfaces it.
 
 ### `verify:` stale-marker on recall
 

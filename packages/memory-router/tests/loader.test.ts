@@ -84,6 +84,37 @@ test('schema v1: type missing at both locations still warns via debug', () => {
   }
 });
 
+test('unknown or non-string type is rejected with a debug warning', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
+  fs.writeFileSync(
+    path.join(tmp, 'unknown-type.md'),
+    '---\nname: x\ndescription: x\ntype: howto\n---\nbody\n',
+  );
+  fs.writeFileSync(
+    path.join(tmp, 'list-type.md'),
+    '---\nname: x\ndescription: x\ntype: [user]\n---\nbody\n',
+  );
+  fs.writeFileSync(
+    path.join(tmp, 'good.md'),
+    '---\nname: good\ndescription: x\ntype: user\n---\nbody\n',
+  );
+  process.env.MEMORY_ROUTER_DEBUG = '1';
+  try {
+    const { result, lines } = captureStderr(() => loadMemoriesFromDir(tmp));
+    assert.equal(result.length, 1);
+    assert.equal(result[0].id, 'good');
+    const joined = lines.join('');
+    assert.match(
+      joined,
+      /unknown-type\.md: unknown type "howto" \(expected: user, feedback, project, reference\)/,
+    );
+    assert.match(joined, /list-type\.md: unknown type \["user"\]/);
+  } finally {
+    delete process.env.MEMORY_ROUTER_DEBUG;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('MEMORY.md is skipped by the loader', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
   fs.writeFileSync(

@@ -76,13 +76,15 @@ export function lintMemoryDirForUnknownTopics(dir: string): LintReport {
 
   for (const memory of memories) {
     const topics = memory.frontmatter.topics;
+    // Unreachable for loader-loaded memories (the loader normalizes missing
+    // topics to []); kept as defense for direct parseMemoryFile callers.
     if (topics === undefined || topics === null) continue;
     if (!Array.isArray(topics)) {
       // Frontmatter has `topics:` set to a scalar (string, number, …)
-      // instead of a list. The runtime topic gate would treat this as no
-      // topics at all (the `?? []` fallback never fires because the value
-      // is non-null), so the memory silently never matches. Surface it as
-      // a distinct hit instead of iterating string characters.
+      // instead of a list. The runtime topic gate treats any non-array as
+      // no topics (Array.isArray guard), so the memory silently never
+      // matches. Surface it as a distinct hit instead of iterating string
+      // characters.
       hits.push({
         path: memory.path,
         memoryId: memory.id,
