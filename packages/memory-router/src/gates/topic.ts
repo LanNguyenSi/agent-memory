@@ -9,7 +9,12 @@ const topicGate: Gate = {
 
     const hits: GateHit[] = [];
     for (const memory of memories) {
-      const memTopics = memory.frontmatter.topics ?? [];
+      // The loader passes `topics` through without shape validation (so lint
+      // can still surface non-list values); this gate runs synchronously in
+      // the user-prompt-submit hook, where a thrown TypeError would kill all
+      // memory context. Treat anything that is not an array as no topics.
+      const rawTopics = memory.frontmatter.topics;
+      const memTopics = Array.isArray(rawTopics) ? rawTopics : [];
       const matched = memTopics.filter((t) => topics.has(t));
       if (matched.length === 0) continue;
       hits.push({

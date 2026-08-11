@@ -22,12 +22,11 @@ const { parse: parseYaml } = require('yaml');
 const LINE_CAP = 200;
 const DESCRIPTION_CAP = 150;
 const MEMORY_MD = 'MEMORY.md';
-const VALID_TYPES: ReadonlySet<string> = new Set([
-  'user',
-  'feedback',
-  'project',
-  'reference',
-]);
+// Canonical type set lives in the loader; drift lint does its own raw parse,
+// so files the loader rejects still get DRIFT lint signal (topics lint loads
+// via the loader and goes blind on them until the type is fixed).
+const { VALID_TYPES }: { VALID_TYPES: ReadonlySet<string> } =
+  require('../memory/loader');
 const REQUIRED_FIELDS: readonly string[] = ['name', 'description', 'type'];
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
