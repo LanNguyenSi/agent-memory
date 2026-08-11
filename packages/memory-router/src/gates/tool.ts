@@ -30,7 +30,12 @@ const toolGate: Gate = {
       const t = memory.frontmatter.triggers;
       if (!t) continue;
 
-      if (t.tools?.includes(ctx.tool.name)) {
+      // Same guard as gates/topic.ts: `triggers.tools` arrives unvalidated
+      // from the liberal loader, and this gate runs synchronously in the
+      // user-prompt-submit hook where a thrown TypeError kills all memory
+      // context. Treat anything that is not an array as no tools.
+      const tools = Array.isArray(t.tools) ? t.tools : [];
+      if (tools.includes(ctx.tool.name)) {
         hits.push({
           memory,
           gate: 'tool',
