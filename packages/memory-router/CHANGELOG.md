@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `memory-router eval <golden.yml> [--dir <path>] [--json]`: golden-set precision/recall/MRR baseline measurement against a labelled `(prompt, expected memory ids)` set, mirroring exactly what the `UserPromptSubmit` hook would select per prompt. A report, not a gate: no threshold/exit-code contract on the metrics; exits 0 on any error-free run. `--json` emits a stable, documented schema including `unknownExpectIds` (golden ids that don't resolve against the loaded corpus). See README "Golden-set eval".
+
 ## [0.5.0] - 2026-06-16
 
 **Coverage suite and security hardening.**

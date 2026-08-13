@@ -417,6 +417,81 @@ MEMORY_ROUTER_COVERAGE_CORPUS_DIR=~/.claude/projects/-home-lan-git-pandora/memor
 
 Companion verb for one-shot prompt checks: `memory-router test "<prompt>"` (see [Usage](#usage)).
 
+### Golden-set eval (`memory-router eval`)
+
+`tests/coverage/` above is a pass/fail regression net (every labelled prompt is an assertion). `memory-router eval <golden.yml>` is the companion **measurement** tool: it runs a golden set of `(prompt, expected memory ids)` pairs against a real corpus and reports precision, recall, and MRR: a number to track over time, not a gate. v1 deliberately has no threshold/exit-code contract on the metrics themselves: it exits 0 on any error-free run no matter how the numbers look. The intent is a baseline of the router's current (sync-gate-only, in most deployments) behavior captured *before* a retrieval change, so the change's effect is measurable against that baseline instead of argued from vibes.
+
+```bash
+memory-router eval golden.yml --dir ~/.claude/projects/PROJECT/memory
+MEMORY_ROUTER_DIR=~/.claude/projects/PROJECT/memory memory-router eval golden.yml --json
+```
+
+Corpus dir resolution is the same as `test`: `--dir` flag, then `$MEMORY_ROUTER_DIR`.
+
+**`golden.yml` format:**
+
+```yaml
+prompts:
+  - prompt: "merge this PR for the billing module"
+    expect: ["feedback_review_before_merge"]
+  - prompt: "what time is it in Berlin"
+    expect: []              # negative control: this prompt should match nothing
+```
+
+`expect` is a list of memory ids (filename without `.md`). An empty `expect: []` (or an omitted `expect` key) is a **negative control**: the only correct result is zero hits.
+
+Your corpus's own `golden.yml` lives in the memory dir itself (synced alongside the `.md` files by [agent-memory-sync](../agent-memory-sync)), **not** in this repo; this package only ships the synthetic fixture under `tests/fixtures/eval/` used by its own unit tests. Curate your golden set from real prompts you've actually asked, labelled with the memory ids you'd want to fire.
+
+**What gets measured:** `eval` mirrors exactly what the `UserPromptSubmit` hook would select for the same prompt: sync gates (topic, tool) first, then the confidence gate only when the sync gates were silent, with the same fail-open fallback on a semantic-search error. Without an embedding index (`<dir>/.memory-router/index.sqlite`, built by `memory-router index`) and `OPENAI_API_KEY`, the confidence gate can't contribute a hit; `eval` still runs and measures the sync path, and the report says so explicitly via `"semantic path: inactive"` rather than silently reporting a gap as a "measured" zero. When the semantic path IS active, this has a real-world cost: every prompt in the golden set whose sync gates are silent fires a live embeddings API call against your configured provider, so it costs money per call and the prompt text leaves the machine; size your golden set with that in mind.
+
+Golden ids that don't resolve against the corpus (a stale or mistyped memory id) are reported, not silenced: the text report prints a `WARNING:` line listing them, and `--json` carries the same list as the top-level `unknownExpectIds` array (empty when every id resolves). This never changes precision/recall/MRR (an unresolvable id still deflates recall for its prompt exactly as before); it just makes the cause visible instead of a silent gap.
+
+**Metric definitions**, per prompt:
+
+- **Precision** = `|expect ∩ got| / |got|` (`0` when nothing was returned).
+- **Recall** = `|expect ∩ got| / |expect|`.
+- **Reciprocal rank** = `1 / rank` of the first `got` id that's also in `expect` (1-indexed), or `0` if none of `expect` ever appears in `got`.
+- **Negative control** (`expect: []`): precision = recall = `1.0` when `got` is empty, else `0.0`. Reciprocal rank is undefined (`null`) for negative controls (they carry no ranking signal), and negative controls are **never** blended into the aggregate precision/recall/MRR below; they're reported as their own pass/fail count.
+
+Caveat: when two or more memories tie on score for the same prompt, the tie is broken by corpus load order, which comes from an unsorted `readdirSync` (`src/memory/loader.ts`), i.e. filesystem-dependent. A tied prompt's reciprocal rank (and therefore MRR) can differ between machines or after an unrelated file-touch that changes directory-entry order, even though the underlying gate logic didn't change. Sorting the loader's directory listing would remove this, but that's a separate follow-up (out of scope for `eval` itself).
+
+**Aggregate**, over the golden set:
+
+- `precision`, `recall`, `mrr` are the mean of the per-prompt values above, computed **only** over positive prompts (non-empty `expect`).
+- `negativeControls: { total, passed, failed, rate }` reports the negative-control prompts separately.
+
+`--json` emits the full report on stdout with this stable, documented top-level shape:
+
+```jsonc
+{
+  "goldenPath": "golden.yml",
+  "dir": "/path/to/memory",
+  "corpusSize": 42,
+  "semanticPathActive": false,
+  "unknownExpectIds": [],
+  "perPrompt": [
+    {
+      "prompt": "merge this PR for the billing module",
+      "expect": ["feedback_review_before_merge"],
+      "got": ["feedback_review_before_merge"],
+      "isNegativeControl": false,
+      "precision": 1,
+      "recall": 1,
+      "reciprocalRank": 1
+    }
+  ],
+  "aggregate": {
+    "precision": 0.75,
+    "recall": 0.625,
+    "mrr": 0.75,
+    "positiveCount": 4,
+    "negativeControls": { "total": 2, "passed": 1, "failed": 1, "rate": 0.5 }
+  }
+}
+```
+
+Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the corpus dir missing. Exits 0 on any error-free run, regardless of the metric values.
+
 ## Status
 
 **v1, scaffold.**
