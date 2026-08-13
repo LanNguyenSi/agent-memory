@@ -26,7 +26,6 @@ const os = require('node:os');
 const fs = require('node:fs');
 
 const { resolveBlended, resolve } = require('../src/router');
-const { topicGate } = require('../src/gates/topic');
 const { loadMemoriesFromDir } = require('../src/memory/loader');
 const { rebuildIndex } = require('../src/embed/indexer');
 
@@ -227,7 +226,7 @@ test('resolveBlended: empty result when ctx.prompt is unset (no semantic call at
   assert.equal(semanticSearchCalled, false);
 });
 
-test('resolveBlended: a semantic-search failure degrades to topic/recency/type-only hits rather than throwing (never blocks the prompt)', async () => {
+test('resolveBlended: a semantic-search failure degrades to the exact pre-blend topic-only hit (flat 1.0, no modifiers) rather than throwing (never blocks the prompt)', async () => {
   const withTopic = fakeMemory('with-topic', { topics: ['workflow'] });
   const ctx: RouterContext = {
     prompt: 'please review and merge this PR',
@@ -238,29 +237,73 @@ test('resolveBlended: a semantic-search failure degrades to topic/recency/type-o
       throw new Error('simulated embeddings API failure');
     },
   });
+  // A caught semantic-search error is one of the two "semantic path
+  // contributes nothing" cases (the other is no index/provider, see the
+  // real-pipeline degradation-pinning test below): both must degrade to
+  // EXACTLY resolve()'s topic-only output, not a blended score. An earlier
+  // version of this resolver applied the topic-boost/recency/type modifiers
+  // even here, which re-ranks a degraded top-N once a prompt has more topic
+  // candidates than maxHits (measured against the real corpus).
+  assert.deepEqual(hits, resolve(ctx, [withTopic], { maxHits: 5 }));
   assert.deepEqual(hits.map((h: GateHit) => h.memory.id), ['with-topic']);
-  assert.ok(hits[0].score > 0 && hits[0].score < 1, `expected a non-flat blended score, got ${hits[0].score}`);
+  assert.equal(hits[0].gate, 'topic');
+  assert.equal(hits[0].score, 1.0, `expected the flat pre-blend topic score, got ${hits[0].score}`);
 });
 
-test('resolveBlended: without an index/provider (real semanticSearch, no deps override), the same ids fire as the old topic-only sync path', async () => {
-  const memories = loadMemoriesFromDir(FIXTURES_DIR);
-  const ctx: RouterContext = { prompt: 'merge PR 42', memoryDir: FIXTURES_DIR };
+test('resolveBlended: without an index/provider (real semanticSearch, no deps override), degraded output is byte-identical to resolve(), same ids, scores, reasons, and order, with more topic candidates than maxHits', async () => {
+  // Regression fixture for the mm-v1-T004 post-hoc fix: the original
+  // degradation guard below only asserted SET equality of memory ids and a
+  // "score is not exactly 1.0" property, using the 4-file shared fixtures
+  // dir (all matching different topics, well under maxHits=5). That corpus
+  // was too small to expose the bug: resolveBlended was still applying
+  // topicBoost/recency/type modifiers in degraded mode, which is invisible
+  // when every topic candidate fits inside maxHits (the ORDER doesn't
+  // matter if nothing gets capped) and invisible to a set-only assertion
+  // (a re-ranked but same-membership top-5 still passes `notEqual(1.0)` +
+  // set equality). This fixture builds MORE than maxHits (5) topic
+  // candidates for one prompt, with mtimes spread widely (0/20/40/60/80/100
+  // days old) and every `type` represented, so a modifier applied in
+  // degraded mode would both re-order the top-5 AND evict a load-order
+  // pick, and asserts full deep equality against resolve(), not just a set.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-blend-degrade-pin-'));
+  try {
+    const now = Date.now();
+    const types: MemoryType[] = ['feedback', 'project', 'reference', 'user'];
+    const dayMs = 24 * 60 * 60 * 1000;
+    const memories: Memory[] = [];
+    for (let i = 0; i < 7; i++) {
+      const p = path.join(dir, `m${i}.md`);
+      fs.writeFileSync(p, `body ${i}`);
+      const mtime = new Date(now - i * 20 * dayMs);
+      fs.utimesSync(p, mtime, mtime);
+      memories.push(
+        fakeMemory(`m${i}`, { topics: ['workflow'], type: types[i % types.length] }, p),
+      );
+    }
+    assert.ok(memories.length > 5, 'fixture sanity: need more topic candidates than maxHits (5)');
 
-  // Real semanticSearch: no `.memory-router` index exists under
-  // FIXTURES_DIR, so it no-ops (returns [], no HTTP call) regardless of
-  // whatever embedding provider env happens to be configured — see
-  // src/embed/indexer.ts.
-  const blendedHits = await resolveBlended(ctx, memories, FIXTURES_DIR);
-  const oldHits = resolve(ctx, memories, { gates: [topicGate] });
+    const ctx: RouterContext = {
+      prompt: 'please review and merge this PR',
+      memoryDir: NOVOCAB_DIR,
+    };
 
-  assert.ok(blendedHits.length > 0, 'expected at least one degraded topic hit');
-  assert.deepEqual(
-    new Set(blendedHits.map((h: GateHit) => h.memory.id)),
-    new Set(oldHits.map((h: GateHit) => h.memory.id)),
-    'the degraded blend must select the exact same memory ids as the old sync-only topic path',
-  );
-  for (const h of blendedHits) {
-    assert.notEqual(h.score, 1.0, 'the flat-1.0 topic score is exactly the symptom this resolver removes');
+    // Real semanticSearch: no `.memory-router` index exists under `dir`, so
+    // it no-ops (returns [], no HTTP call) regardless of whatever embedding
+    // provider env happens to be configured — see src/embed/indexer.ts.
+    const blendedHits = await resolveBlended(ctx, memories, dir, { maxHits: 5 });
+    const oldHits = resolve(ctx, memories, { maxHits: 5 });
+
+    assert.equal(oldHits.length, 5, 'sanity: resolve() itself caps at maxHits');
+    assert.deepEqual(
+      blendedHits,
+      oldHits,
+      'the degraded blend must be byte-identical to resolve() (ids, scores, reasons, and load-order), not just same-membership',
+    );
+    for (const h of blendedHits) {
+      assert.equal(h.score, 1.0, 'degraded mode must use the flat pre-blend topic score, no modifiers');
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -293,8 +336,15 @@ test('resolveBlended: MEMORY_ROUTER_BLEND_TOPIC_BOOST overrides the default topi
   const prev = process.env.MEMORY_ROUTER_BLEND_TOPIC_BOOST;
   process.env.MEMORY_ROUTER_BLEND_TOPIC_BOOST = '5';
   try {
+    // A non-empty (if tiny) semantic score is required here: since the
+    // mm-v1-T004 degradation fix, resolveBlended bypasses topicBoost/
+    // recency/type entirely (returns the flat pre-blend resolve() output)
+    // whenever the semantic path contributes nothing at all, see the
+    // degradation-pinning test above. This test is about the blend's env
+    // override, not about degraded mode, so it must keep the semantic path
+    // "live" (non-zero score for this memory) to actually exercise it.
     const hits = await resolveBlended(ctx, [withTopic], '/fake/dir', {}, {
-      semanticSearch: fakeSemanticSearch({}),
+      semanticSearch: fakeSemanticSearch({ 'with-topic': 0.01 }),
     });
     assert.ok(
       hits[0].score >= 5,

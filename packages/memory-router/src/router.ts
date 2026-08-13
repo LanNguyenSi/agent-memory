@@ -101,15 +101,28 @@ interface ResolveBlendedDeps {
 // A memory with neither a semantic score nor a topic match contributes
 // nothing and is excluded — the modifiers alone can never surface an
 // otherwise-silent memory, only shape the ranking of one some other signal
-// already selected. Without an index/provider, this degrades to exactly the
-// same *set* of memories the old topic-only sync path selected (only the
-// score value differs: a blended score instead of a flat 1.0).
+// already selected.
+//
+// Degraded mode (post-hoc fix, see task notes): when the semantic path
+// contributes NOTHING for this prompt, whether because no index/provider is
+// available (semanticSearch no-ops, see src/embed/indexer.ts) or because of
+// a caught semantic-search error below, resolveBlended returns EXACTLY what
+// resolve(ctx, memories, {maxHits}) (the old sync-only topic/tool path)
+// would: the same hits, the same flat 1.0 gate scores, the same load-order
+// ties. No topic boost, no recency/type modifier is applied in this case.
+// An initial version of this blend applied those modifiers even when
+// semantic contributed nothing; on a real corpus with more than `maxHits`
+// topic candidates for one prompt, that re-ranked the degraded top-N by
+// mtime/type and silently evicted the correct picks, measured against the
+// real golden set (P/R/MRR regressed against the documented "identical to
+// today's topic-only degradation" acceptance criterion). See the pinned
+// regression test in tests/blend.test.ts.
 //
 // A semantic-search failure (network/API error) is caught here, not left to
-// the caller: the blend still returns topic/recency/type-only scoring
-// rather than throwing, so hook/MCP/eval callers each keep their own outer
-// try/catch as a defensive-in-depth layer, not as the only thing standing
-// between a flaky embeddings endpoint and a blocked prompt.
+// the caller: the blend still returns topic-only scoring rather than
+// throwing, so hook/MCP/eval callers each keep their own outer try/catch as
+// a defensive-in-depth layer, not as the only thing standing between a
+// flaky embeddings endpoint and a blocked prompt.
 async function resolveBlended(
   ctx: RouterContext,
   memories: Memory[],
@@ -119,10 +132,6 @@ async function resolveBlended(
 ): Promise<GateHit[]> {
   if (!ctx.prompt) return [];
   const maxHits = opts.maxHits ?? 5;
-  const weights = loadBlendWeights();
-
-  const topicHits: GateHit[] = topicGate.evaluate(ctx, memories);
-  const topicById = new Map<string, GateHit>(topicHits.map((h) => [h.memory.id, h]));
 
   // Wider than maxHits on purpose: a memory that ranks outside the raw
   // semantic top-k can still win a slot once topic/recency/type are folded
@@ -137,6 +146,16 @@ async function resolveBlended(
       `memory-router: semantic search failed, degrading to topic/recency/type only: ${String(err)}\n`,
     );
   }
+
+  // Semantic path contributed nothing (no index/provider, or the caught
+  // error above): degrade to EXACTLY the pre-blend sync-only resolver
+  // rather than running any topic-boost/recency/type scoring, see the
+  // module comment above this function for why.
+  if (semanticHits.length === 0) return resolve(ctx, memories, { maxHits });
+
+  const weights = loadBlendWeights();
+  const topicHits: GateHit[] = topicGate.evaluate(ctx, memories);
+  const topicById = new Map<string, GateHit>(topicHits.map((h) => [h.memory.id, h]));
   const semanticById = new Map<string, number>(
     semanticHits.map((h) => [h.memory.id, h.score]),
   );

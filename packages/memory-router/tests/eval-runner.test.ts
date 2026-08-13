@@ -8,11 +8,15 @@
 // existsSync(indexPath) before ever calling the OpenAI API — see
 // src/embed/indexer.ts) — the eval measures the topic-only degradation of
 // the blend path, deterministically, with no live network calls. Which
-// memory ids fire is unaffected by the blend-score rewrite (only the raw
-// score value changed, from a flat 1.0 to a blended topicBoost +
-// recency/type score); the ids asserted below are the same before and
-// after mm-v1-T004 by construction — see tests/blend.test.ts for the
-// "identical degraded ids" pin proven directly against resolveBlended.
+// memory ids fire is unaffected by the blend-score rewrite: resolveBlended
+// degrades to EXACTLY the old flat-1.0 topic-only score/order when the
+// semantic path contributes nothing (a post-hoc mm-v1-T004 fix; an earlier
+// version applied topicBoost/recency/type modifiers even in this degraded
+// case, which is exactly what broke the P/R/MRR degradation baseline this
+// eval verb exists to protect). The ids asserted below are the same before
+// and after mm-v1-T004 by construction; see tests/blend.test.ts for the
+// byte-identical degraded-output pin proven directly against
+// resolveBlended.
 //
 // Every expected P/R/RR value below is hand-computed against the actual
 // TOPIC_PATTERNS regexes (verified once against src/topic-patterns.ts before

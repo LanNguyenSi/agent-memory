@@ -45,10 +45,10 @@ echo '{"prompt":"rename foo to bar"}' \
 The positive prompt prints one line of JSON on stdout (plus a stderr line — see below):
 
 ```json
-{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"**memory-router** — 1 relevant memory applies:\n\n### No force-push to shared branches  _(topic · 0.23)_\nNEVER force-push to master or main. The history is shared; rewriting\nit costs every collaborator a hard reset and loses uncommitted work.\nFor local-branch fixes, prefer a fixup commit + interactive rebase\nbefore push."}}
+{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"**memory-router** — 1 relevant memory applies:\n\n### No force-push to shared branches  _(topic · 1.00)_\nNEVER force-push to master or main. The history is shared; rewriting\nit costs every collaborator a hard reset and loses uncommitted work.\nFor local-branch fixes, prefer a fixup commit + interactive rebase\nbefore push."}}
 ```
 
-`0.23` is the topic-only-degraded blend score (topic boost + a small recency/type nudge, see "How it works" below) for this demo's just-created file — not a fixed constant, it moves with the memory's mtime and the corpus's blend weights. This scratch corpus has no embedding index, so **both** commands above also print one line on stderr: `memory-router: embedding index missing — run 'memory-router index <dir>' to build it.` — the score-blend resolver (mm-v1-T004) attempts the semantic path on every prompt, not only when the deterministic gates stay silent, so this warning surfaces even on the positive prompt the Topic Gate already matched. It's informational, not a failure: stdout still carries the hit above (and stays empty for the negative prompt, exit 0 either way).
+`1.00` is the flat pre-blend topic score for this demo (no embedding index, see below, so the semantic path contributes nothing and the blend degrades to exactly the old topic-only sync path, see "How it works" below), not a blended value. This scratch corpus has no embedding index, so **both** commands above also print one line on stderr: `memory-router: embedding index missing — run 'memory-router index <dir>' to build it.` — the score-blend resolver (mm-v1-T004) attempts the semantic path on every prompt, not only when the deterministic gates stay silent, so this warning surfaces even on the positive prompt the Topic Gate already matched. It's informational, not a failure: stdout still carries the hit above (and stays empty for the negative prompt, exit 0 either way).
 
 Claude Code consumes the stdout contract on every prompt and injects `additionalContext` as system context for the model. The negative prompt prints nothing on stdout and exits 0: when no signal fires, stdout stays empty so the context window stays clean.
 
@@ -92,7 +92,7 @@ The `bin/` entries land in `node_modules/.bin/` (and on `PATH` for a global inst
 
 A memory with neither a semantic score nor a topic match contributes nothing and is excluded — the recency/type modifiers alone can never surface an otherwise-silent memory, only shape the ranking of one some other signal already selected. Blend weights are overridable via the `MEMORY_ROUTER_BLEND_*` env namespace (`MEMORY_ROUTER_BLEND_TOPIC_BOOST`, `MEMORY_ROUTER_BLEND_RECENCY_WEIGHT`, `MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS`, `MEMORY_ROUTER_BLEND_TYPE_WEIGHT`); the built-in defaults are deliberately **uncalibrated** — no rollout measurement has tuned them yet (tracked as mm-v1-T008) — see `src/gates/confidence.ts` for the exact defaults and shape rationale.
 
-Without an embedding index or a resolvable embedding provider, the blend degrades to exactly the same *set* of memories the Topic Gate alone would select — only the score value differs (a blended score instead of a flat 1.0), never the selection.
+Without an embedding index or a resolvable embedding provider, or on a semantic-search failure, the blend degrades to exactly the same output the old topic-only sync path (`resolve()`) would produce: the same memories, in the same order, at the same flat `1.0` score. No topic boost, no recency/type modifier is applied in this case, so a corpus with more topic candidates than the cap behaves identically to today's topic-only degradation.
 
 Separately, the **Tool Gate** (`PreToolUse` hook, against memory `triggers.command_pattern` and `triggers.tools`) stays a deterministic, unblended full-score (1.0) match — before `Bash(git push --force)`, `Bash(docker compose up)`, etc. It is not part of the semantic blend (there is no prompt to embed at that point in the tool-call lifecycle), but `memory_resolve` still consults it when a `tool` argument is passed, exactly as before.
 
@@ -580,7 +580,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 
 **v1, scaffold.**
 
-- ✅ Score-blend resolver (mm-v1-T004): semantic score (sqlite-vec, OpenAI or Ollama) as the dominant signal, Topic Gate as a boost, recency/type as tie-breaking modifiers. Runs unconditionally whenever an index + provider are available; fails open to topic/recency/type-only scoring if no provider is configured/reachable, the index is absent, or the semantic call errors.
+- ✅ Score-blend resolver (mm-v1-T004): semantic score (sqlite-vec, OpenAI or Ollama) as the dominant signal, Topic Gate as a boost, recency/type as tie-breaking modifiers. Runs unconditionally whenever an index + provider are available; fails open to the exact flat pre-blend topic-only resolver (no recency/type modifiers) if no provider is configured/reachable, the index is absent, or the semantic call errors.
 - ✅ Topic Gate (deterministic keyword → topic map; built-in 5-topic default, corpus-overridable via `topics.yml`, see [Topic vocabulary](#topic-vocabulary-topicsyml))
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract
