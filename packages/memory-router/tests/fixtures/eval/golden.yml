@@ -1,0 +1,17 @@
+# Fixture golden set for the `memory-router eval` runner unit tests.
+# Synthetic prompts and ids paired with the synthetic corpus in
+# tests/fixtures/eval/corpus/. Every prompt's expected P/R/RR is
+# hand-verified in tests/eval-runner.test.ts — keep the two files in sync.
+prompts:
+  - prompt: "git push --force to master"
+    expect: ["feedback_force_push"]
+  - prompt: "review before merge and deploy to prod"
+    expect: ["feedback_review_before_merge", "feedback_deploy_checklist"]
+  - prompt: "rotate the leaked token"
+    expect: ["feedback_token_rotation", "feedback_never_fires_phantom"]
+  - prompt: "rm -rf the build directory to start fresh"
+    expect: ["feedback_deploy_checklist"]
+  - prompt: "what's the weather in Berlin today"
+    expect: []
+  - prompt: "please deploy this release to prod"
+    expect: []

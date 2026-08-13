@@ -26,6 +26,8 @@ const {
 } = require('./lint/stale');
 const { loadMemoriesFromDir } = require('./memory/loader');
 const { resolve, resolveConfidence, dedupeAndRank } = require('./router');
+const { runGoldenEval } = require('./eval/runner');
+const { formatEvalReportText, formatEvalReportJson } = require('./eval/format');
 
 interface ParsedArgs {
   cmd: string;
@@ -38,9 +40,10 @@ interface ParsedArgs {
   fix: boolean;
   json: boolean;
   /**
-   * `test <prompt>`: dry-run a prompt against the corpus and print which
-   * memories would fire. Corpus dir resolution order: --dir flag,
-   * $MEMORY_ROUTER_DIR env, error.
+   * `test <prompt>` / `eval <golden.yml>`: corpus dir for both verbs.
+   * Resolution order: --dir flag, $MEMORY_ROUTER_DIR env, error. Shared
+   * field name (`testDir`) predates the `eval` verb; both consume the
+   * same generic `--dir` flag parsed below.
    */
   testDir?: string;
   /** `test --semantic`: also run the async confidence gate. */
@@ -243,6 +246,31 @@ Commands:
     --max-hits caps how many matches are printed (default 5).
     --json emits a machine-readable report on stdout.
 
+  eval <golden.yml> [--dir <path>] [--json]
+    Run a golden set of (prompt, expected memory ids) pairs against the
+    corpus and report precision / recall per prompt plus aggregate
+    precision / recall / MRR (mean reciprocal rank). A REPORT, not a gate:
+    exits 0 on any error-free run regardless of how the metrics look
+    (baseline measurement for the pre-retrieval-rework status quo).
+    Mirrors exactly what the UserPromptSubmit hook would select for each
+    prompt (sync gates, then the confidence gate only when sync is
+    silent), so this measures the resolver path actually in production.
+    golden.yml format:
+        prompts:
+          - prompt: "user prompt text"
+            expect: ["memory_id_1", "memory_id_2"]
+          - prompt: "a prompt with no expected match"
+            expect: []          # negative control
+    A negative control (empty expect:) counts as a pass only when the
+    corpus returns zero hits; it is scored separately from — and never
+    blended into — the aggregate precision/recall/MRR.
+    Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR env (same
+    as 'test'). Without an embedding index and OPENAI_API_KEY the
+    confidence gate stays silent; the report states this explicitly via
+    "semantic path: inactive" rather than passing it off as measured.
+    --json emits a machine-readable report on stdout (schema documented
+    in README.md).
+
   stale <dir> [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--scan-body] [--check-urls] [--json]
     Scan every memory in <dir> for stale references against one or more
     repo roots. Default root list: [process.cwd()]. A ref is STALE only
@@ -286,6 +314,9 @@ Examples:
   memory-router test "rebase the branch onto master" --dir ~/.claude/projects/PROJECT/memory
   MEMORY_ROUTER_DIR=~/.claude/projects/PROJECT/memory \\
     memory-router test "rebase the branch" --semantic --json
+  memory-router eval golden.yml --dir ~/.claude/projects/PROJECT/memory
+  MEMORY_ROUTER_DIR=~/.claude/projects/PROJECT/memory \\
+    memory-router eval golden.yml --json
 `);
 }
 
@@ -565,6 +596,35 @@ function formatTestReportJson(
   );
 }
 
+async function runEval(goldenPath: string, dir: string, json: boolean): Promise<void> {
+  const fs = require('node:fs');
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: cannot read ${dir}: ${String(err)}\n`);
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
+    process.stderr.write(`error: ${dir} is not a directory\n`);
+    process.exit(1);
+  }
+
+  let report;
+  try {
+    report = await runGoldenEval(goldenPath, dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: ${String(err)}\n`);
+    process.exit(1);
+  }
+
+  if (json) {
+    process.stdout.write(formatEvalReportJson(report));
+  } else {
+    process.stdout.write(formatEvalReportText(report));
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -573,7 +633,8 @@ async function main(): Promise<void> {
     args.cmd !== 'index' &&
     args.cmd !== 'lint' &&
     args.cmd !== 'stale' &&
-    args.cmd !== 'test'
+    args.cmd !== 'test' &&
+    args.cmd !== 'eval'
   ) {
     printHelp();
     process.exit(args.cmd === '' ? 0 : 1);
@@ -593,6 +654,23 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await runTest(prompt, dir, args.testSemantic, args.testMaxHits, args.json);
+    return;
+  }
+
+  if (args.cmd === 'eval') {
+    const goldenPath = args.dir; // for `eval`, positional[1] is the golden.yml path
+    if (!goldenPath) {
+      process.stderr.write('error: eval <golden.yml> is required\n');
+      process.exit(1);
+    }
+    const dir = args.testDir ?? process.env.MEMORY_ROUTER_DIR;
+    if (!dir) {
+      process.stderr.write(
+        'error: --dir <path> or $MEMORY_ROUTER_DIR is required\n',
+      );
+      process.exit(1);
+    }
+    await runEval(goldenPath, dir, args.json);
     return;
   }
 
