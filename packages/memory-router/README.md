@@ -119,7 +119,7 @@ Canonically, `type` and `topics` live top-level (as in the example above). Most 
 
 ### Topic vocabulary (`topics.yml`)
 
-The Topic Gate's keyword → topic map ships a built-in 5-topic default (`deployment`, `destructive_ops`, `workflow`, `security`, `testing`, see `src/topic-patterns.ts`). A corpus can override it wholesale — replace, not merge — by dropping a `topics.yml` file at the root of `MEMORY_ROUTER_DIR`:
+The Topic Gate's keyword → topic map ships a built-in 5-topic default (`deployment`, `destructive_ops`, `workflow`, `security`, `testing`, see `src/topic-patterns.ts`). A corpus can override it wholesale (replace, not merge) by dropping a `topics.yml` file at the root of `MEMORY_ROUTER_DIR`:
 
 ```yaml
 # <MEMORY_ROUTER_DIR>/topics.yml
@@ -135,23 +135,23 @@ The Topic Gate's keyword → topic map ships a built-in 5-topic default (`deploy
     - '\boutage\b'
 ```
 
-A fuller worked example (three custom topics, descriptions) is available at [`tests/fixtures/vocab/topics.yml`](https://github.com/LanNguyenSi/agent-memory/blob/master/packages/memory-router/tests/fixtures/vocab/topics.yml) in the repo — that path is source-tree only (not part of the published npm package), so treat it as an optional cross-reference; the inline block above is a complete, self-contained example on its own.
+A fuller worked example (three custom topics, descriptions) is available at [`tests/fixtures/vocab/topics.yml`](https://github.com/LanNguyenSi/agent-memory/blob/master/packages/memory-router/tests/fixtures/vocab/topics.yml) in the repo; that path is source-tree only (not part of the published npm package), so treat it as an optional cross-reference; the inline block above is a complete, self-contained example on its own.
 
 Shape: a top-level list of `{ name, description?, patterns? }` entries.
 
 - `name` is required and must be unique across the file.
-- `description` is optional, documentation only — not matched against.
+- `description` is optional, documentation only, not matched against.
 - `patterns` is an optional list of regex strings, matched case-insensitively. A topic declared with no `patterns:` at all, whose one pattern fails to compile, or whose pattern is rejected by the ReDoS safety screen (see [Trust Model](#trust-model)) degrades to a keyword match on its own `name` rather than being dropped or crashing anything.
 
 Both the Topic Gate and `memory-router lint --unknown-topics` load and validate against whatever `topics.yml` resolves to:
 
 - **Missing file:** the built-in 5-topic default, unchanged.
-- **Present and valid:** the corpus vocabulary, corpus-wide, fully replacing the default — a memory tagged `security` under a custom vocabulary that doesn't declare a `security` entry will not match on that topic anymore.
+- **Present and valid:** the corpus vocabulary, corpus-wide, fully replacing the default: a memory tagged `security` under a custom vocabulary that doesn't declare a `security` entry will not match on that topic anymore.
 - **Present and invalid** (YAML error, missing/duplicate `name`, wrong field shape): rejected with a clear error message.
-  - The **Topic Gate** never crashes over it, it degrades silently to the built-in default — the `UserPromptSubmit` hook must never block a prompt over a broken corpus file. Set `MEMORY_ROUTER_DEBUG=1` to see the rejection reason on stderr.
+  - The **Topic Gate** never crashes over it, it degrades silently to the built-in default: the `UserPromptSubmit` hook must never block a prompt over a broken corpus file. Set `MEMORY_ROUTER_DEBUG=1` to see the rejection reason on stderr.
   - `memory-router lint --unknown-topics` also falls back to the built-in default for the scan itself, but prints the rejection reason at the top of its report instead of hiding it.
 
-`Topic` is a plain string at the type level — there is no compiled-in closed set left to extend in source. What counts as a known topic is resolved at load time against whichever vocabulary is active, not enforced by TypeScript.
+`Topic` is a plain string at the type level; there is no compiled-in closed set left to extend in source. What counts as a known topic is resolved at load time against whichever vocabulary is active, not enforced by TypeScript.
 
 ### `verify:` stale-marker on recall
 
@@ -482,7 +482,7 @@ Your corpus's own `golden.yml` lives in the memory dir itself (synced alongside 
 
 Golden ids that don't resolve against the corpus (a stale or mistyped memory id) are reported, not silenced: the text report prints a `WARNING:` line listing them, and `--json` carries the same list as the top-level `unknownExpectIds` array (empty when every id resolves). This never changes precision/recall/MRR (an unresolvable id still deflates recall for its prompt exactly as before); it just makes the cause visible instead of a silent gap.
 
-The report also states which topic vocabulary the Topic Gate used for the run, via `vocabularySource`: `"built-in default"`, or `"custom (<dir>/topics.yml)"` when the corpus overrides it (see [Topic vocabulary](#topic-vocabulary-topicsyml)). `eval` always scores against `--dir`'s (or `$MEMORY_ROUTER_DIR`'s) own `topics.yml`, never a stray `MEMORY_ROUTER_DIR` left over in the environment — so a run pointed at the wrong corpus, or hitting a broken `topics.yml`, shows up here instead of silently scoring against the wrong vocabulary.
+The report also states which topic vocabulary the Topic Gate used for the run, via `vocabularySource`: `"built-in default"`, or `"custom (<dir>/topics.yml)"` when the corpus overrides it (see [Topic vocabulary](#topic-vocabulary-topicsyml)). `eval` always scores against `--dir`'s (or `$MEMORY_ROUTER_DIR`'s) own `topics.yml`, never a stray `MEMORY_ROUTER_DIR` left over in the environment, so a run pointed at the wrong corpus, or hitting a broken `topics.yml`, shows up here instead of silently scoring against the wrong vocabulary.
 
 **Metric definitions**, per prompt:
 
@@ -535,7 +535,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 
 **v1, scaffold.**
 
-- ✅ Topic Gate (deterministic keyword → topic map; built-in 5-topic default, corpus-overridable via `topics.yml` — see [Topic vocabulary](#topic-vocabulary-topicsyml))
+- ✅ Topic Gate (deterministic keyword → topic map; built-in 5-topic default, corpus-overridable via `topics.yml`, see [Topic vocabulary](#topic-vocabulary-topicsyml))
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
 - ✅ Confidence Gate (ambiguity heuristic + sqlite-vec semantic search). Runs only when sync gates are silent; fails open if `OPENAI_API_KEY` is missing or the index is absent.
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract
@@ -548,7 +548,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 
 Memory files under `MEMORY_ROUTER_DIR` are treated as **author-trusted code**. They ship regexes (`triggers.command_pattern`), keyword lists, and markdown bodies that directly shape Claude's context. In the current deployment they live alongside your Claude-Code session (`~/.claude/...`) and are synced via [agent-memory-sync](../agent-memory-sync), i.e. you wrote them.
 
-The tool gate — and, since mm-v1-T002, the topic vocabulary loader (`src/vocab/loader.ts`) for `topics.yml` patterns — defends against **author mistakes**, not a malicious author:
+The tool gate (and, since mm-v1-T002, the topic vocabulary loader `src/vocab/loader.ts` for `topics.yml` patterns) defends against **author mistakes**, not a malicious author:
 
 - `command_pattern` (tool gate) and `topics.yml` `patterns:` entries (topic vocabulary) are both rejected when they exceed 200 characters or contain an obvious nested-quantifier shape (`(a+)+`, `(a*)*`, etc.), the two most common ReDoS footguns. A rejected `topics.yml` pattern degrades the same way a non-compiling one does: keyword match on the topic's own `name` (see [Topic vocabulary](#topic-vocabulary-topicsyml)) rather than being compiled and run.
 - No sandbox / `vm` timeout: a subtle pathological pattern would still stall the PreToolUse hook (or the UserPromptSubmit hook, for a `topics.yml` pattern). Don't point `MEMORY_ROUTER_DIR` at untrusted content.
