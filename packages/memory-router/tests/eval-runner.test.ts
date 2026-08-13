@@ -72,6 +72,8 @@ const {
   scorePrompt,
   aggregateMetrics,
   semanticPathAvailable,
+  promptToHits,
+  findUnknownExpectIds,
 } = require("../src/eval/runner");
 const { loadGoldenFile } = require("../src/eval/golden");
 
@@ -278,6 +280,13 @@ test("runGoldenEval: full run against the fixture corpus + golden set matches th
     "no index built for the fixture corpus",
   );
   assert.equal(report.perPrompt.length, 6);
+  // The fixture golden.yml deliberately labels "rotate the leaked token"
+  // with a phantom id (feedback_never_fires_phantom) as a negative-control
+  // for the recall<1 case — it never matches any fixture corpus memory, so
+  // it must surface here as an unknown expect id. This is expected
+  // behavior, not a bug: it exercises the same warning a real stale/typo'd
+  // golden id would trigger.
+  assert.deepEqual(report.unknownExpectIds, ["feedback_never_fires_phantom"]);
 
   const byPrompt = new Map<string, PromptMetricLike>(
     report.perPrompt.map((p: PromptMetricLike) => [p.prompt, p]),
@@ -351,4 +360,136 @@ test("runGoldenEval: missing golden file throws (caller maps this to exit 1)", a
       ),
     /cannot read golden file/,
   );
+});
+
+// --- promptToHits dependency-pinning tests -------------------------------
+//
+// These call promptToHits with the `deps` test seam (its 4th, test-only
+// parameter — see src/eval/runner.ts) so they exercise the real
+// promptToHits control flow without touching the real router or the
+// embedding stack. They exist specifically to pin the HIGH hook-fidelity
+// fix: resolveConfidence must be called with exactly the hook's argument
+// list (ctx, memories, dir) and no opts object, and only when the sync
+// gates were silent.
+
+function fakeMemory(id: string): Memory {
+  return {
+    id,
+    path: `${id}.md`,
+    frontmatter: { name: id, description: `desc for ${id}`, type: "feedback" },
+    body: "",
+  };
+}
+
+test("promptToHits: does not call resolveConfidence when sync gates already return hits", async () => {
+  const ctx: RouterContext = { prompt: "irrelevant" };
+  const memories: Memory[] = [];
+  const dir = "/fake/dir";
+  const syncHit: GateHit = {
+    memory: fakeMemory("m1"),
+    gate: "topic",
+    score: 1,
+    reason: "topic match",
+  };
+  let resolveConfidenceCalled = false;
+  const hits = await promptToHits(ctx, memories, dir, {
+    resolve: (): GateHit[] => [syncHit],
+    resolveConfidence: async (): Promise<GateHit[]> => {
+      resolveConfidenceCalled = true;
+      return [];
+    },
+    dedupeAndRank: (h: GateHit[]): GateHit[] => h,
+  });
+  assert.equal(
+    resolveConfidenceCalled,
+    false,
+    "the confidence gate must stay silent once sync gates already produced hits",
+  );
+  assert.deepEqual(hits, [syncHit]);
+});
+
+test("promptToHits: calls resolveConfidence with exactly the hook's argument list (ctx, memories, dir) — no opts object", async () => {
+  const ctx: RouterContext = { prompt: "an ambiguous prompt" };
+  const memories: Memory[] = [fakeMemory("m1")];
+  const dir = "/fake/dir";
+  let capturedArgs: unknown[] | undefined;
+  await promptToHits(ctx, memories, dir, {
+    resolve: (): GateHit[] => [],
+    resolveConfidence: async (...args: unknown[]): Promise<GateHit[]> => {
+      capturedArgs = args;
+      return [];
+    },
+    dedupeAndRank: (h: GateHit[]): GateHit[] => h,
+  });
+  // Mutating the resolveConfidence call back to
+  // `resolveConfidence(ctx, memories, dir, { maxHits: MAX_HITS })` must
+  // turn this assertion red: length would become 4, not 3.
+  assert.equal(
+    capturedArgs?.length,
+    3,
+    "resolveConfidence must receive exactly 3 positional args (ctx, memories, dir), no opts object, so the router's own default maxHits applies exactly as the hook does",
+  );
+  assert.deepEqual(capturedArgs, [ctx, memories, dir]);
+});
+
+test("promptToHits: falls back to the (empty) sync hits, does not propagate, when resolveConfidence throws", async () => {
+  const ctx: RouterContext = { prompt: "an ambiguous prompt" };
+  const memories: Memory[] = [fakeMemory("m1")];
+  const dir = "/fake/dir";
+  const hits = await promptToHits(ctx, memories, dir, {
+    resolve: (): GateHit[] => [],
+    resolveConfidence: async (): Promise<GateHit[]> => {
+      throw new Error("simulated semantic search failure");
+    },
+    dedupeAndRank: (h: GateHit[]): GateHit[] => h,
+  });
+  assert.deepEqual(hits, []);
+});
+
+// --- loadGoldenFile expect-dedupe (MEDIUM fix) ---------------------------
+
+test("loadGoldenFile: deduplicates a prompt's expect ids so reported expect === scored expect", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "memory-router-golden-"));
+  const p = path.join(tmp, "dup-expect.yml");
+  fs.writeFileSync(
+    p,
+    'prompts:\n  - prompt: "x"\n    expect: ["a", "b", "a"]\n',
+  );
+  try {
+    const golden = loadGoldenFile(p);
+    assert.deepEqual(
+      golden.prompts[0].expect,
+      ["a", "b"],
+      "duplicate id must be collapsed at load time",
+    );
+    // Recall must not be deflated by the duplicate: with the raw
+    // (undeduped) 3-entry expect this would score 2/3; deduped it is 2/2.
+    const scored = scorePrompt(golden.prompts[0].expect, ["a", "b"]);
+    assert.equal(scored.recall, 1);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// --- findUnknownExpectIds (MEDIUM fix) -----------------------------------
+
+test("findUnknownExpectIds: flags golden expect ids absent from the corpus, deduped across prompts", () => {
+  const memories: Memory[] = [fakeMemory("real_a"), fakeMemory("real_b")];
+  const prompts = [
+    { expect: ["real_a", "phantom_x"] },
+    { expect: ["real_b"] },
+    { expect: ["phantom_x", "phantom_y"] },
+    { expect: [] },
+  ];
+  const unknown = findUnknownExpectIds(prompts, memories);
+  assert.deepEqual(new Set(unknown), new Set(["phantom_x", "phantom_y"]));
+  assert.equal(unknown.length, 2, "phantom_x reported once despite appearing twice");
+});
+
+test("findUnknownExpectIds: empty when every expect id resolves against the corpus", () => {
+  const memories: Memory[] = [fakeMemory("real_a")];
+  const prompts = [{ expect: ["real_a"] }, { expect: [] }];
+  assert.deepEqual(findUnknownExpectIds(prompts, memories), []);
 });

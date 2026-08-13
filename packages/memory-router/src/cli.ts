@@ -80,6 +80,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let checkUrls = false;
   let testDir: string | undefined;
   let testMaxHits = 5;
+  let maxHitsFlag = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true;
@@ -119,6 +120,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       i++;
       testMaxHits = n;
+      maxHitsFlag = true;
     }
     else if (a === '--fix') fix = true;
     else if (a === '--json') json = true;
@@ -162,10 +164,38 @@ function parseArgs(argv: string[]): ParsedArgs {
   // --semantic only makes sense with --conflicts (it upgrades INFO→HIGH on
   // top of the regex pass) or with `test` (where it opts the confidence
   // gate into the dry-run). Warn loudly rather than silently ignoring it
-  // for the lint case; `test` always passes through to runTest.
-  if (semanticFlag && !conflictsFlag && positional[0] !== 'test') {
+  // for the lint case; `test` always passes through to runTest. `eval` gets
+  // its own, more specific warning below rather than falling into this
+  // generic message.
+  if (
+    semanticFlag &&
+    !conflictsFlag &&
+    positional[0] !== 'test' &&
+    positional[0] !== 'eval'
+  ) {
     process.stderr.write(
       'warning: --semantic only applies with --conflicts and is a no-op otherwise\n',
+    );
+  }
+
+  // `eval` always attempts the confidence gate itself (via promptToHits,
+  // same as the hook) whenever an index + provider are configured — it has
+  // no opt-in flag to accept, unlike `test`. Warn loudly rather than
+  // silently swallowing --semantic so the run doesn't look like it did
+  // something the flag never controls.
+  if (semanticFlag && positional[0] === 'eval') {
+    process.stderr.write(
+      'warning: --semantic is a no-op with eval; eval always attempts the confidence gate automatically when an index and OPENAI_API_KEY are available, mirroring the hook\n',
+    );
+  }
+
+  // `eval` pins its cap to the same default the hook uses (see
+  // src/eval/runner.ts promptToHits), deliberately, so its measurements
+  // mirror production. --max-hits has no effect there; warn rather than
+  // silently ignore it.
+  if (maxHitsFlag && positional[0] === 'eval') {
+    process.stderr.write(
+      'warning: --max-hits is a no-op with eval; eval pins the cap to the same default the hook uses, so its measurements mirror production\n',
     );
   }
 

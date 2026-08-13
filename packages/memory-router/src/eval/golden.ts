@@ -74,7 +74,14 @@ function loadGoldenFile(path: string): GoldenFile {
           `golden file ${path}: prompts[${i}].expect must be an array of memory-id strings (empty array = negative control)`,
         );
       }
-      return { prompt: e.prompt, expect: e.expect as string[] };
+      // Dedupe here, at load time, so every downstream consumer (scoring,
+      // reporting) sees the same expect list — a duplicated id in the
+      // authored golden.yml must not silently deflate recall
+      // (|expect ∩ got| / |expect|) by inflating the denominator.
+      return {
+        prompt: e.prompt,
+        expect: [...new Set(e.expect as string[])],
+      };
     },
   );
 

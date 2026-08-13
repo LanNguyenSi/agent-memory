@@ -17,6 +17,27 @@ const { loadGoldenFile } = require("./golden");
 const MAX_HITS = 5;
 
 /**
+ * Test seam for promptToHits: lets tests substitute the three router
+ * entry points and pin the exact call shape (see tests/eval-runner.test.ts)
+ * without touching the real router/embedding stack. Default is the real
+ * functions required above; production and cli.ts callers never pass this.
+ */
+interface PromptToHitsDeps {
+  resolve: (
+    ctx: RouterContext,
+    memories: Memory[],
+    opts?: ResolveOptions,
+  ) => GateHit[];
+  resolveConfidence: (
+    ctx: RouterContext,
+    memories: Memory[],
+    dir: string,
+    opts?: { maxHits?: number },
+  ) => Promise<GateHit[]>;
+  dedupeAndRank: (hits: GateHit[], maxHits: number) => GateHit[];
+}
+
+/**
  * Single source of truth for "which memories does this prompt select
  * today". Mirrors src/hooks/user-prompt-submit.ts EXACTLY: sync gates
  * (topic, tool) run first; the async confidence gate only runs when the
@@ -25,20 +46,36 @@ const MAX_HITS = 5;
  * (rather than duplicating the hook's inline branching per-prompt in the
  * runner loop) is deliberate: the planned retrieval blend (T004) swaps
  * this one function and the rest of the eval runner is untouched.
+ *
+ * The resolveConfidence call below is intentionally called with NO opts
+ * object (`resolveConfidence(ctx, memories, dir)`), exactly like the hook
+ * (src/hooks/user-prompt-submit.ts) — that leaves the router's own default
+ * maxHits (3, see src/router.ts) in effect instead of pinning it to this
+ * module's MAX_HITS=5. Passing `{ maxHits: MAX_HITS }` here would silently
+ * diverge from what the hook actually does and break the "mirrors the hook
+ * exactly" claim below. `resolve()` and `dedupeAndRank()` DO get MAX_HITS
+ * explicitly because that value (5) matches the hook's own behavior there
+ * (resolve()'s default is also 5, and the hook's dedupeAndRank call is
+ * hardcoded to 5).
  */
 async function promptToHits(
   ctx: RouterContext,
   memories: Memory[],
   dir: string,
+  deps: PromptToHitsDeps = { resolve, resolveConfidence, dedupeAndRank },
 ): Promise<GateHit[]> {
-  const syncHits: GateHit[] = resolve(ctx, memories, { maxHits: MAX_HITS });
+  const syncHits: GateHit[] = deps.resolve(ctx, memories, {
+    maxHits: MAX_HITS,
+  });
   if (syncHits.length > 0) return syncHits;
 
   try {
-    const semHits: GateHit[] = await resolveConfidence(ctx, memories, dir, {
-      maxHits: MAX_HITS,
-    });
-    return dedupeAndRank([...syncHits, ...semHits], MAX_HITS);
+    const semHits: GateHit[] = await deps.resolveConfidence(
+      ctx,
+      memories,
+      dir,
+    );
+    return deps.dedupeAndRank([...syncHits, ...semHits], MAX_HITS);
   } catch {
     // Same fail-open contract as the hook: a semantic-search failure never
     // costs the sync hits that already fired (here: none, since we only
@@ -165,8 +202,36 @@ export interface EvalReport {
   dir: string;
   corpusSize: number;
   semanticPathActive: boolean;
+  /**
+   * Ids referenced in the golden file's `expect:` arrays that don't match
+   * any memory id loaded from `dir`. A likely cause is a stale/renamed
+   * memory id in the golden set; scoring is UNCHANGED by this list (see
+   * scorePrompt/aggregateMetrics above) — it's a warning surface only, so
+   * a phantom id silently deflating recall doesn't also silently escape
+   * notice. Empty when every expect id resolves.
+   */
+  unknownExpectIds: string[];
   perPrompt: PromptMetric[];
   aggregate: AggregateMetrics;
+}
+
+/**
+ * Ids referenced in any golden prompt's `expect:` array that aren't among
+ * the loaded corpus's memory ids. Deduped (a phantom id repeated across
+ * several prompts is reported once). Pure and independent of scoring.
+ */
+function findUnknownExpectIds(
+  prompts: { expect: string[] }[],
+  memories: Memory[],
+): string[] {
+  const corpusIds = new Set(memories.map((m) => m.id));
+  const unknown = new Set<string>();
+  for (const entry of prompts) {
+    for (const id of entry.expect) {
+      if (!corpusIds.has(id)) unknown.add(id);
+    }
+  }
+  return [...unknown];
 }
 
 /**
@@ -185,9 +250,13 @@ async function runGoldenEval(
   const golden = loadGoldenFile(goldenPath);
   const memories = loadMemoriesFromDir(dir);
   const semanticPathActive = semanticPathAvailable(dir);
+  const unknownExpectIds = findUnknownExpectIds(golden.prompts, memories);
 
   const perPrompt: PromptMetric[] = [];
   for (const entry of golden.prompts) {
+    // cwd is deliberately omitted: no gate consulted by promptToHits (topic,
+    // tool, confidence) reads ctx.cwd today, so there is nothing here to
+    // populate it from — a golden.yml prompt has no associated cwd.
     const ctx: RouterContext = { prompt: entry.prompt };
     const hits = await promptToHits(ctx, memories, dir);
     const got = hits.map((h) => h.memory.id);
@@ -205,6 +274,7 @@ async function runGoldenEval(
     dir,
     corpusSize: memories.length,
     semanticPathActive,
+    unknownExpectIds,
     perPrompt,
     aggregate: aggregateMetrics(perPrompt),
   };
@@ -215,5 +285,6 @@ module.exports = {
   semanticPathAvailable,
   scorePrompt,
   aggregateMetrics,
+  findUnknownExpectIds,
   runGoldenEval,
 };

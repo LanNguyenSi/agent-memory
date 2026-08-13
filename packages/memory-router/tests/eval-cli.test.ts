@@ -40,6 +40,13 @@ test("eval: exits 0 on an error-free run and prints the aggregate summary", () =
   assert.match(stdout, /semantic path: inactive/);
   assert.match(stdout, /precision=0\.750 recall=0\.625 mrr=0\.750\s+\(n=4\)/);
   assert.match(stdout, /negative controls: 1\/2 passed/);
+  // Fixture golden.yml deliberately labels one prompt with a phantom id
+  // (feedback_never_fires_phantom, negative-control for recall<1) that
+  // never resolves against the fixture corpus — it must surface here.
+  assert.match(
+    stdout,
+    /WARNING: golden file references 1 expect id\(s\) not found in the corpus.*feedback_never_fires_phantom/,
+  );
 });
 
 test("eval --json emits valid, parseable JSON matching the documented schema", () => {
@@ -56,6 +63,7 @@ test("eval --json emits valid, parseable JSON matching the documented schema", (
     dir: string;
     corpusSize: number;
     semanticPathActive: boolean;
+    unknownExpectIds: string[];
     perPrompt: Array<{ prompt: string; expect: string[]; got: string[] }>;
     aggregate: {
       precision: number;
@@ -72,6 +80,7 @@ test("eval --json emits valid, parseable JSON matching the documented schema", (
   };
   assert.equal(parsed.corpusSize, 4);
   assert.equal(parsed.semanticPathActive, false);
+  assert.deepEqual(parsed.unknownExpectIds, ["feedback_never_fires_phantom"]);
   assert.equal(parsed.perPrompt.length, 6);
   assert.equal(parsed.aggregate.precision, 0.75);
   assert.equal(parsed.aggregate.recall, 0.625);
@@ -128,6 +137,31 @@ test("eval: nonexistent corpus dir exits 1 with a clear message", () => {
   ]);
   assert.equal(status, 1);
   assert.match(stderr, /error: cannot read/);
+});
+
+test("eval --max-hits: warns loudly that it is a no-op (eval pins the cap to the hook default)", () => {
+  const { status, stderr } = run([
+    "eval",
+    GOLDEN_PATH,
+    "--dir",
+    CORPUS_DIR,
+    "--max-hits",
+    "3",
+  ]);
+  assert.equal(status, 0);
+  assert.match(stderr, /warning: --max-hits is a no-op with eval/);
+});
+
+test("eval --semantic: warns loudly that it is a no-op (eval always attempts the confidence gate automatically)", () => {
+  const { status, stderr } = run([
+    "eval",
+    GOLDEN_PATH,
+    "--dir",
+    CORPUS_DIR,
+    "--semantic",
+  ]);
+  assert.equal(status, 0);
+  assert.match(stderr, /warning: --semantic is a no-op with eval/);
 });
 
 test("--help lists the eval verb", () => {

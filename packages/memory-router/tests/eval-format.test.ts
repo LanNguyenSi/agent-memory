@@ -22,6 +22,7 @@ interface EvalReportLike {
   dir: string;
   corpusSize: number;
   semanticPathActive: boolean;
+  unknownExpectIds: string[];
   perPrompt: {
     prompt: string;
     expect: string[];
@@ -51,6 +52,7 @@ function buildReport(): EvalReportLike {
     dir: "/tmp/corpus",
     corpusSize: 2,
     semanticPathActive: false,
+    unknownExpectIds: [],
     perPrompt: [
       {
         prompt: "positive prompt",
@@ -95,6 +97,29 @@ test("formatEvalReportText: header lines report golden path, corpus size, semant
   assert.match(text, /golden: golden\.yml/);
   assert.match(text, /corpus: \/tmp\/corpus \(2 memories\)/);
   assert.match(text, /semantic path: inactive/);
+});
+
+test("formatEvalReportText: semantic path ACTIVE renders the blended-measurement message", () => {
+  const report = buildReport();
+  report.semanticPathActive = true;
+  const text = formatEvalReportText(report);
+  assert.match(
+    text,
+    /semantic path: ACTIVE \(index \+ provider configured — measuring sync\+confidence blend\)/,
+  );
+});
+
+test("formatEvalReportText: unknown expect ids render a WARNING line naming them; no ids means no warning", () => {
+  const clean = formatEvalReportText(buildReport());
+  assert.doesNotMatch(clean, /WARNING/);
+
+  const withUnknown = buildReport();
+  withUnknown.unknownExpectIds = ["feedback_never_fires_phantom", "typo_id"];
+  const text = formatEvalReportText(withUnknown);
+  assert.match(
+    text,
+    /WARNING: golden file references 2 expect id\(s\) not found in the corpus.*feedback_never_fires_phantom, typo_id/,
+  );
 });
 
 test("formatEvalReportText: positive prompt prints precision/recall/rr, not a pass\\/fail line", () => {
