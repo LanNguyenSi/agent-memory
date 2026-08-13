@@ -290,8 +290,8 @@ Overrides:
 
 - `MEMORY_ROUTER_EMBED_MODEL`: model name override. Applies to OpenAI always, and to Ollama when the provider was chosen *explicitly* (`MEMORY_ROUTER_EMBED_PROVIDER=ollama`, a deliberate choice). It is deliberately NOT consulted on the *auto-detected* Ollama path: a `MEMORY_ROUTER_EMBED_MODEL` left over in the environment was almost certainly set for OpenAI, and picking it up there would silently point Ollama at a model name it doesn't have.
 - `MEMORY_ROUTER_OLLAMA_EMBED_MODEL`: model name override for the auto-detected Ollama path specifically; not consulted anywhere else.
-- `OPENAI_BASE_URL` — OpenAI-compatible proxy base URL (OpenAI path only).
-- `MEMORY_ROUTER_OLLAMA_BASE_URL` — Ollama base URL, default `http://localhost:11434`. Ollama is queried through its OpenAI-compatible `/v1/embeddings` endpoint, unauthenticated.
+- `OPENAI_BASE_URL`: OpenAI-compatible proxy base URL (OpenAI path only).
+- `MEMORY_ROUTER_OLLAMA_BASE_URL`: Ollama base URL, default `http://localhost:11434`. Ollama is queried through its OpenAI-compatible `/v1/embeddings` endpoint, unauthenticated.
 
 Model-variable precedence:
 
