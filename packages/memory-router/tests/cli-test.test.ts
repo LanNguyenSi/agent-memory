@@ -14,15 +14,26 @@ const { spawnSync } = require('node:child_process');
 
 const BIN = path.join(__dirname, '..', 'dist', 'cli.js');
 const FIXTURES = path.join(__dirname, 'fixtures', 'memories');
+const VOCAB_CORPUS = path.join(__dirname, 'fixtures', 'vocab');
 
+// Hermetic against an ambient $MEMORY_ROUTER_DIR (mm-v1-T002 review round 2,
+// fix 3): this suite's `--dir`-scoped assertions must pass identically
+// whether or not the host running these tests happens to have
+// $MEMORY_ROUTER_DIR set in its own environment. Every call strips the
+// inherited value before spawning; a test that specifically wants to
+// exercise the env-fallback path (see the "falls back to $MEMORY_ROUTER_DIR"
+// test below) re-adds it explicitly via the `env` param, which always wins
+// (applied after the stripped base).
 function run(
   args: string[],
   env: NodeJS.ProcessEnv = {},
 ): { status: number | null; stdout: string; stderr: string } {
+  const baseEnv = { ...process.env };
+  delete baseEnv.MEMORY_ROUTER_DIR;
   const res = spawnSync(process.execPath, [BIN, ...args], {
     encoding: 'utf8',
     timeout: 8_000,
-    env: { ...process.env, ...env },
+    env: { ...baseEnv, ...env },
   });
   return {
     status: res.status,
@@ -131,4 +142,46 @@ test('--max-hits=n form accepts a positive integer', () => {
     '3',
   ]);
   assert.equal(status, 0);
+});
+
+// --- HIGH fix 1: dir-threading, not the $MEMORY_ROUTER_DIR env global -----
+
+test('test verb: custom topics.yml at --dir applies even without $MEMORY_ROUTER_DIR set (ctx.memoryDir threading, not the env global)', () => {
+  // VOCAB_CORPUS's topics.yml declares `incident_response`, which is not
+  // part of the built-in default vocabulary — this prompt only matches if
+  // --dir's own topics.yml is actually consulted by the gate (via
+  // ctx.memoryDir) rather than whatever $MEMORY_ROUTER_DIR happens to
+  // resolve to (here: unset, thanks to the hermetic run() helper above).
+  const { status, stdout } = run([
+    'test',
+    'we had an outage last night, on-call got paged',
+    '--dir',
+    VOCAB_CORPUS,
+  ]);
+  assert.equal(status, 0, stdout);
+  assert.match(stdout, /1 match:|matches:/);
+  assert.match(stdout, /feedback_incident/);
+  assert.match(stdout, /topic · /);
+});
+
+// --- MEDIUM fix 3: hermetic against ambient $MEMORY_ROUTER_DIR ------------
+
+test('hermetic: an ambient $MEMORY_ROUTER_DIR in the calling process does not leak into the spawned CLI and override --dir', () => {
+  const original = process.env.MEMORY_ROUTER_DIR;
+  // A foreign corpus with no topics.yml at all — if this ever leaked into
+  // the child process and won over --dir, "no match." would print instead.
+  process.env.MEMORY_ROUTER_DIR = FIXTURES;
+  try {
+    const { status, stdout } = run([
+      'test',
+      'we had an outage last night, on-call got paged',
+      '--dir',
+      VOCAB_CORPUS,
+    ]);
+    assert.equal(status, 0, stdout);
+    assert.match(stdout, /feedback_incident/);
+  } finally {
+    if (original === undefined) delete process.env.MEMORY_ROUTER_DIR;
+    else process.env.MEMORY_ROUTER_DIR = original;
+  }
 });

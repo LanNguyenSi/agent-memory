@@ -1,0 +1,8 @@
+# Fixture golden set for the `memory-router eval` CLI dir-threading test
+# (mm-v1-T002 review round 2, fix 1): this corpus's topics.yml declares
+# `incident_response`, which is not part of the built-in default vocabulary,
+# so this prompt only matches when --dir's own topics.yml is actually
+# consulted rather than a stray $MEMORY_ROUTER_DIR / the built-in default.
+prompts:
+  - prompt: "we had an outage last night, on-call got paged"
+    expect: ["feedback_incident"]

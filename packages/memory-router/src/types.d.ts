@@ -7,12 +7,14 @@
 declare global {
   type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
   type Severity = 'critical' | 'normal' | 'low';
-  type Topic =
-    | 'deployment'
-    | 'workflow'
-    | 'destructive_ops'
-    | 'security'
-    | 'testing';
+  /**
+   * No longer a closed union. The valid set of topics is corpus-controlled
+   * at runtime: the built-in 5-topic default in `topic-patterns.ts`, unless
+   * `<memoryDir>/topics.yml` overrides it (see `src/vocab/loader.ts`). A
+   * memory's `topics:` values are validated against the loaded vocabulary
+   * at match/lint time, not by the type system.
+   */
+  type Topic = string;
   type GateName = 'topic' | 'tool' | 'confidence';
 
   interface MemoryTriggers {
@@ -73,6 +75,16 @@ declare global {
     prompt?: string;
     cwd?: string;
     tool?: ToolCall;
+    /**
+     * The memory dir this ctx's prompt/tool call is being resolved against.
+     * The Topic Gate (src/gates/topic.ts) prefers this over the
+     * `MEMORY_ROUTER_DIR` env var when loading `<memoryDir>/topics.yml` —
+     * the env var stays as a fallback for callers that still can't thread a
+     * dir (only the hooks/** binaries today, which set the env var before
+     * invoking the router and are out of scope here). Optional and unset
+     * by every caller that doesn't (yet) know its own dir.
+     */
+    memoryDir?: string;
   }
 
   interface GateHit {

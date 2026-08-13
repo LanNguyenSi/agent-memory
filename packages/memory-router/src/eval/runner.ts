@@ -12,6 +12,7 @@ const { resolve, resolveConfidence, dedupeAndRank } = require("../router");
 const { indexPath } = require("../embed/indexer");
 const { resolveProviderConfig } = require("../embed/provider");
 const { loadGoldenFile } = require("./golden");
+const { loadVocabularyResult } = require("../vocab/loader");
 
 // Matches the UserPromptSubmit hook's hardcoded cap (src/hooks/user-prompt-submit.ts).
 const MAX_HITS = 5;
@@ -57,6 +58,15 @@ interface PromptToHitsDeps {
  * explicitly because that value (5) matches the hook's own behavior there
  * (resolve()'s default is also 5, and the hook's dedupeAndRank call is
  * hardcoded to 5).
+ *
+ * `ctx.memoryDir` is expected to already be populated by the caller (see
+ * `runGoldenEval` below) — this function itself does not set it, only
+ * passes `ctx` through to `deps.resolve`/`deps.resolveConfidence`. Mirrors
+ * the hook: the hook's `$MEMORY_ROUTER_DIR` env var always points at THIS
+ * corpus (env var *is* the dir, one process per corpus), so the Topic
+ * Gate's vocabulary is scoped to it exactly the way `ctx.memoryDir` scopes
+ * it here, without depending on that env var being set in the eval
+ * process's own environment.
  */
 async function promptToHits(
   ctx: RouterContext,
@@ -94,6 +104,27 @@ async function promptToHits(
  */
 function semanticPathAvailable(dir: string): boolean {
   return existsSync(indexPath(dir)) && resolveProviderConfig() !== null;
+}
+
+/**
+ * Human-readable statement of which topic vocabulary this eval run's Topic
+ * Gate hits were scored against: the corpus's own `<dir>/topics.yml`, or
+ * the built-in default (either because no `topics.yml` exists, or because
+ * one exists but failed to load — in which case the rejection reason is
+ * folded in too, same as lint/topics.ts's `vocabularyError` surface). A
+ * mismatched-vocabulary run (e.g. `--dir` pointed at the wrong corpus, or a
+ * broken `topics.yml`) would otherwise silently look identical to a normal
+ * run in the report; this makes it visible instead. Additive to the report
+ * schema — see EvalReport below and README.md "Golden-set eval".
+ */
+function vocabularySourceLabel(dir: string): string {
+  const { vocabulary, error } = loadVocabularyResult(dir);
+  if (vocabulary.source === "custom") {
+    return `custom (${dir}/topics.yml)`;
+  }
+  return error
+    ? `built-in default (topics.yml at ${dir} is invalid: ${error})`
+    : "built-in default";
 }
 
 export interface PromptMetric {
@@ -203,6 +234,12 @@ export interface EvalReport {
   corpusSize: number;
   semanticPathActive: boolean;
   /**
+   * Which topic vocabulary the Topic Gate used for this run: `"built-in
+   * default"` or `"custom (<dir>/topics.yml)"` (see `vocabularySourceLabel`
+   * above). Additive field, see README.md "Golden-set eval".
+   */
+  vocabularySource: string;
+  /**
    * Ids referenced in the golden file's `expect:` arrays that don't match
    * any memory id loaded from `dir`. A likely cause is a stale/renamed
    * memory id in the golden set; scoring is UNCHANGED by this list (see
@@ -250,6 +287,7 @@ async function runGoldenEval(
   const golden = loadGoldenFile(goldenPath);
   const memories = loadMemoriesFromDir(dir);
   const semanticPathActive = semanticPathAvailable(dir);
+  const vocabularySource = vocabularySourceLabel(dir);
   const unknownExpectIds = findUnknownExpectIds(golden.prompts, memories);
 
   const perPrompt: PromptMetric[] = [];
@@ -257,7 +295,12 @@ async function runGoldenEval(
     // cwd is deliberately omitted: no gate consulted by promptToHits (topic,
     // tool, confidence) reads ctx.cwd today, so there is nothing here to
     // populate it from — a golden.yml prompt has no associated cwd.
-    const ctx: RouterContext = { prompt: entry.prompt };
+    // memoryDir IS populated (mirrors the hook, which points at THIS
+    // corpus): the Topic Gate needs it to load the right topics.yml, and
+    // leaving it unset would fall through to whatever $MEMORY_ROUTER_DIR
+    // happens to be in the eval process's own environment instead of the
+    // `dir` this eval run was actually pointed at (see gates/topic.ts).
+    const ctx: RouterContext = { prompt: entry.prompt, memoryDir: dir };
     const hits = await promptToHits(ctx, memories, dir);
     const got = hits.map((h) => h.memory.id);
     const scored = scorePrompt(entry.expect, got);
@@ -274,6 +317,7 @@ async function runGoldenEval(
     dir,
     corpusSize: memories.length,
     semanticPathActive,
+    vocabularySource,
     unknownExpectIds,
     perPrompt,
     aggregate: aggregateMetrics(perPrompt),
@@ -283,6 +327,7 @@ async function runGoldenEval(
 module.exports = {
   promptToHits,
   semanticPathAvailable,
+  vocabularySourceLabel,
   scorePrompt,
   aggregateMetrics,
   findUnknownExpectIds,

@@ -72,6 +72,7 @@ const {
   scorePrompt,
   aggregateMetrics,
   semanticPathAvailable,
+  vocabularySourceLabel,
   promptToHits,
   findUnknownExpectIds,
 } = require("../src/eval/runner");
@@ -82,6 +83,31 @@ const GOLDEN_PATH = path.join(__dirname, "fixtures", "eval", "golden.yml");
 
 test("semanticPathAvailable: false for the fixture corpus (no index built)", () => {
   assert.equal(semanticPathAvailable(CORPUS_DIR), false);
+});
+
+test("vocabularySourceLabel: built-in default for the fixture corpus (no topics.yml)", () => {
+  assert.equal(vocabularySourceLabel(CORPUS_DIR), "built-in default");
+});
+
+test("vocabularySourceLabel: custom (<dir>/topics.yml) when the corpus overrides the vocabulary", () => {
+  const vocabCorpus = path.join(__dirname, "fixtures", "vocab");
+  assert.equal(
+    vocabularySourceLabel(vocabCorpus),
+    `custom (${vocabCorpus}/topics.yml)`,
+  );
+});
+
+test("vocabularySourceLabel: built-in default, with the rejection reason folded in, when topics.yml is invalid", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "memory-router-eval-vocab-"));
+  fs.writeFileSync(path.join(tmp, "topics.yml"), "- name: [unterminated\n");
+  try {
+    const label = vocabularySourceLabel(tmp);
+    assert.match(label, /^built-in default \(topics\.yml at .* is invalid: /);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("loadGoldenFile: parses the fixture golden set", () => {
@@ -279,6 +305,7 @@ test("runGoldenEval: full run against the fixture corpus + golden set matches th
     false,
     "no index built for the fixture corpus",
   );
+  assert.equal(report.vocabularySource, "built-in default");
   assert.equal(report.perPrompt.length, 6);
   // The fixture golden.yml deliberately labels "rotate the leaked token"
   // with a phantom id (feedback_never_fires_phantom) as a negative-control

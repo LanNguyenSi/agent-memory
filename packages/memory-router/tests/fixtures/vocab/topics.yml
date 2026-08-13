@@ -1,0 +1,33 @@
+# Example memory-router topic vocabulary.
+#
+# Drop a file like this at the root of your memory dir as `topics.yml` to
+# override the built-in 5-topic default (deployment, destructive_ops,
+# workflow, security, testing) corpus-wide. Both the Topic Gate and
+# `memory-router lint --unknown-topics` load and validate against whatever
+# is here instead.
+#
+# Shape: a top-level list of entries. `name` is required and must be
+# unique. `description` is optional (documentation only, not matched
+# against). `patterns` is an optional list of regex strings (case
+# insensitive); a topic declared with no patterns, or whose pattern fails
+# to compile, falls back to a keyword match on its own `name` rather than
+# being dropped or crashing the loader.
+- name: deployment
+  description: Deploys, releases, migrations, rollbacks.
+  patterns:
+    - '\bdeploy(?:ing|ed|ment)?\b'
+    - '\brelease\b'
+    - '\brollback\b'
+- name: incident_response
+  description: Production incidents, outages, on-call escalation.
+  patterns:
+    - '\bincident\b'
+    - '\boutage\b'
+    - '\bon-call\b'
+    - '\bpaged\b'
+- name: data_privacy
+  description: PII handling, GDPR, data-retention rules.
+  patterns:
+    - '\bPII\b'
+    - '\bGDPR\b'
+    - '\bdata\s+retention\b'

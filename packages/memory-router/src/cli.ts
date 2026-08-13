@@ -547,7 +547,12 @@ async function runTest(
   }
 
   const memories = loadMemoriesFromDir(dir);
-  const ctx = { prompt, cwd: process.cwd() };
+  // memoryDir threaded explicitly (not left to the MEMORY_ROUTER_DIR env
+  // fallback in gates/topic.ts) so `test --dir <path>` always matches
+  // against THAT dir's topics.yml, even when $MEMORY_ROUTER_DIR is unset or
+  // points somewhere else — see src/gates/topic.ts and README "Topic
+  // vocabulary".
+  const ctx = { prompt, cwd: process.cwd(), memoryDir: dir };
 
   const syncHits: GateHit[] = resolve(ctx, memories, { maxHits });
   let allHits: GateHit[] = syncHits;

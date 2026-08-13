@@ -49,6 +49,40 @@ test('coverage suite: fixture is non-empty', () => {
   assert.ok(fixture.length > 0, 'prompts fixture must contain ≥1 labelled prompt');
 });
 
+// Hermetic against an ambient $MEMORY_ROUTER_DIR (mm-v1-T002 review round 2,
+// fix 3, enabled by fix 1's ctx.memoryDir threading below): the labelled
+// assertions in this suite must not depend on whatever $MEMORY_ROUTER_DIR
+// happens to be set to in the host environment running `npm test`.
+test('coverage suite: hermetic against ambient $MEMORY_ROUTER_DIR (ctx.memoryDir wins)', () => {
+  const sample = fixture.find((p) => p.expectedMatches.length > 0);
+  if (!sample) {
+    throw new Error('fixture must contain at least one positive-match prompt');
+  }
+  const original = process.env.MEMORY_ROUTER_DIR;
+  // tests/fixtures/vocab/topics.yml declares deployment / incident_response
+  // / data_privacy only — no `workflow`, `destructive_ops`, `security`, or
+  // `testing`. If ambient env ever won over ctx.memoryDir here, a prompt
+  // whose expected match depends on one of those built-in-default topics
+  // would stop firing.
+  process.env.MEMORY_ROUTER_DIR = path.join(__dirname, '..', 'fixtures', 'vocab');
+  try {
+    const ctx = { prompt: sample.prompt, memoryDir: CORPUS_DIR };
+    const hits = resolve(ctx, memories, { maxHits: 1000 });
+    const hitIds = new Set<string>(
+      hits.map((h: { memory: { id: string } }) => h.memory.id),
+    );
+    for (const id of sample.expectedMatches) {
+      assert.ok(
+        hitIds.has(id),
+        `ambient $MEMORY_ROUTER_DIR must not suppress expected match ${id}`,
+      );
+    }
+  } finally {
+    if (original === undefined) delete process.env.MEMORY_ROUTER_DIR;
+    else process.env.MEMORY_ROUTER_DIR = original;
+  }
+});
+
 interface Stats {
   prompts: number;
   promptsWithAnyHit: number;
@@ -71,7 +105,12 @@ const stats: Stats = {
 
 for (const entry of fixture) {
   test(`prompt: ${entry.prompt}`, () => {
-    const ctx = { prompt: entry.prompt };
+    // memoryDir threaded explicitly (mm-v1-T002 review round 2, fix 1/3):
+    // the Topic Gate's vocabulary must come from THIS corpus (CORPUS_DIR —
+    // the fixture corpus by default, or MEMORY_ROUTER_COVERAGE_CORPUS_DIR
+    // in dogfood mode), not whatever $MEMORY_ROUTER_DIR (a DIFFERENT env
+    // var) happens to be set to ambient in the process running `npm test`.
+    const ctx = { prompt: entry.prompt, memoryDir: CORPUS_DIR };
     const hits = resolve(ctx, memories, { maxHits: 1000 });
     const hitIds = new Set<string>(
       hits.map((h: { memory: { id: string } }) => h.memory.id),
