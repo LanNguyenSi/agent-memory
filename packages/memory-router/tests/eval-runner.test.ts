@@ -3,10 +3,16 @@
 // Fixture: tests/fixtures/eval/corpus/ (4 memories, one per topic:
 // destructive_ops, workflow, deployment, security) + tests/fixtures/eval/golden.yml
 // (6 prompts). No embedding index is built for the fixture corpus, so the
-// confidence gate is provably unreachable here (semanticSearch bails out on
+// semantic component of resolveBlended (src/router.ts, mm-v1-T004) is
+// provably unreachable here (semanticSearch bails out on
 // existsSync(indexPath) before ever calling the OpenAI API — see
-// src/embed/indexer.ts) — the eval measures the sync (topic/tool) path only,
-// deterministically, with no live network calls.
+// src/embed/indexer.ts) — the eval measures the topic-only degradation of
+// the blend path, deterministically, with no live network calls. Which
+// memory ids fire is unaffected by the blend-score rewrite (only the raw
+// score value changed, from a flat 1.0 to a blended topicBoost +
+// recency/type score); the ids asserted below are the same before and
+// after mm-v1-T004 by construction — see tests/blend.test.ts for the
+// "identical degraded ids" pin proven directly against resolveBlended.
 //
 // Every expected P/R/RR value below is hand-computed against the actual
 // TOPIC_PATTERNS regexes (verified once against src/topic-patterns.ts before
@@ -429,15 +435,20 @@ test("runGoldenEval: missing golden file throws (caller maps this to exit 1)", a
   );
 });
 
-// --- promptToHits dependency-pinning tests -------------------------------
+// --- promptToHits dependency-pinning tests (mm-v1-T004 rewrite) ----------
 //
 // These call promptToHits with the `deps` test seam (its 4th, test-only
 // parameter — see src/eval/runner.ts) so they exercise the real
 // promptToHits control flow without touching the real router or the
-// embedding stack. They exist specifically to pin the HIGH hook-fidelity
-// fix: resolveConfidence must be called with exactly the hook's argument
-// list (ctx, memories, dir) and no opts object, and only when the sync
-// gates were silent.
+// embedding stack. mm-v1-T004 collapsed the old two-call
+// (resolve-then-maybe-resolveConfidence) shape into a single exchange
+// point, resolveBlended; these tests pin the NEW shape with the same
+// rigor the old ones pinned the old shape: exact argument list, fail-open
+// on an unexpected failure, and no double-call into the resolver (the
+// blend-era analogue of "no double embedding" — resolveBlended itself is
+// responsible for calling the embedder at most once per prompt, proven at
+// the router level in tests/blend.test.ts; here we prove promptToHits
+// calls resolveBlended itself exactly once per prompt, not twice).
 
 function fakeMemory(id: string): Memory {
   return {
@@ -448,69 +459,68 @@ function fakeMemory(id: string): Memory {
   };
 }
 
-test("promptToHits: does not call resolveConfidence when sync gates already return hits", async () => {
-  const ctx: RouterContext = { prompt: "irrelevant" };
-  const memories: Memory[] = [];
-  const dir = "/fake/dir";
-  const syncHit: GateHit = {
-    memory: fakeMemory("m1"),
-    gate: "topic",
-    score: 1,
-    reason: "topic match",
-  };
-  let resolveConfidenceCalled = false;
-  const hits = await promptToHits(ctx, memories, dir, {
-    resolve: (): GateHit[] => [syncHit],
-    resolveConfidence: async (): Promise<GateHit[]> => {
-      resolveConfidenceCalled = true;
-      return [];
-    },
-    dedupeAndRank: (h: GateHit[]): GateHit[] => h,
-  });
-  assert.equal(
-    resolveConfidenceCalled,
-    false,
-    "the confidence gate must stay silent once sync gates already produced hits",
-  );
-  assert.deepEqual(hits, [syncHit]);
-});
-
-test("promptToHits: calls resolveConfidence with exactly the hook's argument list (ctx, memories, dir) — no opts object", async () => {
+test("promptToHits: calls resolveBlended with exactly the hook's argument list (ctx, memories, dir) — no opts object", async () => {
   const ctx: RouterContext = { prompt: "an ambiguous prompt" };
   const memories: Memory[] = [fakeMemory("m1")];
   const dir = "/fake/dir";
   let capturedArgs: unknown[] | undefined;
   await promptToHits(ctx, memories, dir, {
-    resolve: (): GateHit[] => [],
-    resolveConfidence: async (...args: unknown[]): Promise<GateHit[]> => {
+    resolveBlended: async (...args: unknown[]): Promise<GateHit[]> => {
       capturedArgs = args;
       return [];
     },
-    dedupeAndRank: (h: GateHit[]): GateHit[] => h,
   });
-  // Mutating the resolveConfidence call back to
-  // `resolveConfidence(ctx, memories, dir, { maxHits: MAX_HITS })` must
-  // turn this assertion red: length would become 4, not 3.
+  // Mutating the call back to `resolveBlended(ctx, memories, dir, { maxHits: 5 })`
+  // must turn this assertion red: length would become 4, not 3.
   assert.equal(
     capturedArgs?.length,
     3,
-    "resolveConfidence must receive exactly 3 positional args (ctx, memories, dir), no opts object, so the router's own default maxHits applies exactly as the hook does",
+    "resolveBlended must receive exactly 3 positional args (ctx, memories, dir), no opts object, so the router's own default maxHits applies exactly as the hook does",
   );
   assert.deepEqual(capturedArgs, [ctx, memories, dir]);
 });
 
-test("promptToHits: falls back to the (empty) sync hits, does not propagate, when resolveConfidence throws", async () => {
+test("promptToHits: calls resolveBlended exactly once per prompt (single exchange point, no forked/duplicate resolution)", async () => {
+  const ctx: RouterContext = { prompt: "an ambiguous prompt" };
+  const memories: Memory[] = [fakeMemory("m1")];
+  const dir = "/fake/dir";
+  let calls = 0;
+  await promptToHits(ctx, memories, dir, {
+    resolveBlended: async (): Promise<GateHit[]> => {
+      calls++;
+      return [];
+    },
+  });
+  assert.equal(calls, 1);
+});
+
+test("promptToHits: returns exactly what resolveBlended resolves to, unchanged (no re-ranking/re-catching on top)", async () => {
+  const ctx: RouterContext = { prompt: "an ambiguous prompt" };
+  const memories: Memory[] = [fakeMemory("m1")];
+  const dir = "/fake/dir";
+  const resolved: GateHit[] = [
+    { memory: fakeMemory("m1"), gate: "topic", score: 0.18, reason: "topic match: workflow" },
+  ];
+  const hits = await promptToHits(ctx, memories, dir, {
+    resolveBlended: async (): Promise<GateHit[]> => resolved,
+  });
+  assert.deepEqual(hits, resolved);
+});
+
+test("promptToHits: degrades to [] rather than propagating, when resolveBlended itself throws unexpectedly", async () => {
   const ctx: RouterContext = { prompt: "an ambiguous prompt" };
   const memories: Memory[] = [fakeMemory("m1")];
   const dir = "/fake/dir";
   const hits = await promptToHits(ctx, memories, dir, {
-    resolve: (): GateHit[] => [],
-    resolveConfidence: async (): Promise<GateHit[]> => {
-      throw new Error("simulated semantic search failure");
+    resolveBlended: async (): Promise<GateHit[]> => {
+      throw new Error("simulated unexpected resolver failure");
     },
-    dedupeAndRank: (h: GateHit[]): GateHit[] => h,
   });
-  assert.deepEqual(hits, []);
+  assert.deepEqual(
+    hits,
+    [],
+    "mirrors the hook's own outer try/catch around resolveBlended: an unexpected failure must never abort the run",
+  );
 });
 
 // --- loadGoldenFile expect-dedupe (MEDIUM fix) ---------------------------

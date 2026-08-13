@@ -18,7 +18,7 @@ import { z } from 'zod';
 // Runtime sources (loader, router, indexer) use CJS `module.exports`;
 // `require()` keeps call sites identical to the hooks at src/hooks/*.
 const { loadMemoriesFromDir } = require('../memory/loader');
-const { resolve, resolveConfidence, dedupeAndRank } = require('../router');
+const { resolveBlended } = require('../router');
 const { semanticSearch } = require('../embed/indexer');
 
 const SERVER_NAME = 'memory-router';
@@ -96,7 +96,7 @@ server.registerTool(
   'memory_resolve',
   {
     description:
-      'Run the full router (topic gate + tool gate + confidence gate) and return the memories that would have been auto-injected for this prompt/context. Same hit shape as the UserPromptSubmit hook. Confidence gate is only invoked when the deterministic gates return no hits, matching the hook behavior.',
+      'Run the same blended resolver the UserPromptSubmit hook uses (semantic score as the dominant signal, Topic Gate as a boost, recency/type as modifiers, plus the Tool Gate when `tool` is passed) and return the memories that would have been auto-injected for this prompt/context. Same hit shape as the hook. The semantic component runs whenever an index + provider are available for this corpus (no longer gated behind the deterministic gates staying silent).',
     inputSchema: {
       prompt: z.string().describe('The user prompt to resolve memories against'),
       cwd: z.string().optional().describe('Working directory, for gates that need it'),
@@ -117,25 +117,24 @@ server.registerTool(
     const ctx: RouterContext = {
       prompt,
       cwd,
+      memoryDir,
       tool: tool
         ? { name: tool.name, args: (tool.args ?? {}) as Record<string, unknown> }
         : undefined,
     };
 
-    const syncHits: GateHit[] = resolve(ctx, memories);
-    let all: GateHit[] = syncHits;
-    if (syncHits.length === 0) {
-      try {
-        // Matches the hook: resolveConfidence itself no-ops on empty prompt.
-        const semHits: GateHit[] = await resolveConfidence(ctx, memories, memoryDir);
-        all = dedupeAndRank([...syncHits, ...semHits], 5);
-      } catch (err: unknown) {
-        // Never fail the call on a semantic-search error; fall back to sync hits.
-        // Log so operators can see index/API failures.
-        process.stderr.write(
-          `memory-router MCP: semantic search failed, falling back: ${String(err)}\n`,
-        );
-      }
+    // Same blend path the hook uses (src/router.ts's resolveBlended) — no
+    // forked ranking logic here. resolveBlended already degrades
+    // internally on a semantic-search failure; this try/catch is the same
+    // defensive outer layer the hook has, so an unexpected failure never
+    // fails the whole MCP call.
+    let all: GateHit[] = [];
+    try {
+      all = await resolveBlended(ctx, memories, memoryDir);
+    } catch (err: unknown) {
+      process.stderr.write(
+        `memory-router MCP: memory resolution failed, falling back to no hits: ${String(err)}\n`,
+      );
     }
 
     const hits = all.map((h) => ({

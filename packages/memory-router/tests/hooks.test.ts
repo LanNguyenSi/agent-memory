@@ -35,6 +35,15 @@ test('user-prompt-submit emits hookSpecificOutput.additionalContext for a topic 
     parsed.hookSpecificOutput.additionalContext,
     /retarget its base to master/,
   );
+  // mm-v1-T004: the hook now resolves through resolveBlended, so a topic
+  // hit's rendered score is a blended value, not the old flat "1.00" —
+  // that flat score is exactly the "identical top-5" symptom the blend
+  // resolver replaces (see src/router.ts, tests/blend.test.ts).
+  assert.doesNotMatch(
+    parsed.hookSpecificOutput.additionalContext,
+    /topic · 1\.00/,
+    'topic hits must no longer render a flat 1.00 score',
+  );
 });
 
 test('user-prompt-submit emits no stdout when no hits', () => {

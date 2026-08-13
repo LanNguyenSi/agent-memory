@@ -200,6 +200,35 @@ test('memory_resolve hits the topic gate for a "force push" prompt', async () =>
   );
 });
 
+// mm-v1-T004: memory_resolve now runs through the same resolveBlended path
+// the UserPromptSubmit hook uses (src/router.ts) instead of forking its own
+// resolve-then-maybe-resolveConfidence logic. Proof: the topic hit's score
+// is a blended value, not the old gates/topic.ts flat 1.0 — that flat score
+// is exactly the "identical top-5" symptom this resolver removes.
+test('memory_resolve returns a blended (non-flat-1.0) score for a topic-only match, proving it shares the hook\'s resolveBlended path', async () => {
+  const session = await runRpcSession([
+    initialize,
+    initialized,
+    {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'memory_resolve',
+        arguments: { prompt: 'merge PR 42' },
+      },
+    },
+  ]);
+  const call = expectResponse<{ result: { content: { text: string }[] } }>(session, 2);
+  const payload = JSON.parse(call.result.content[0].text);
+  const hits = payload.hits as { id: string; gate: string; score: number }[];
+  const hit = hits.find((h) => h.id === 'feedback_stacked_pr');
+  assert.ok(hit, `expected feedback_stacked_pr in hits, got ${hits.map((h) => h.id).join(', ')}`);
+  assert.equal(hit?.gate, 'topic');
+  assert.notEqual(hit?.score, 1, 'topic hits are a boost within the blend, not a flat 1.0 score anymore');
+  assert.ok(hit && hit.score > 0 && hit.score < 1, `expected a blended score in (0, 1), got ${hit?.score}`);
+});
+
 test('memory_search returns an empty list when OPENAI_API_KEY is missing', async () => {
   const session = await runRpcSession(
     [
