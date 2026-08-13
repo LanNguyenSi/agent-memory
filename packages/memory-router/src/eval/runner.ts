@@ -95,15 +95,32 @@ async function promptToHits(
 }
 
 /**
- * Whether the confidence gate can contribute a hit for this corpus today:
- * an embedding index file must exist on disk AND a provider must be
- * configured (OPENAI_API_KEY). Computed independently of any single
- * prompt's outcome so the report states this up front instead of letting
- * "semantic gate silently returned []" masquerade as "semantic path was
- * measured and scored zero".
+ * Whether the confidence gate CAN contribute a hit for this corpus today:
+ * an embedding index file must exist on disk AND a provider must resolve
+ * (OPENAI_API_KEY, an explicit MEMORY_ROUTER_EMBED_PROVIDER, or an
+ * auto-detected local Ollama daemon, see src/embed/provider.ts). Computed
+ * independently of any single prompt's outcome so the report states this
+ * up front instead of letting "semantic gate silently returned []"
+ * masquerade as "semantic path was measured and scored zero".
+ *
+ * `{ autoDetectOllama: true }` mirrors indexer.ts's rebuildIndex/
+ * semanticSearch exactly (see provider.ts's ResolveProviderConfigOptions
+ * doc): without it, a machine with no OPENAI_API_KEY but a usable local
+ * Ollama daemon would report "semantic path: inactive" even though the
+ * hook's own confidence gate resolves a provider and runs there today.
+ *
+ * This is a CONFIGURATION check, not a reachability probe: it proves an
+ * index exists and a provider resolved, not that the provider actually
+ * answers. A configured-but-unreachable Ollama daemon (or one missing the
+ * configured model) still reports as available here; the failure only
+ * surfaces at the first real embed call, same as an unreachable OpenAI
+ * endpoint already does today.
  */
 function semanticPathAvailable(dir: string): boolean {
-  return existsSync(indexPath(dir)) && resolveProviderConfig() !== null;
+  return (
+    existsSync(indexPath(dir)) &&
+    resolveProviderConfig({ autoDetectOllama: true }) !== null
+  );
 }
 
 /**

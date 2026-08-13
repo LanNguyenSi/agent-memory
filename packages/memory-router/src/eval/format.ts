@@ -18,7 +18,7 @@ function formatEvalReportText(report: EvalReportLike): string {
   lines.push(
     `semantic path: ${
       report.semanticPathActive
-        ? "ACTIVE (index + provider configured — measuring sync+confidence blend)"
+        ? "configured (provider configured, unprobed) with index present, measuring sync+confidence blend"
         : "inactive (no index and/or no provider — measuring sync path only)"
     }`,
   );

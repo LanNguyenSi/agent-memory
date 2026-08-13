@@ -85,6 +85,46 @@ test("semanticPathAvailable: false for the fixture corpus (no index built)", () 
   assert.equal(semanticPathAvailable(CORPUS_DIR), false);
 });
 
+// mm-v1-T003 fix-round HIGH #1: semanticPathAvailable now calls
+// resolveProviderConfig({ autoDetectOllama: true }), mirroring
+// rebuildIndex/semanticSearch exactly (see src/embed/indexer.ts). Before
+// this fix, a machine with no OPENAI_API_KEY but an index already built
+// under an auto-detected local Ollama daemon would have reported
+// "semantic path: inactive" even though the hook's own confidence gate
+// resolves a provider and runs there today.
+test("semanticPathAvailable: true when an index file exists and no explicit provider/key is set (auto-detected local Ollama)", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const { indexPath } = require("../src/embed/indexer");
+
+  const prevKey = process.env.OPENAI_API_KEY;
+  const prevProvider = process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "memory-router-eval-semanticpath-"),
+  );
+  const idx = indexPath(dir);
+  fs.mkdirSync(path.dirname(idx), { recursive: true });
+  fs.writeFileSync(idx, ""); // existsSync only checks presence, not content
+
+  try {
+    assert.equal(
+      semanticPathAvailable(dir),
+      true,
+      "an auto-detectable Ollama config plus an existing index file must report the semantic path as available",
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (prevKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = prevKey;
+    if (prevProvider === undefined)
+      delete process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+    else process.env.MEMORY_ROUTER_EMBED_PROVIDER = prevProvider;
+  }
+});
+
 test("vocabularySourceLabel: built-in default for the fixture corpus (no topics.yml)", () => {
   assert.equal(vocabularySourceLabel(CORPUS_DIR), "built-in default");
 });

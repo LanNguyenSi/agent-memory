@@ -109,13 +109,13 @@ test("formatEvalReportText: vocabulary line reflects a custom source verbatim", 
   assert.match(text, /vocabulary: custom \(\/tmp\/corpus\/topics\.yml\)/);
 });
 
-test("formatEvalReportText: semantic path ACTIVE renders the blended-measurement message", () => {
+test("formatEvalReportText: semantic path active renders a configured-not-probed message (mm-v1-T003 fix-round HIGH #1)", () => {
   const report = buildReport();
   report.semanticPathActive = true;
   const text = formatEvalReportText(report);
   assert.match(
     text,
-    /semantic path: ACTIVE \(index \+ provider configured — measuring sync\+confidence blend\)/,
+    /semantic path: configured \(provider configured, unprobed\) with index present, measuring sync\+confidence blend/,
   );
 });
 

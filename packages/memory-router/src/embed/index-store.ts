@@ -23,6 +23,60 @@
 //   both decide migrations are needed and double-apply them. better-sqlite3
 //   transactions auto-rollback on exception, so a throwing migration leaves
 //   the on-disk version row untouched.
+//
+// Embed provenance (provider/model/dimensions), added for multi-provider
+// support (mm-v1-T003):
+//   The generic `meta` key/value table (already used for `schema_version`)
+//   also carries `embed_provider` / `embed_model` / `embed_dimensions` rows,
+//   written once (INSERT ... ON CONFLICT DO NOTHING) the first time an
+//   embedding is actually written to a fresh index, and never overwritten
+//   afterward. This needs no schema_version bump or migration entry — it's
+//   just new keys in an existing generic table.
+//   Dimensions are never hardcoded: a brand-new index defers creating the
+//   `vec` virtual table (whose column width is fixed for the life of the
+//   file — sqlite-vec bakes `FLOAT[N]` into the CREATE TABLE text) until the
+//   first `upsert()` call, which learns N from the embedding it was actually
+//   given. An index that already has data (this process or a prior one)
+//   recovers its width from either the recorded `embed_dimensions` meta row
+//   or, for a file written before this feature existed, by parsing the
+//   physical `FLOAT[N]` out of `sqlite_master.sql` (PRAGMA table_info does
+//   not expose vec0 column widths).
+//   Provider-level mismatch (an index built under one provider, e.g.
+//   'openai', opened under a different one, e.g. 'ollama') throws
+//   immediately at open time when the caller passes `opts.meta`, since
+//   different providers are never comparable regardless of dimensions. A
+//   store that has never recorded provenance (storedProvider === null:
+//   brand-new, or a pre-provenance-tracking legacy index) is NOT
+//   automatically assumed safe to stamp with the active config either: if
+//   it already has rows and any of them are tagged (or NULL-tagged, pre-v2)
+//   for a different model, open throws the same rebuild error instead of
+//   silently overwriting the store's real provenance with whatever happens
+//   to be active right now, see the "Legacy-index provenance guard" block
+//   below. A same-provider MODEL NAME change (e.g. switching
+//   MEMORY_ROUTER_EMBED_MODEL between two OpenAI models) is deliberately
+//   NOT rejected at open time: the pre-existing v2 per-row `entries.model`
+//   tag + `expectedModel` filtering in getEmbedding/search already makes
+//   that safe by excluding stale rows from any cosine comparison, and
+//   tests/query-cache.test.ts already exercises + depends on that graceful
+//   (non-throwing) path, PROVIDED the two models share a dimensionality. A
+//   genuine DIMENSION mismatch (impossible before this feature, since
+//   EMBED_DIMENSIONS was a single hardcoded constant) is not checked at
+//   open time at all: it is caught the moment it's actually acted on, by
+//   the plain `embedding.length`/`queryEmbedding.length` checks already
+//   inside `upsert`, `putCachedQuery` and `search` (a width mismatch at the
+//   sqlite-vec layer is undefined behavior, so those fail loud rather than
+//   risking silently wrong neighbours); those three throws append the
+//   exact rebuild command whenever the caller supplied
+//   `opts.rebuildCommand` (rebuildIndex/semanticSearch always do).
+//   `opts.meta` (the provider/legacy-index guards above) and
+//   `opts.rebuildCommand` (the dimension-throw suffix) are both opt-in via
+//   the caller supplying them: src/lint/conflicts.ts (forbidden to modify
+//   for this task) opens the index with a legacy hardcoded `dimensions`
+//   hint and neither `opts.meta` nor `opts.rebuildCommand`; when that hint
+//   disagrees with a stored/physical dimension we already know, the REAL
+//   value wins silently (the hint is just ignored) rather than throwing, so
+//   that caller keeps working unmodified against a non-1536-dim (e.g.
+//   Ollama) index, see `EMBED_DIMENSIONS` in indexer.ts.
 
 const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
@@ -77,7 +131,9 @@ const migrations: Migration[] = [
       // written by this code, then had its meta table dropped to
       // simulate an old build) must not double-apply. Probe the column
       // list and no-op when it's already there.
-      const cols = db.prepare('PRAGMA table_info(entries)').all() as { name: string }[];
+      const cols = db.prepare('PRAGMA table_info(entries)').all() as {
+        name: string;
+      }[];
       if (!cols.some((c) => c.name === 'model')) {
         db.exec('ALTER TABLE entries ADD COLUMN model TEXT');
       }
@@ -87,11 +143,19 @@ const migrations: Migration[] = [
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyMigrations(db: any, registered: Migration[] = migrations): void {
-  db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+  );
 
-  const selectVersion = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'");
-  const insertVersion = db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?)");
-  const updateVersion = db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'");
+  const selectVersion = db.prepare(
+    "SELECT value FROM meta WHERE key = 'schema_version'",
+  );
+  const insertVersion = db.prepare(
+    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+  );
+  const updateVersion = db.prepare(
+    "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+  );
 
   const migrate = db.transaction(() => {
     const row = selectVersion.get() as { value: string } | undefined;
@@ -139,7 +203,27 @@ function promptKey(prompt: string): string {
 
 interface IndexStoreOptions {
   path: string;
-  dimensions: number;
+  // Optional hint. Callers that already know the dimension (fresh index,
+  // or a legacy caller like src/lint/conflicts.ts that pre-dates this
+  // feature) may supply it; a store that already has a recorded or
+  // physical dimension ignores a disagreeing hint (see the module-level
+  // comment above) rather than trusting it blindly. Omit entirely to let a
+  // brand-new index defer table creation until the first upsert() learns
+  // the real dimension from an embedding response.
+  dimensions?: number;
+  // Provenance to record/validate against a stored index. Only supplied by
+  // src/embed/indexer.ts's rebuildIndex/semanticSearch; when present, a
+  // provider mismatch against an already-built index throws immediately
+  // (see module-level comment). Omit for callers that don't want this
+  // check (e.g. tests constructing a bare store, or legacy callers outside
+  // embed/).
+  meta?: {
+    provider: string;
+    model: string;
+  };
+  // Exact remediation command included in a provenance/dimension mismatch
+  // error. Optional; a generic fallback is used when omitted.
+  rebuildCommand?: string;
   // Query-embedding cache config. Optional so callers that only need the
   // index (e.g. `memory-router index`) don't pay the extra DDL.
   cache?: {
@@ -165,14 +249,23 @@ function openIndex(opts: IndexStoreOptions): {
   // `expectedModel` to getEmbedding/search reject rows whose stored model
   // differs (or is NULL from a pre-v2 file), forcing a rebuild instead of
   // silently mixing incompatible embedding spaces.
-  upsert: (id: string, mtime: number, model: string, embedding: number[]) => void;
+  upsert: (
+    id: string,
+    mtime: number,
+    model: string,
+    embedding: number[],
+  ) => void;
   remove: (id: string) => void;
   listEntries: () => IndexEntry[];
   // Pull a stored embedding out by memory id. Returns null when the id is
   // not in the index, or when `expectedModel` is set and the stored row's
   // model differs (including NULL on a pre-v2 file).
   getEmbedding: (id: string, expectedModel?: string) => number[] | null;
-  search: (queryEmbedding: number[], k: number, expectedModel?: string) => SearchHit[];
+  search: (
+    queryEmbedding: number[],
+    k: number,
+    expectedModel?: string,
+  ) => SearchHit[];
   // Count of `entries` rows whose `model` is NULL or mismatches the
   // argument. Surfaces "you ran with model A, the index has model B" so
   // CLI callers can warn the user without re-running their own probes.
@@ -201,29 +294,228 @@ function openIndex(opts: IndexStoreOptions): {
     );
   `);
 
+  // Recover the physical width of an already-existing `vec` virtual table,
+  // if any, from its stored CREATE TABLE text — sqlite-vec's vec0 columns
+  // don't surface their width via PRAGMA table_info, but sqlite_master.sql
+  // retains the literal "FLOAT[N]" from creation time.
+  const existingVecRow = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vec'",
+    )
+    .get() as { sql: string } | undefined;
+  let vecTableExists = false;
+  let physicalDimensions: number | null = null;
+  if (existingVecRow) {
+    vecTableExists = true;
+    const m = existingVecRow.sql.match(/FLOAT\[(\d+)\]/);
+    if (!m) {
+      throw new Error(
+        `cannot determine the embedding dimension of the existing vector table in ${opts.path}; the file may be corrupted`,
+      );
+    }
+    physicalDimensions = Number(m[1]);
+  }
+
+  // Run migrations BEFORE preparing statements that reference v2 columns
+  // (or the embed-provenance meta rows below). The query_cache table is
+  // created later but applyMigrations only operates on entries/meta here;
+  // it's safe to apply now.
+  applyMigrations(db);
+
+  // --- Embed provenance: which provider/model/dimensions this index was
+  // built under (see the module-level comment above). ---
+  const metaGetStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
+  const metaSetIfAbsentStmt = db.prepare(
+    'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING',
+  );
+  function metaValue(key: string): string | null {
+    const row = metaGetStmt.get(key) as { value: string } | undefined;
+    return row ? row.value : null;
+  }
+  const storedProvider = metaValue('embed_provider');
+  const storedModel = metaValue('embed_model');
+  const storedDimensionsRaw = metaValue('embed_dimensions');
+  const storedDimensions =
+    storedDimensionsRaw !== null ? Number(storedDimensionsRaw) : null;
+
+  if (
+    storedDimensions !== null &&
+    physicalDimensions !== null &&
+    storedDimensions !== physicalDimensions
+  ) {
+    throw new Error(
+      `embedding index at ${opts.path} is internally inconsistent: recorded dimensions=${storedDimensions} but the on-disk vector table is FLOAT[${physicalDimensions}]. The file is likely corrupted — delete it and rebuild.`,
+    );
+  }
+
+  // dimensions: the authoritative value for THIS open, preferring what the
+  // file itself already knows (recorded meta, then physical width) over
+  // anything the caller merely hints at via opts.dimensions.
+  let dimensions: number | null = storedDimensions ?? physicalDimensions;
+
+  function rebuildHint(): string {
+    return (
+      opts.rebuildCommand ??
+      'delete the index file and re-run `memory-router index <dir>`'
+    );
+  }
+
+  // Appended to the raw dimension-mismatch throws in upsert/putCachedQuery/
+  // search below (the guards a same-provider, different-dimensionality
+  // model switch actually hits, see the module-level comment's "genuine
+  // DIMENSION mismatch" paragraph). Only when the caller supplied an exact
+  // `opts.rebuildCommand` (rebuildIndex/semanticSearch): a bare test-only
+  // caller (no rebuildCommand, no opts.meta, e.g. tests/index-store.test.ts
+  // constructing a store directly) keeps getting the original terse message
+  // unchanged, since a generic "delete the index file..." fallback hint
+  // wasn't part of that contract and several tests pin the exact original
+  // string.
+  function dimensionMismatchSuffix(): string {
+    return opts.rebuildCommand
+      ? ` Rebuild the index: ${opts.rebuildCommand}`
+      : '';
+  }
+
+  // Provider-mismatch check (only enforced when the caller supplies
+  // opts.meta — see module-level comment for why src/lint/conflicts.ts's
+  // legacy call, which doesn't pass opts.meta, is exempt).
+  if (
+    opts.meta &&
+    storedProvider !== null &&
+    storedProvider !== opts.meta.provider
+  ) {
+    throw new Error(
+      `embedding index at ${opts.path} was built with provider=${storedProvider} model=${storedModel ?? 'unknown'}` +
+        `${dimensions !== null ? ` (dimensions=${dimensions})` : ''}; current configuration is ` +
+        `provider=${opts.meta.provider} model=${opts.meta.model}. Embeddings from different providers are ` +
+        `never comparable. Rebuild the index: ${rebuildHint()}`,
+    );
+  }
+
+  // Legacy-index provenance guard: a store that has never recorded
+  // provenance (storedProvider === null) is either brand-new (rowCount 0,
+  // nothing to protect) or a pre-provenance-tracking index whose rows
+  // already carry a v2 `entries.model` tag (or NULL, pre-v2), the actual
+  // source of truth for what embedding space is on disk. recordProvenance()
+  // below must never blindly stamp the ACTIVE config onto such a store when
+  // its existing rows disagree with it: a later search would then trust a
+  // provenance meta row that lies about what's actually indexed. Only
+  // reachable when opts.meta is supplied (rebuildIndex/semanticSearch);
+  // src/lint/conflicts.ts's legacy call (no opts.meta) is exempt, same as
+  // the provider-mismatch check above.
+  if (opts.meta && storedProvider === null) {
+    const { n: rowCount } = db
+      .prepare('SELECT COUNT(*) AS n FROM entries')
+      .get() as { n: number };
+    if (rowCount > 0) {
+      const { n: mismatched } = db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM entries WHERE model IS NULL OR model != ?',
+        )
+        .get(opts.meta.model) as { n: number };
+      if (mismatched > 0) {
+        throw new Error(
+          `embedding index at ${opts.path} has ${mismatched} existing entr(y/ies) not tagged for model=${opts.meta.model} (provider=${opts.meta.provider})` +
+            `${dimensions !== null ? ` (dimensions=${dimensions})` : ''}; the index predates provider/model provenance ` +
+            `tracking and its rows belong to a different embedding space. Rebuild the index: ${rebuildHint()}`,
+        );
+      }
+    }
+  }
+
+  if (dimensions === null && opts.dimensions !== undefined) {
+    dimensions = opts.dimensions;
+  }
+
   // Vector table: sqlite-vec virtual table keyed by rowid that we map to
   // `entries.rowid`. This keeps the vec storage tight and lets us join back
   // on integer rowids instead of shipping the id through the vector table.
   // sqlite-vec's rowid binding needs BigInt (not a plain JS number) — see
-  // `toBigIntRowid` below.
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS vec
-      USING vec0(embedding FLOAT[${opts.dimensions}] distance_metric=cosine);
-  `);
+  // `toBigIntRowid` below. Column width is fixed for the life of the file
+  // (CREATE ... IF NOT EXISTS is a no-op on an existing table), so this
+  // only actually creates the table the first time `dimensions` becomes
+  // known — either now (existing file, or a caller-supplied hint) or later
+  // from inside upsert() the first time a fresh index learns its dimension
+  // from a real embedding response.
+  function ensureVecTable(dim: number): void {
+    if (vecTableExists) return;
+    db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS vec USING vec0(embedding FLOAT[${dim}] distance_metric=cosine);`,
+    );
+    vecTableExists = true;
+  }
+  if (dimensions !== null) ensureVecTable(dimensions);
 
-  // Run migrations BEFORE preparing statements that reference v2 columns.
-  // The query_cache table is created later but applyMigrations only
-  // operates on entries here; it's safe to apply now.
-  applyMigrations(db);
+  // Record provenance the first time it's known, whether that's now (an
+  // existing file/hint being opened for the first time under this feature)
+  // or later from upsert(). ON CONFLICT DO NOTHING means this is a no-op
+  // once a baseline is recorded.
+  function recordProvenance(dim: number): void {
+    if (opts.meta) {
+      metaSetIfAbsentStmt.run('embed_provider', opts.meta.provider);
+      metaSetIfAbsentStmt.run('embed_model', opts.meta.model);
+    }
+    metaSetIfAbsentStmt.run('embed_dimensions', String(dim));
+  }
+  if (dimensions !== null && storedDimensions === null) {
+    recordProvenance(dimensions);
+  }
 
   const upsertEntry = db.prepare(
     'INSERT INTO entries (id, mtime, model) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET mtime = excluded.mtime, model = excluded.model',
   );
   const selectRowid = db.prepare('SELECT rowid FROM entries WHERE id = ?');
-  const deleteVec = db.prepare('DELETE FROM vec WHERE rowid = ?');
-  const insertVec = db.prepare('INSERT INTO vec (rowid, embedding) VALUES (?, ?)');
   const deleteEntry = db.prepare('DELETE FROM entries WHERE id = ?');
   const listStmt = db.prepare('SELECT id, mtime FROM entries');
+
+  // Statements that reference the `vec` table are prepared lazily
+  // (memoized) because a brand-new index with no dimension hint defers
+  // creating that table until upsert() learns the real width. By the time
+  // any of these getters is actually invoked, `dimensions` is guaranteed
+  // non-null and `ensureVecTable` has already run (upsert() calls it before
+  // touching any of these; entries can only exist once upsert() has run at
+  // least once, so remove()'s early-return on a missing row means it never
+  // reaches deleteVecStmt() on a table-less store either).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _insertVec: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _deleteVec: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _selectEmbeddingStmt: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _searchStmt: any = null;
+  function insertVecStmt() {
+    if (!_insertVec)
+      _insertVec = db.prepare(
+        'INSERT INTO vec (rowid, embedding) VALUES (?, ?)',
+      );
+    return _insertVec;
+  }
+  function deleteVecStmt() {
+    if (!_deleteVec) _deleteVec = db.prepare('DELETE FROM vec WHERE rowid = ?');
+    return _deleteVec;
+  }
+  function selectEmbeddingStmtLazy() {
+    if (!_selectEmbeddingStmt) {
+      _selectEmbeddingStmt = db.prepare(
+        'SELECT entries.model AS model, vec.embedding AS embedding FROM vec JOIN entries ON entries.rowid = vec.rowid WHERE entries.id = ?',
+      );
+    }
+    return _selectEmbeddingStmt;
+  }
+  function searchStmtLazy() {
+    if (!_searchStmt) {
+      _searchStmt = db.prepare(`
+        SELECT entries.id AS id, entries.model AS model, vec.distance AS distance
+        FROM vec
+        JOIN entries ON entries.rowid = vec.rowid
+        WHERE vec.embedding MATCH ?
+          AND k = ?
+        ORDER BY distance ASC
+      `);
+    }
+    return _searchStmt;
+  }
 
   function toBlob(vec: number[]): Buffer {
     const f32 = new Float32Array(vec);
@@ -238,12 +530,17 @@ function openIndex(opts: IndexStoreOptions): {
       upsertEntry.run(id, mtime, model);
       const row = selectRowid.get(id) as { rowid: number };
       const rowid = BigInt(row.rowid);
-      deleteVec.run(rowid);
-      insertVec.run(rowid, blob);
+      deleteVecStmt().run(rowid);
+      insertVecStmt().run(rowid, blob);
     },
   );
 
-  function upsert(id: string, mtime: number, model: string, embedding: number[]): void {
+  function upsert(
+    id: string,
+    mtime: number,
+    model: string,
+    embedding: number[],
+  ): void {
     // Validate model first: a v1 caller using the old 3-arg signature
     // would land `embedding` in this slot and get a confusing TypeError
     // when we read embedding.length on the actual `embedding` arg below.
@@ -251,9 +548,21 @@ function openIndex(opts: IndexStoreOptions): {
     if (typeof model !== 'string' || model.length === 0) {
       throw new Error('upsert requires a non-empty model name');
     }
-    if (!Array.isArray(embedding) || embedding.length !== opts.dimensions) {
+    if (!Array.isArray(embedding)) {
       throw new Error(
-        `embedding dimension ${Array.isArray(embedding) ? embedding.length : 'undefined'} != index dimension ${opts.dimensions}`,
+        `embedding dimension undefined != index dimension ${dimensions ?? 'unknown'}`,
+      );
+    }
+    if (dimensions === null) {
+      // First embedding this store has ever seen: derive + persist the
+      // dimension (and provenance, if tracked) from it now, rather than
+      // trusting a hardcoded constant — see module-level comment.
+      dimensions = embedding.length;
+      ensureVecTable(dimensions);
+      recordProvenance(dimensions);
+    } else if (embedding.length !== dimensions) {
+      throw new Error(
+        `embedding dimension ${embedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
     upsertTx(id, mtime, model, toBlob(embedding));
@@ -262,7 +571,7 @@ function openIndex(opts: IndexStoreOptions): {
   function remove(id: string): void {
     const row = selectRowid.get(id) as { rowid: number } | undefined;
     if (!row) return;
-    deleteVec.run(BigInt(row.rowid));
+    deleteVecStmt().run(BigInt(row.rowid));
     deleteEntry.run(id);
   }
 
@@ -270,15 +579,13 @@ function openIndex(opts: IndexStoreOptions): {
     return listStmt.all() as IndexEntry[];
   }
 
-  const selectEmbeddingStmt = db.prepare(
-    'SELECT entries.model AS model, vec.embedding AS embedding FROM vec JOIN entries ON entries.rowid = vec.rowid WHERE entries.id = ?',
-  );
   const countStaleModelStmt = db.prepare(
     'SELECT COUNT(*) AS n FROM entries WHERE model IS NULL OR model != ?',
   );
 
   function getEmbedding(id: string, expectedModel?: string): number[] | null {
-    const row = selectEmbeddingStmt.get(id) as
+    if (dimensions === null) return null; // nothing has ever been embedded
+    const row = selectEmbeddingStmtLazy().get(id) as
       | { model: string | null; embedding: Buffer }
       | undefined;
     if (!row) return null;
@@ -330,9 +637,13 @@ function openIndex(opts: IndexStoreOptions): {
   // no longer touch rows from other models — that used to thrash the cache
   // to size 1 whenever two processes alternated `MEMORY_ROUTER_EMBED_MODEL`.
   if (cacheModel !== undefined) {
-    const hasStale = (db
-      .prepare('SELECT EXISTS(SELECT 1 FROM query_cache WHERE model != ?) AS has')
-      .get(cacheModel) as { has: number }).has;
+    const hasStale = (
+      db
+        .prepare(
+          'SELECT EXISTS(SELECT 1 FROM query_cache WHERE model != ?) AS has',
+        )
+        .get(cacheModel) as { has: number }
+    ).has;
     if (hasStale) {
       db.prepare('DELETE FROM query_cache WHERE model != ?').run(cacheModel);
     }
@@ -375,7 +686,13 @@ function openIndex(opts: IndexStoreOptions): {
   // another writer overshooting the cap. Stale-model eviction is no longer
   // in the hot path (see the one-shot above).
   const putCachedQueryTx = db.transaction(
-    (key: string, model: string, blob: Buffer, now: number, capacity: number) => {
+    (
+      key: string,
+      model: string,
+      blob: Buffer,
+      now: number,
+      capacity: number,
+    ) => {
       cacheUpsertStmt.run(key, model, blob, now);
       const { n } = cacheCountStmt.get() as { n: number };
       if (n > capacity) {
@@ -386,9 +703,9 @@ function openIndex(opts: IndexStoreOptions): {
 
   function putCachedQuery(prompt: string, embedding: number[]): void {
     if (!cacheModel || cacheCapacity <= 0) return;
-    if (embedding.length !== opts.dimensions) {
+    if (dimensions !== null && embedding.length !== dimensions) {
       throw new Error(
-        `cached embedding dimension ${embedding.length} != index dimension ${opts.dimensions}`,
+        `cached embedding dimension ${embedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
     putCachedQueryTx(
@@ -408,26 +725,18 @@ function openIndex(opts: IndexStoreOptions): {
   // sqlite-vec's MATCH returns cosine *distance* in [0, 2]; similarity =
   // 1 - distance/2 maps it back to [0, 1] so callers can compare to a
   // threshold expressed as similarity.
-  const searchStmt = db.prepare(`
-    SELECT entries.id AS id, entries.model AS model, vec.distance AS distance
-    FROM vec
-    JOIN entries ON entries.rowid = vec.rowid
-    WHERE vec.embedding MATCH ?
-      AND k = ?
-    ORDER BY distance ASC
-  `);
-
   function search(
     queryEmbedding: number[],
     k: number,
     expectedModel?: string,
   ): SearchHit[] {
-    if (queryEmbedding.length !== opts.dimensions) {
+    if (dimensions === null) return []; // nothing has ever been embedded
+    if (queryEmbedding.length !== dimensions) {
       throw new Error(
-        `query dimension ${queryEmbedding.length} != index dimension ${opts.dimensions}`,
+        `query dimension ${queryEmbedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
-    const rows = searchStmt.all(toBlob(queryEmbedding), k) as {
+    const rows = searchStmtLazy().all(toBlob(queryEmbedding), k) as {
       id: string;
       model: string | null;
       distance: number;
