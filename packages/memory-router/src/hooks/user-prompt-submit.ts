@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const { loadMemoriesFromDir } = require('../memory/loader');
-const { resolve, resolveConfidence, dedupeAndRank } = require('../router');
+const { resolveBlended } = require('../router');
 const { renderHitsAsContext } = require('../render');
 const { readStdin } = require('./io');
 
@@ -37,26 +37,25 @@ async function main(): Promise<void> {
   }
 
   const memories = loadMemoriesFromDir(memoryDir);
-  const ctx: RouterContext = { prompt: input.prompt, cwd: input.cwd };
+  const ctx: RouterContext = { prompt: input.prompt, cwd: input.cwd, memoryDir };
 
-  // Sync gates first (topic, tool) — cheap, deterministic.
-  const syncHits: GateHit[] = resolve(ctx, memories);
-
-  // Confidence gate is async (hits OpenAI embeddings API). Run only when
-  // the sync gates didn't already cover the prompt, to keep latency low
-  // and avoid redundant context when a deterministic gate already fired.
-  let allHits: GateHit[] = syncHits;
-  if (syncHits.length === 0) {
-    try {
-      const semHits: GateHit[] = await resolveConfidence(ctx, memories, memoryDir);
-      allHits = dedupeAndRank([...syncHits, ...semHits], 5);
-    } catch (err: unknown) {
-      // Never let a semantic-search failure block the prompt — log and fall
-      // back to the sync hits.
-      process.stderr.write(
-        `memory-router: semantic search failed, falling back: ${String(err)}\n`,
-      );
-    }
+  // mm-v1-T004: resolveBlended runs the semantic search unconditionally
+  // (whenever an index + provider are available) and blends it with the
+  // Topic Gate as a boost rather than gating the semantic path behind
+  // "sync gates were silent" — that shadowing was the reason the semantic
+  // path almost never ran in practice (a Topic Gate hit's flat 1.0 score
+  // pre-empted it on nearly every real prompt). resolveBlended already
+  // degrades internally to topic/recency/type-only scoring on a
+  // semantic-search failure (see src/router.ts) and never throws for that
+  // case; this try/catch is the outer defensive layer so the hook can
+  // never block the prompt over ANY unexpected resolution failure.
+  let allHits: GateHit[] = [];
+  try {
+    allHits = await resolveBlended(ctx, memories, memoryDir);
+  } catch (err: unknown) {
+    process.stderr.write(
+      `memory-router: memory resolution failed, no context injected: ${String(err)}\n`,
+    );
   }
 
   const additionalContext = renderHitsAsContext(allHits);

@@ -200,6 +200,38 @@ test('memory_resolve hits the topic gate for a "force push" prompt', async () =>
   );
 });
 
+// mm-v1-T004: memory_resolve runs through the same resolveBlended path the
+// UserPromptSubmit hook uses (src/router.ts) instead of forking its own
+// resolve-then-maybe-resolveConfidence logic. This fixtures dir has no
+// `.memory-router` index, so the semantic path contributes nothing and
+// resolveBlended must degrade to EXACTLY the old sync-only topic-only score
+// (flat 1.0), a post-hoc fix: an earlier version of resolveBlended kept
+// applying the topic-boost/recency/type modifiers even in this degraded
+// case, breaking the "identical to today's topic-only degradation"
+// acceptance criterion (see tests/blend.test.ts's degradation-pinning test).
+test('memory_resolve returns the exact pre-blend flat 1.0 score for a topic-only match when no index/provider is configured', async () => {
+  const session = await runRpcSession([
+    initialize,
+    initialized,
+    {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'memory_resolve',
+        arguments: { prompt: 'merge PR 42' },
+      },
+    },
+  ]);
+  const call = expectResponse<{ result: { content: { text: string }[] } }>(session, 2);
+  const payload = JSON.parse(call.result.content[0].text);
+  const hits = payload.hits as { id: string; gate: string; score: number }[];
+  const hit = hits.find((h) => h.id === 'feedback_stacked_pr');
+  assert.ok(hit, `expected feedback_stacked_pr in hits, got ${hits.map((h) => h.id).join(', ')}`);
+  assert.equal(hit?.gate, 'topic');
+  assert.equal(hit?.score, 1, 'degraded (no index/provider) topic hits must render the exact pre-blend flat 1.0 score');
+});
+
 test('memory_search returns an empty list when OPENAI_API_KEY is missing', async () => {
   const session = await runRpcSession(
     [

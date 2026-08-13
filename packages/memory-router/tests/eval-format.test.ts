@@ -24,6 +24,7 @@ interface EvalReportLike {
   semanticPathActive: boolean;
   vocabularySource: string;
   unknownExpectIds: string[];
+  semanticContributedCount: number;
   perPrompt: {
     prompt: string;
     expect: string[];
@@ -55,6 +56,7 @@ function buildReport(): EvalReportLike {
     semanticPathActive: false,
     vocabularySource: "built-in default",
     unknownExpectIds: [],
+    semanticContributedCount: 1,
     perPrompt: [
       {
         prompt: "positive prompt",
@@ -100,6 +102,20 @@ test("formatEvalReportText: header lines report golden path, corpus size, semant
   assert.match(text, /corpus: \/tmp\/corpus \(2 memories\)/);
   assert.match(text, /semantic path: inactive/);
   assert.match(text, /vocabulary: built-in default/);
+});
+
+test("formatEvalReportText: reports how many prompts the semantic gate actually contributed to, out of the total (mm-v1-T004 fix-round 2 LOW #8)", () => {
+  const report = buildReport();
+  report.semanticContributedCount = 1;
+  const text = formatEvalReportText(report);
+  assert.match(text, /semantic contributed: 1\/3 prompts/);
+});
+
+test("formatEvalReportText: semantic-contributed count of 0 out of N still renders (no semantic hits anywhere in the run)", () => {
+  const report = buildReport();
+  report.semanticContributedCount = 0;
+  const text = formatEvalReportText(report);
+  assert.match(text, /semantic contributed: 0\/3 prompts/);
 });
 
 test("formatEvalReportText: vocabulary line reflects a custom source verbatim", () => {

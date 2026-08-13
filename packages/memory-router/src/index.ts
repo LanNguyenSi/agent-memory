@@ -12,6 +12,7 @@ const {
 const {
   resolve,
   resolveConfidence,
+  resolveBlended,
   dedupeAndRank,
   DEFAULT_GATES,
 } = require('./router');
@@ -27,6 +28,7 @@ module.exports = {
   confidenceThreshold,
   resolve,
   resolveConfidence,
+  resolveBlended,
   dedupeAndRank,
   DEFAULT_GATES,
   rebuildIndex,

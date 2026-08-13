@@ -35,6 +35,19 @@ test('user-prompt-submit emits hookSpecificOutput.additionalContext for a topic 
     parsed.hookSpecificOutput.additionalContext,
     /retarget its base to master/,
   );
+  // mm-v1-T004: the hook resolves through resolveBlended. This fixtures dir
+  // has no `.memory-router` index, so the semantic path contributes
+  // nothing and resolveBlended must degrade to EXACTLY the old sync-only
+  // topic-only score (flat 1.00), a post-hoc fix: an earlier version of
+  // resolveBlended kept applying the topic-boost/recency/type modifiers
+  // even in this degraded case, which is the "identical to today's
+  // topic-only degradation" acceptance criterion this pins (see
+  // src/router.ts, tests/blend.test.ts's degradation-pinning test).
+  assert.match(
+    parsed.hookSpecificOutput.additionalContext,
+    /topic · 1\.00/,
+    'degraded (no index/provider) topic hits must render the exact pre-blend flat 1.00 score',
+  );
 });
 
 test('user-prompt-submit emits no stdout when no hits', () => {
