@@ -299,7 +299,12 @@ memory-router migrate --dir ~/.claude/projects/PROJECT/memory --json
 Corpus dir resolution is the same as `test`/`eval`: `--dir` flag, then `$MEMORY_ROUTER_DIR`. Only `*.md` files are scanned; `MEMORY.md` and non-`.md` files (`topics.yml`, `golden.yml`, ...) are never touched. Three independent, additive-only rules, each of which **never overwrites an existing canonical value**:
 
 - **`type`**: hoists `metadata.type` (the Claude Code auto-memory location, see [Accepted frontmatter locations](#accepted-frontmatter-locations)) to top-level `type`, only when no valid top-level `type` already exists, and only when the value is one of the four known types. A file with no valid `type` at either location is left alone and reported under `missing type`.
-- **`topics`**: derives top-level `topics` from, in order: (1) a curated `--mapping` file, (2) a vocabulary pattern match (the same [topic vocabulary](#topic-vocabulary-topicsyml) the Topic Gate uses) against `name` + `description` **only**, never the body. Only runs when no non-empty top-level `topics` already exists. `metadata.topics` is deliberately never read as a source, since Claude Code auto-memory writes it unconstrained by any corpus vocabulary and this verb never guesses. No match at either step leaves the file untagged, reported under `untagged topics`.
+- **`topics`**: derives top-level `topics` from, in order, whichever of these five states applies (visible in the report via `action`/`source`, see the `--json` schema below):
+  1. **kept**: a non-empty top-level `topics` already exists, left untouched.
+  2. **hoisted**: `metadata.topics` (the Claude Code auto-memory location) is a non-empty list of strings, hoisted to top-level `topics` **verbatim** (byte-identical values, no trim/dedupe/reorder), analogous to the `type` hoist above. The loader (see [Accepted frontmatter locations](#accepted-frontmatter-locations)) already reads `metadata.topics` liberally as a second source, and in the reference corpus roughly 230 files carry curated topics only there — this hoist canonicalizes them instead of discarding and re-deriving. An invalid shape (not a list, or a list containing a non-string entry) is **not** hoisted; it falls through to the next step rather than crashing.
+  3. **mapped**: a curated `--mapping` file rule matches.
+  4. **derived**: a vocabulary pattern match (the same [topic vocabulary](#topic-vocabulary-topicsyml) the Topic Gate uses) against `name` + `description` **only**, never the body.
+  5. **untagged**: no match at any step; reported under `untagged topics`.
 - **`created`**: stamped from the file's mtime, marked `# approx (mtime)` so it's visibly an approximation rather than a real authored date, only when no `created` key exists yet.
 
 Frontmatter is re-serialized with `yaml`'s Document API, which preserves existing key order/formatting and only appends new fields; bodies are never touched (byte-identical before/after, comments included). A file with nothing to change is never rewritten at all, which is what makes a second `migrate --apply` run a true no-op.
@@ -331,6 +336,8 @@ Each entry sets exactly one of `id` (exact memory id, i.e. filename without `.md
       "reason": null,
       "changed": true,
       "type": { "action": "set", "value": "feedback", "source": "metadata.type" },
+      // topics.source is one of "metadata.topics" (hoisted), "mapping" (mapped),
+      // or "vocabulary-pattern" (derived) — see the topics precedence above.
       "topics": { "action": "set", "value": ["deployment"], "source": "vocabulary-pattern" },
       "created": { "action": "set", "value": "2026-08-13", "source": "mtime (approx)" }
     }
@@ -344,7 +351,7 @@ Each entry sets exactly one of `id` (exact memory id, i.e. filename without `.md
 }
 ```
 
-Each field's `action` is `"kept"` (already canonical, untouched), `"set"` (this run derived/would derive a value), or `"missing"` (nothing mechanically derivable; needs manual review). A report, not a gate, like `eval`: exits 0 on any error-free run regardless of how many files end up untagged.
+Each field's `action` is `"kept"` (already canonical, untouched), `"set"` (this run derived/would derive a value), or `"missing"` (nothing mechanically derivable; needs manual review) — for `topics`, `"missing"` renders as `untagged` in both the text and `--json` reports. `source` names which of the five topics states an `action: "set"`/`"kept"` result actually landed in: `metadata.topics` (hoisted), `mapping` (mapped), or `vocabulary-pattern` (derived); `type`'s only source is `metadata.type`; `created`'s only source is `mtime (approx)`. A report, not a gate, like `eval`: exits 0 on any error-free run regardless of how many files end up untagged.
 
 ### Building the embedding index
 
@@ -665,7 +672,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 - ✅ MCP server (`memory_search`, `memory_apply`, `memory_resolve`)
 - ✅ Lint surface (`drift`, `unknown-topics`, `conflicts`)
 - ✅ Stale detector (`stale --repo-root <path>` with `verify:` frontmatter contract)
-- ✅ Schema v1 migration (`migrate --dir <path> [--apply] [--mapping <file>]`, mm-v1-T006): mechanical, idempotent frontmatter backfill (hoist `metadata.type`, derive `topics` from a curated mapping + vocabulary pattern match, stamp `created` from mtime). No LLM, no guessing.
+- ✅ Schema v1 migration (`migrate --dir <path> [--apply] [--mapping <file>]`, mm-v1-T006): mechanical, idempotent frontmatter backfill (hoist `metadata.type`, derive `topics` in order from a `metadata.topics` hoist, a curated mapping, then a vocabulary pattern match, stamp `created` from mtime). No LLM, no guessing.
 - 🚧 Embedding pipeline, follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))
 
 ## Trust Model

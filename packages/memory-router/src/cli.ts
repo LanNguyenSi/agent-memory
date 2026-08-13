@@ -335,13 +335,13 @@ Commands:
     which ever overwrites an existing canonical value:
       type      hoist metadata.type to top-level type, only when no valid
                 top-level type already exists.
-      topics    derive top-level topics from, in order: (1) the curated
-                --mapping file (id or filename-prefix -> topics), (2) a
-                vocabulary pattern match against name+description ONLY
-                (never the body); only when no non-empty top-level topics
-                already exists. metadata.topics is never read as a source.
-                No match at either step leaves the file untagged, reported
-                under "untagged topics".
+      topics    resolve top-level topics from, in order: (1) keep a
+                non-empty top-level topics as-is, (2) hoist a valid
+                metadata.topics array verbatim, (3) the curated --mapping
+                file (id or filename-prefix -> topics), (4) a vocabulary
+                pattern match against name+description ONLY (never the
+                body). No source at any step leaves the file untagged,
+                reported under "untagged topics".
       created   stamped from the file's mtime, marked '# approx (mtime)',
                 only when no created key exists yet.
     Dry-run by default; --apply writes. Only *.md files are scanned,

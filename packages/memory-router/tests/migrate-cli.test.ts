@@ -113,6 +113,28 @@ test('migrate --json emits valid, parseable JSON matching the documented schema'
   }
 });
 
+test('migrate: metadata.topics hoists to top-level topics, reported with source "metadata.topics"', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-migrate-cli-hoist-'));
+  fs.writeFileSync(
+    path.join(dir, 'meta_topics_case.md'),
+    '---\nname: meta topics case\ndescription: nothing vocabulary would match\nmetadata:\n  type: feedback\n  topics: [curated_a, curated_b]\n---\n\nbody\n',
+  );
+  try {
+    const { status, stdout } = run(['migrate', '--dir', dir, '--json']);
+    assert.equal(status, 0, stdout);
+    const parsed = JSON.parse(stdout) as {
+      files: Array<{ id: string; topics: { action: string; value?: string[]; source?: string } }>;
+    };
+    const f = parsed.files.find((x) => x.id === 'meta_topics_case');
+    assert.ok(f);
+    assert.equal(f!.topics.action, 'set');
+    assert.equal(f!.topics.source, 'metadata.topics');
+    assert.deepEqual(f!.topics.value, ['curated_a', 'curated_b']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('migrate --mapping: a curated mapping rule resolves an otherwise-untagged file', () => {
   const dir = copyStaticCorpus();
   try {

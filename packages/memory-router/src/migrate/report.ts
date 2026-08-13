@@ -17,6 +17,13 @@
 // failures (only possible under --apply); a non-empty list is still exit 0
 // per the "report, not a gate" contract (see cli.ts --help for `migrate`),
 // same as `eval`.
+//
+// `topics.action`/`topics.source` together spell out which of the five
+// precedence states a file landed in (see transform.ts's resolveTopics):
+// kept (action "kept", top-level topics already present), hoisted (action
+// "set", source "metadata.topics"), mapped (action "set", source
+// "mapping"), derived (action "set", source "vocabulary-pattern"), or
+// untagged (action "missing", none of the above matched).
 
 interface FieldResultLike {
   action: 'kept' | 'set' | 'missing';
@@ -78,7 +85,9 @@ function describeField(label: string, field: FieldResultLike, applied: boolean):
   if (field.action === 'kept') return null; // already canonical, nothing to show
   if (field.action === 'missing') {
     return `  ${label}: ${label === 'topics' ? 'untagged' : 'missing'} — no ${
-      label === 'type' ? 'metadata.type to hoist' : 'mapping/vocabulary match'
+      label === 'type'
+        ? 'metadata.type to hoist'
+        : 'metadata.topics/mapping/vocabulary match'
     } (needs manual review)`;
   }
   // action === 'set'

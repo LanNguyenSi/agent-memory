@@ -7,13 +7,20 @@
 // value at the canonical location is NEVER overwritten):
 //   - type:    hoist `metadata.type` to top-level `type`, only when no
 //              (non-empty, valid) top-level `type` already exists.
-//   - topics:  derive top-level `topics` from (1) the curated --mapping
-//              file, else (2) a vocabulary pattern match against
-//              name+description only (never the body — see README "Topic
-//              vocabulary"), only when no non-empty top-level `topics`
-//              already exists. `metadata.topics` is deliberately never
-//              read as a source: it may not conform to the corpus's
-//              vocabulary, and this verb never guesses.
+//   - topics:  derive top-level `topics`, in order, from: (1) nothing —
+//              a non-empty top-level `topics` already exists, kept as-is;
+//              (2) `metadata.topics`, HOISTED verbatim (byte-identical
+//              values, no dedupe/trim/reorder) when it's a non-empty array
+//              of strings — analogous to the `type` hoist above, since the
+//              loader (src/memory/loader.ts) already reads `metadata.topics`
+//              liberally as a second topics source and ~230 real corpus
+//              files carry curated topics only there; an invalid shape
+//              (not an array, or an array with a non-string entry) is NOT
+//              hoisted and falls through to the next source rather than
+//              crashing; (3) the curated --mapping file; (4) a vocabulary
+//              pattern match against name+description only (never the
+//              body — see README "Topic vocabulary"). No match at any step
+//              leaves the file untagged, reported under "untagged topics".
 //   - created: stamp today's canonical date from the file's mtime, marked
 //              `# approx (mtime)`, only when no `created` key exists yet.
 //
@@ -118,6 +125,20 @@ function resolveType(fm: PlainFrontmatter): FieldResult<string> {
   return { action: 'missing' };
 }
 
+// A valid hoist candidate: a non-empty array where every entry is a string
+// (empty strings included — the hoist copies values byte-identically and
+// does not second-guess their content, same lenient contract the top-level
+// `topics` "kept" check above already applies). Anything else (not an
+// array at all, or an array containing a non-string entry) is an invalid
+// shape: not hoisted, falls through to (3)/(4)/(5), never throws.
+function isHoistableTopics(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((t) => typeof t === 'string')
+  );
+}
+
 function resolveTopics(
   fm: PlainFrontmatter,
   id: string,
@@ -128,6 +149,11 @@ function resolveTopics(
   const topLevel = fm.topics;
   if (Array.isArray(topLevel) && topLevel.length > 0) {
     return { action: 'kept', value: topLevel };
+  }
+
+  const metaTopics = fm.metadata?.topics;
+  if (isHoistableTopics(metaTopics)) {
+    return { action: 'set', value: metaTopics, source: 'metadata.topics' };
   }
 
   const mapped = matchMapping(id, ctx.mappingRules);

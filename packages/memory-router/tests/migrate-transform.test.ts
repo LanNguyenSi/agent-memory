@@ -135,6 +135,168 @@ test('migrate: a file with no type anywhere reports type as missing, not guessed
   }
 });
 
+// --- metadata.topics hoist ---------------------------------------------------
+
+test('migrate: metadata.topics hoists to top-level topics when no top-level topics exists', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'meta_topics_hoist.md'),
+    '---\nname: meta topics\ndescription: nothing vocabulary would match\nmetadata:\n  type: feedback\n  topics: [curated_one, curated_two]\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('meta_topics_hoist', dir);
+    assert.deepEqual(f.topics, {
+      action: 'set',
+      value: ['curated_one', 'curated_two'],
+      source: 'metadata.topics',
+    });
+    assert.equal(f.changed, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: metadata.topics values are hoisted byte-identical (no trim/dedupe/reorder)', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'meta_topics_verbatim.md'),
+    '---\nname: verbatim\ndescription: nothing vocabulary would match\nmetadata:\n  type: feedback\n  topics: ["  spaced  ", "dup", "dup"]\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('meta_topics_verbatim', dir);
+    assert.equal(f.topics.action, 'set');
+    assert.equal(f.topics.source, 'metadata.topics');
+    assert.deepEqual(f.topics.value, ['  spaced  ', 'dup', 'dup']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: existing top-level topics wins over metadata.topics (top-level > metadata)', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'toplevel_wins.md'),
+    '---\nname: toplevel wins\ndescription: nothing vocabulary would match\ntopics: [already_canonical]\nmetadata:\n  type: feedback\n  topics: [would_be_overwritten]\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('toplevel_wins', dir);
+    assert.deepEqual(f.topics, { action: 'kept', value: ['already_canonical'] });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: metadata.topics wins over a matching --mapping rule (metadata > mapping)', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'meta_wins_over_mapping.md'),
+    '---\nname: meta wins\ndescription: nothing vocabulary would match\nmetadata:\n  type: feedback\n  topics: [from_metadata]\n---\n\nbody\n',
+  );
+  try {
+    const rules = [{ prefix: 'meta_wins_', topics: ['from_mapping'] }];
+    const plan = planMigration(dir, { mappingRules: rules, mappingPath: 'fixture.yml' });
+    const f = plan.files.find((x: { id: string }) => x.id === 'meta_wins_over_mapping');
+    assert.deepEqual(f.topics, {
+      action: 'set',
+      value: ['from_metadata'],
+      source: 'metadata.topics',
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: an invalid metadata.topics shape (not an array) is not hoisted, falls through to the next source', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'meta_topics_not_array.md'),
+    '---\nname: not array\ndescription: deploy release rollback\nmetadata:\n  type: feedback\n  topics: "not-a-list"\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('meta_topics_not_array', dir);
+    assert.equal(f.topics.action, 'set');
+    assert.equal(f.topics.source, 'vocabulary-pattern', 'falls through past the invalid shape, no crash');
+    assert.deepEqual(f.topics.value, ['deployment']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: an invalid metadata.topics shape (array with a non-string entry) is not hoisted, reported untagged when nothing else matches', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'meta_topics_bad_entry.md'),
+    '---\nname: bad entry\ndescription: nothing vocabulary would match at all\nmetadata:\n  type: feedback\n  topics: [ok_one, 42]\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('meta_topics_bad_entry', dir);
+    assert.equal(f.topics.action, 'missing', 'invalid shape never crashes and never gets guessed');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: an empty metadata.topics array is not hoisted (falls through, same as an empty top-level topics)', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'meta_topics_empty.md'),
+    '---\nname: empty\ndescription: deploy release rollback\nmetadata:\n  type: feedback\n  topics: []\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('meta_topics_empty', dir);
+    assert.equal(f.topics.action, 'set');
+    assert.equal(f.topics.source, 'vocabulary-pattern');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate --apply: metadata.topics hoist is idempotent (second run is a no-op)', () => {
+  const dir = mkTmpDir();
+  const file = path.join(dir, 'hoist_idempotent.md');
+  fs.writeFileSync(
+    file,
+    '---\nname: idempotent hoist\ndescription: nothing vocabulary would match\nmetadata:\n  type: feedback\n  topics: [curated]\n---\n\nbody text\n',
+  );
+  try {
+    const firstPlan = planMigration(dir);
+    const firstResult = applyMigration(firstPlan);
+    assert.equal(firstResult.applied, 1, 'first run hoists topics (and type)');
+
+    const afterFirst = fs.readFileSync(file, 'utf8');
+    assert.match(afterFirst, /^topics:\n\s*- curated$/m);
+
+    const secondPlan = planMigration(dir);
+    const f = secondPlan.files.find((x: { id: string }) => x.id === 'hoist_idempotent');
+    assert.deepEqual(f.topics, { action: 'kept', value: ['curated'] });
+
+    const secondResult = applyMigration(secondPlan);
+    assert.equal(secondResult.applied, 0, 'second run must not write anything');
+    assert.equal(fs.readFileSync(file, 'utf8'), afterFirst, 'byte-identical after the second run');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate --apply: metadata.topics hoist leaves the body byte-identical', () => {
+  const dir = mkTmpDir();
+  const file = path.join(dir, 'hoist_body_hash.md');
+  const original =
+    '---\nname: hoist body\ndescription: nothing vocabulary would match\nmetadata:\n  type: feedback\n  topics: [curated]\n---\n\n<!-- keep me -->\nSome body text.\n\n- item one\n- item two\n';
+  fs.writeFileSync(file, original);
+  try {
+    const before = bodyHash(original);
+    const plan = planMigration(dir);
+    const result = applyMigration(plan);
+    assert.equal(result.applied, 1);
+    const afterSource = fs.readFileSync(file, 'utf8');
+    assert.equal(bodyHash(afterSource), before, 'body bytes must be unchanged by the metadata.topics hoist');
+    assert.match(afterSource, /<!-- keep me -->/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- mapping vs. pattern precedence -----------------------------------------
 
 test('migrate: a mapping match wins over a vocabulary pattern hit, even when the text would also match the pattern', () => {

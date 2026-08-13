@@ -144,7 +144,10 @@ test('formatMigrationReportText: an unchanged file prints "(already canonical, n
 
 test('formatMigrationReportText: topics "missing" renders as untagged, needs manual review', () => {
   const text = formatMigrationReportText(buildPlan(), null);
-  assert.match(text, /topics: untagged — no mapping\/vocabulary match \(needs manual review\)/);
+  assert.match(
+    text,
+    /topics: untagged — no metadata\.topics\/mapping\/vocabulary match \(needs manual review\)/,
+  );
 });
 
 test('formatMigrationReportText: type "missing" renders as missing, needs manual review', () => {
@@ -155,6 +158,29 @@ test('formatMigrationReportText: type "missing" renders as missing, needs manual
 test('formatMigrationReportText: an array-valued "set" field renders as a bracketed list', () => {
   const text = formatMigrationReportText(buildPlan(), null);
   assert.match(text, /\+ \(would set\) topics: \[deployment\]\s+\(from vocabulary-pattern\)/);
+});
+
+test('formatMigrationReportText: a metadata.topics hoist is visibly distinguished from a mapped/derived topics set (via source)', () => {
+  const plan: MigrationPlanLike = {
+    dir: '/tmp/corpus',
+    mappingPath: null,
+    files: [
+      {
+        id: 'hoisted_case',
+        path: '/tmp/corpus/hoisted_case.md',
+        skipped: false,
+        changed: true,
+        type: kept('feedback'),
+        topics: set(['curated_one', 'curated_two'], 'metadata.topics'),
+        created: kept('2026-01-01'),
+      },
+    ],
+  };
+  const text = formatMigrationReportText(plan, null);
+  assert.match(
+    text,
+    /\+ \(would set\) topics: \[curated_one, curated_two\]\s+\(from metadata\.topics\)/,
+  );
 });
 
 // --- text: skipped section ------------------------------------------------------
@@ -231,6 +257,30 @@ test('formatMigrationReportJson: apply=true and summary.applied reflect a real A
   assert.equal(parsed.apply, true);
   assert.equal(parsed.summary.applied, 3);
   assert.deepEqual(parsed.summary.errored, ['/tmp/x.md: EACCES']);
+});
+
+test('formatMigrationReportJson: a metadata.topics hoist is reported as { action: "set", source: "metadata.topics" }', () => {
+  const plan: MigrationPlanLike = {
+    dir: '/tmp/corpus',
+    mappingPath: null,
+    files: [
+      {
+        id: 'hoisted_case',
+        path: '/tmp/corpus/hoisted_case.md',
+        skipped: false,
+        changed: true,
+        type: kept('feedback'),
+        topics: set(['curated_one', 'curated_two'], 'metadata.topics'),
+        created: kept('2026-01-01'),
+      },
+    ],
+  };
+  const parsed = JSON.parse(formatMigrationReportJson(plan, null));
+  assert.deepEqual(parsed.files[0].topics, {
+    action: 'set',
+    value: ['curated_one', 'curated_two'],
+    source: 'metadata.topics',
+  });
 });
 
 test('formatMigrationReportJson: a skipped file reports reason: null, not undefined/omitted', () => {
