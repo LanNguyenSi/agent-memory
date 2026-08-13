@@ -28,6 +28,12 @@ const { loadMemoriesFromDir } = require('./memory/loader');
 const { resolve, resolveConfidence, dedupeAndRank } = require('./router');
 const { runGoldenEval } = require('./eval/runner');
 const { formatEvalReportText, formatEvalReportJson } = require('./eval/format');
+const { loadMapping } = require('./migrate/mapping');
+const { planMigration, applyMigration } = require('./migrate/transform');
+const {
+  formatMigrationReportText,
+  formatMigrationReportJson,
+} = require('./migrate/report');
 
 interface ParsedArgs {
   cmd: string;
@@ -40,10 +46,10 @@ interface ParsedArgs {
   fix: boolean;
   json: boolean;
   /**
-   * `test <prompt>` / `eval <golden.yml>`: corpus dir for both verbs.
-   * Resolution order: --dir flag, $MEMORY_ROUTER_DIR env, error. Shared
-   * field name (`testDir`) predates the `eval` verb; both consume the
-   * same generic `--dir` flag parsed below.
+   * `test <prompt>` / `eval <golden.yml>` / `migrate`: corpus dir shared by
+   * all three verbs. Resolution order: --dir flag, $MEMORY_ROUTER_DIR env,
+   * error. Field name (`testDir`) predates `eval`/`migrate`; all three
+   * consume the same generic `--dir` flag parsed below.
    */
   testDir?: string;
   /** `test --semantic`: also run the async confidence gate. */
@@ -62,6 +68,12 @@ interface ParsedArgs {
   scanBody: boolean;
   /** `stale --check-urls`: HEAD-request external URLs (off by default). */
   checkUrls: boolean;
+  /**
+   * `migrate --mapping <file>`: path to a curated topic-mapping YAML file
+   * (see src/migrate/mapping.ts). Optional; when unset, `migrate` derives
+   * `topics:` from the vocabulary pattern match alone.
+   */
+  mappingPath?: string;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -81,6 +93,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let testDir: string | undefined;
   let testMaxHits = 5;
   let maxHitsFlag = false;
+  let mappingPath: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true;
@@ -105,6 +118,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === '--check-urls') checkUrls = true;
     else if (a === '--dir') testDir = argv[++i];
     else if (a.startsWith('--dir=')) testDir = a.slice('--dir='.length);
+    else if (a === '--mapping') mappingPath = argv[++i];
+    else if (a.startsWith('--mapping=')) mappingPath = a.slice('--mapping='.length);
     else if (a === '--max-hits') {
       // Refuse to swallow the next flag as a value: `--max-hits --json`
       // should error rather than silently default and consume --json.
@@ -217,6 +232,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     // is conceptually "opt in to the semantic pass" across the CLI).
     testSemantic: semanticFlag,
     testMaxHits,
+    mappingPath,
   };
 }
 
@@ -311,6 +327,38 @@ Commands:
     --json emits a machine-readable report on stdout (schema documented
     in README.md).
 
+  migrate [--dir <path>] [--apply] [--mapping <file>] [--json]
+    Mechanical, idempotent frontmatter backfill to schema v1 (name,
+    description, top-level type, topics: >=1, created). No LLM, no
+    guessing: whatever isn't mechanically derivable stays untouched and is
+    reported instead. Three independent, additive-only rules, none of
+    which ever overwrites an existing canonical value:
+      type      hoist metadata.type to top-level type, only when no valid
+                top-level type already exists.
+      topics    derive top-level topics from, in order: (1) the curated
+                --mapping file (id or filename-prefix -> topics), (2) a
+                vocabulary pattern match against name+description ONLY
+                (never the body); only when no non-empty top-level topics
+                already exists. metadata.topics is never read as a source.
+                No match at either step leaves the file untagged, reported
+                under "untagged topics".
+      created   stamped from the file's mtime, marked '# approx (mtime)',
+                only when no created key exists yet.
+    Dry-run by default; --apply writes. Only *.md files are scanned,
+    MEMORY.md and non-.md files (topics.yml, golden.yml, ...) are never
+    touched. Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR
+    env (same as 'test'/'eval'). --mapping <file> points at a curated
+    topic-mapping YAML file (see src/migrate/mapping.ts); an invalid
+    mapping file is a setup error (exit 1), never silently ignored.
+    --json emits a machine-readable report on stdout. A report, not a
+    gate: exits 0 on any error-free run, same as 'eval'.
+    mapping file format:
+        - prefix: "feedback_"
+          topics: [workflow]
+        - id: "reference_codebase_oracle"
+          topics: [testing, workflow]
+    First rule to match (in file order) wins.
+
   stale <dir> [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--scan-body] [--check-urls] [--json]
     Scan every memory in <dir> for stale references against one or more
     repo roots. Default root list: [process.cwd()]. A ref is STALE only
@@ -357,6 +405,8 @@ Examples:
   memory-router eval golden.yml --dir ~/.claude/projects/PROJECT/memory
   MEMORY_ROUTER_DIR=~/.claude/projects/PROJECT/memory \\
     memory-router eval golden.yml --json
+  memory-router migrate --dir ~/.claude/projects/PROJECT/memory
+  memory-router migrate --dir ~/.claude/projects/PROJECT/memory --mapping mapping.yml --apply
 `);
 }
 
@@ -670,6 +720,52 @@ async function runEval(goldenPath: string, dir: string, json: boolean): Promise<
   }
 }
 
+async function runMigrate(
+  dir: string,
+  mappingPath: string | undefined,
+  apply: boolean,
+  json: boolean,
+): Promise<void> {
+  const fs = require('node:fs');
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: cannot read ${dir}: ${String(err)}\n`);
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
+    process.stderr.write(`error: ${dir} is not a directory\n`);
+    process.exit(1);
+  }
+
+  let mappingRules: { id?: string; prefix?: string; topics: string[] }[] = [];
+  if (mappingPath) {
+    try {
+      mappingRules = loadMapping(mappingPath);
+    } catch (err: unknown) {
+      // MigrationMappingError extends Error, so this catches it (and any
+      // other thrown error) uniformly without needing an `instanceof`
+      // narrowing against a require()-imported (untyped `any`) class.
+      const detail = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`error: ${detail}\n`);
+      process.exit(1);
+    }
+  }
+
+  const plan = planMigration(dir, {
+    mappingRules,
+    mappingPath: mappingPath ?? null,
+  });
+  const applyResult = apply ? applyMigration(plan) : null;
+
+  if (json) {
+    process.stdout.write(formatMigrationReportJson(plan, applyResult));
+  } else {
+    process.stdout.write(formatMigrationReportText(plan, applyResult));
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -679,7 +775,8 @@ async function main(): Promise<void> {
     args.cmd !== 'lint' &&
     args.cmd !== 'stale' &&
     args.cmd !== 'test' &&
-    args.cmd !== 'eval'
+    args.cmd !== 'eval' &&
+    args.cmd !== 'migrate'
   ) {
     printHelp();
     process.exit(args.cmd === '' ? 0 : 1);
@@ -716,6 +813,18 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await runEval(goldenPath, dir, args.json);
+    return;
+  }
+
+  if (args.cmd === 'migrate') {
+    const dir = args.testDir ?? process.env.MEMORY_ROUTER_DIR;
+    if (!dir) {
+      process.stderr.write(
+        'error: --dir <path> or $MEMORY_ROUTER_DIR is required\n',
+      );
+      process.exit(1);
+    }
+    await runMigrate(dir, args.mappingPath, args.apply, args.json);
     return;
   }
 

@@ -278,6 +278,74 @@ memory-router tag ~/.claude/projects/PROJECT/memory --only feedback_stacked_pr_b
 
 Idempotent, re-running is a no-op on files already tagged. Existing frontmatter is preserved; only `topics` and `severity` are added when missing. `triggers.command_pattern` is never auto-generated (too risky); candidates are printed to stderr for manual review.
 
+### Migrating to schema v1 (`memory-router migrate`)
+
+`tag` above proposes `topics`/`severity` from a scored keyword match. `migrate` is narrower and more mechanical: it backfills a memory's frontmatter to schema v1 shape (`name`, `description`, top-level `type`, `topics: [...]` with at least one entry, `created`) from what's already on disk or in the filesystem, with **no LLM and no guessing** — whatever can't be derived mechanically stays untouched and is surfaced in the report instead of invented.
+
+```bash
+# Dry-run (default): prints what would change, per file, and a summary.
+memory-router migrate --dir ~/.claude/projects/PROJECT/memory
+
+# Commit the changes.
+memory-router migrate --dir ~/.claude/projects/PROJECT/memory --apply
+
+# With a curated topic-mapping file (see below).
+memory-router migrate --dir ~/.claude/projects/PROJECT/memory --mapping mapping.yml --apply
+
+# Machine-readable report.
+memory-router migrate --dir ~/.claude/projects/PROJECT/memory --json
+```
+
+Corpus dir resolution is the same as `test`/`eval`: `--dir` flag, then `$MEMORY_ROUTER_DIR`. Only `*.md` files are scanned; `MEMORY.md` and non-`.md` files (`topics.yml`, `golden.yml`, ...) are never touched. Three independent, additive-only rules, each of which **never overwrites an existing canonical value**:
+
+- **`type`**: hoists `metadata.type` (the Claude Code auto-memory location, see [Accepted frontmatter locations](#accepted-frontmatter-locations)) to top-level `type`, only when no valid top-level `type` already exists, and only when the value is one of the four known types. A file with no valid `type` at either location is left alone and reported under `missing type`.
+- **`topics`**: derives top-level `topics` from, in order: (1) a curated `--mapping` file, (2) a vocabulary pattern match (the same [topic vocabulary](#topic-vocabulary-topicsyml) the Topic Gate uses) against `name` + `description` **only**, never the body. Only runs when no non-empty top-level `topics` already exists. `metadata.topics` is deliberately never read as a source, since Claude Code auto-memory writes it unconstrained by any corpus vocabulary and this verb never guesses. No match at either step leaves the file untagged, reported under `untagged topics`.
+- **`created`**: stamped from the file's mtime, marked `# approx (mtime)` so it's visibly an approximation rather than a real authored date, only when no `created` key exists yet.
+
+Frontmatter is re-serialized with `yaml`'s Document API, which preserves existing key order/formatting and only appends new fields; bodies are never touched (byte-identical before/after, comments included). A file with nothing to change is never rewritten at all, which is what makes a second `migrate --apply` run a true no-op.
+
+**Mapping file format** (`--mapping <file>`), a curated fallback for memories no vocabulary pattern can classify — a top-level YAML list, first-rule-wins:
+
+```yaml
+# mapping.yml
+- prefix: "feedback_"
+  topics: [workflow]
+- id: "reference_codebase_oracle"
+  topics: [testing, workflow]
+```
+
+Each entry sets exactly one of `id` (exact memory id, i.e. filename without `.md`) or `prefix` (filename-prefix match), plus `topics` (a non-empty list of strings, used verbatim, not validated against the loaded vocabulary). An invalid or unreadable `--mapping` file is a setup error (exit 1), never silently ignored: a curated mapping the operator explicitly pointed at must not be quietly skipped over a typo.
+
+`--json` emits a stable, documented report:
+
+```jsonc
+{
+  "dir": "/path/to/memory",
+  "mapping": "mapping.yml",      // or null
+  "apply": false,                // true only under --apply
+  "files": [
+    {
+      "id": "feedback_example",
+      "path": "/path/to/memory/feedback_example.md",
+      "skipped": false,          // true for files that aren't valid memories at all (no frontmatter, missing `name`, ...)
+      "reason": null,
+      "changed": true,
+      "type": { "action": "set", "value": "feedback", "source": "metadata.type" },
+      "topics": { "action": "set", "value": ["deployment"], "source": "vocabulary-pattern" },
+      "created": { "action": "set", "value": "2026-08-13", "source": "mtime (approx)" }
+    }
+  ],
+  "summary": {
+    "total": 1, "changed": 1, "unchanged": 0, "skipped": 0,
+    "untaggedTopics": [], "missingType": [],
+    "applied": null,             // null in a dry run, a write count under --apply
+    "errored": []
+  }
+}
+```
+
+Each field's `action` is `"kept"` (already canonical, untouched), `"set"` (this run derived/would derive a value), or `"missing"` (nothing mechanically derivable; needs manual review). A report, not a gate, like `eval`: exits 0 on any error-free run regardless of how many files end up untagged.
+
 ### Building the embedding index
 
 The Confidence Gate's semantic match requires a one-time index build:
@@ -597,6 +665,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 - ✅ MCP server (`memory_search`, `memory_apply`, `memory_resolve`)
 - ✅ Lint surface (`drift`, `unknown-topics`, `conflicts`)
 - ✅ Stale detector (`stale --repo-root <path>` with `verify:` frontmatter contract)
+- ✅ Schema v1 migration (`migrate --dir <path> [--apply] [--mapping <file>]`, mm-v1-T006): mechanical, idempotent frontmatter backfill (hoist `metadata.type`, derive `topics` from a curated mapping + vocabulary pattern match, stamp `created` from mtime). No LLM, no guessing.
 - 🚧 Embedding pipeline, follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))
 
 ## Trust Model
