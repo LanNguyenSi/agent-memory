@@ -232,7 +232,7 @@ Exposes three tools:
 
 | Tool | Use |
 |------|-----|
-| `memory_search(query, k?)` | Raw semantic hits from the sqlite-vec index. Returns `[]` if the index is missing or `OPENAI_API_KEY` is unset. |
+| `memory_search(query, k?)` | Raw semantic hits from the sqlite-vec index. Returns `[]` if the index is missing or no embedding provider is configured/reachable (see "Embedding provider"). |
 | `memory_resolve(prompt, cwd?, tool?)` | Full router (topic + tool + confidence), same hit shape the UserPromptSubmit hook would inject. Confidence gate only runs when the sync gates miss. |
 | `memory_apply(id)` | Fetch the full body of a single memory by id (filename without extension). `isError: true` when the id doesn't exist. |
 
@@ -267,11 +267,32 @@ OPENAI_API_KEY=sk-... memory-router index ~/.claude/projects/PROJECT/memory
 ```
 
 - Stores embeddings under `<dir>/.memory-router/index.sqlite` via sqlite-vec (cosine distance).
-- Default model: `text-embedding-3-small` (1536 dim). Override with `MEMORY_ROUTER_EMBED_MODEL`.
 - Re-runs are incremental, unchanged files (by mtime) are skipped, removed files are purged.
-- If the key or index are missing, the Confidence Gate silently returns no hits; the Topic and Tool Gates still fire.
+- If no provider is configured/reachable, the Confidence Gate silently returns no hits; the Topic and Tool Gates still fire.
 
 The hook never builds the index inline, cold-start latency would block every prompt by seconds. Run `memory-router index` manually or wire it into a cron/agent-memory-sync post-sync step.
+
+#### Embedding provider
+
+The embedder is configurable, so the semantic path works on a machine with no OpenAI key:
+
+| Selection | How | Model default | Auth |
+| --- | --- | --- | --- |
+| Explicit OpenAI | `MEMORY_ROUTER_EMBED_PROVIDER=openai` | `text-embedding-3-small` | `OPENAI_API_KEY` |
+| Explicit Ollama | `MEMORY_ROUTER_EMBED_PROVIDER=ollama` | `nomic-embed-text` | none |
+| Auto-detect | unset | `OPENAI_API_KEY` present → OpenAI; otherwise → Ollama | as above |
+
+`MEMORY_ROUTER_EMBED_PROVIDER` is case-insensitive; an unrecognized value is treated as unset (falls through to auto-detect) rather than erroring. An explicit `openai` selection with no `OPENAI_API_KEY` fails open (same as today), it never silently substitutes Ollama.
+
+Overrides, both providers:
+
+- `MEMORY_ROUTER_EMBED_MODEL` — model name for whichever provider is active.
+- `OPENAI_BASE_URL` — OpenAI-compatible proxy base URL (OpenAI path only).
+- `MEMORY_ROUTER_OLLAMA_BASE_URL` — Ollama base URL, default `http://localhost:11434`. Ollama is queried through its OpenAI-compatible `/v1/embeddings` endpoint, unauthenticated.
+
+Embedding dimensionality is never hardcoded: it's read off the first real embed response and recorded in the index alongside the provider and model. An index queried under a different provider (or, rarely, a different dimensionality under the same provider) refuses to silently compare incompatible vector spaces — `memory-router index`/the Confidence Gate raise an error naming the exact rebuild command (`rm -rf <dir>/.memory-router && memory-router index <dir>`) instead of returning wrong neighbours. Switching `MEMORY_ROUTER_EMBED_MODEL` between two models of the *same* provider (e.g. two OpenAI models) is unaffected by this check — the existing per-memory model tag already excludes stale rows from a search, no rebuild required.
+
+Local Ollama setup: `ollama pull nomic-embed-text`, then run `ollama serve` (or use the app) before `memory-router index`/normal hook usage.
 
 #### Query-embedding cache
 
@@ -537,7 +558,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 
 - ✅ Topic Gate (deterministic keyword → topic map; built-in 5-topic default, corpus-overridable via `topics.yml`, see [Topic vocabulary](#topic-vocabulary-topicsyml))
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
-- ✅ Confidence Gate (ambiguity heuristic + sqlite-vec semantic search). Runs only when sync gates are silent; fails open if `OPENAI_API_KEY` is missing or the index is absent.
+- ✅ Confidence Gate (ambiguity heuristic + sqlite-vec semantic search, OpenAI or Ollama). Runs only when sync gates are silent; fails open if no provider is configured/reachable or the index is absent.
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract
 - ✅ MCP server (`memory_search`, `memory_apply`, `memory_resolve`)
 - ✅ Lint surface (`drift`, `unknown-topics`, `conflicts`)
