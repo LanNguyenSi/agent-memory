@@ -1,14 +1,15 @@
 // Topic-frontmatter linter.
 //
-// Memory-router has a closed set of topics in `topic-patterns.ts` (5 today —
-// `deployment`, `destructive_ops`, `workflow`, `security`, `testing`). Any
-// other value in a memory's `topics:` frontmatter is silently ignored at
-// runtime: the topic gate's `Set.has()` lookup misses, the memory never
-// matches, and the author has no signal that they typo'd. This linter reads
-// every memory in the configured dir and flags entries that reference an
-// unknown topic, suggesting the closest known topic when the Levenshtein
-// distance is small.
-const { TOPIC_PATTERNS } = require('../topic-patterns');
+// The valid topic set is loaded from `<dir>/topics.yml` when present,
+// otherwise it's the built-in 5-topic default in `topic-patterns.ts` (see
+// `src/vocab/loader.ts`). Any value in a memory's `topics:` frontmatter that
+// isn't in the loaded vocabulary is silently ignored at runtime: the topic
+// gate's `Set.has()` lookup misses, the memory never matches, and the
+// author has no signal that they typo'd. This linter reads every memory in
+// the configured dir and flags entries that reference an unknown topic,
+// suggesting the closest known topic when the Levenshtein distance is
+// small.
+const { loadVocabularyResult } = require('../vocab/loader');
 const { loadMemoriesFromDir } = require('../memory/loader');
 
 export interface UnknownTopicHit {
@@ -21,6 +22,13 @@ export interface UnknownTopicHit {
 export interface LintReport {
   hits: UnknownTopicHit[];
   scannedCount: number;
+  /**
+   * Set when `<dir>/topics.yml` exists but failed to load (YAML error,
+   * missing/duplicate `name`, bad field shape). The scan below still ran
+   * against the built-in default vocabulary in that case — never crashes,
+   * never silently succeeds either.
+   */
+  vocabularyError?: string | null;
 }
 
 const SUGGESTION_MAX_DISTANCE = 2;
@@ -69,7 +77,8 @@ function nearestKnownTopic(
 
 export function lintMemoryDirForUnknownTopics(dir: string): LintReport {
   const memories = loadMemoriesFromDir(dir);
-  const knownTopics = Object.keys(TOPIC_PATTERNS);
+  const { vocabulary, error: vocabularyError } = loadVocabularyResult(dir);
+  const knownTopics = vocabulary.topicNames;
   const knownSet = new Set<string>(knownTopics);
 
   const hits: UnknownTopicHit[] = [];
@@ -105,12 +114,18 @@ export function lintMemoryDirForUnknownTopics(dir: string): LintReport {
     }
   }
 
-  return { hits, scannedCount: memories.length };
+  return { hits, scannedCount: memories.length, vocabularyError };
 }
 
 export function formatReportText(report: LintReport): string {
+  // Surface an invalid topics.yml up front, even though the scan below
+  // still ran (against the built-in default) rather than aborting.
+  const prefix = report.vocabularyError
+    ? `memory-router lint: invalid topics.yml, falling back to the built-in default vocabulary\n  ${report.vocabularyError}\n\n`
+    : '';
+
   if (report.hits.length === 0) {
-    return `memory-router lint: ${report.scannedCount} memory file(s) scanned, no unknown topics found\n`;
+    return `${prefix}memory-router lint: ${report.scannedCount} memory file(s) scanned, no unknown topics found\n`;
   }
   const lines: string[] = [];
   for (const hit of report.hits) {
@@ -125,7 +140,7 @@ export function formatReportText(report: LintReport): string {
   lines.push(
     `memory-router lint: ${report.hits.length} unknown topic reference(s) across ${report.scannedCount} scanned memory file(s)`,
   );
-  return lines.join('\n') + '\n';
+  return prefix + lines.join('\n') + '\n';
 }
 
 module.exports = {

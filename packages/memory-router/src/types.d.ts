@@ -7,12 +7,14 @@
 declare global {
   type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
   type Severity = 'critical' | 'normal' | 'low';
-  type Topic =
-    | 'deployment'
-    | 'workflow'
-    | 'destructive_ops'
-    | 'security'
-    | 'testing';
+  /**
+   * No longer a closed union. The valid set of topics is corpus-controlled
+   * at runtime: the built-in 5-topic default in `topic-patterns.ts`, unless
+   * `<memoryDir>/topics.yml` overrides it (see `src/vocab/loader.ts`). A
+   * memory's `topics:` values are validated against the loaded vocabulary
+   * at match/lint time, not by the type system.
+   */
+  type Topic = string;
   type GateName = 'topic' | 'tool' | 'confidence';
 
   interface MemoryTriggers {

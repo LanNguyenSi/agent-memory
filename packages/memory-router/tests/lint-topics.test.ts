@@ -167,3 +167,96 @@ test('nearestKnownTopic returns closest within distance', () => {
   assert.equal(__nearestKnownTopic('tesing', KNOWN_TOPICS), 'testing');
   assert.equal(__nearestKnownTopic('workfow', KNOWN_TOPICS), 'workflow');
 });
+
+test('no topics.yml in dir: vocabularyError is null (default vocabulary, unchanged behavior)', () => {
+  const dir = makeTmpDir();
+  writeMemory(
+    dir,
+    'a.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics:\n  - workflow',
+  );
+  const report = lintMemoryDirForUnknownTopics(dir);
+  assert.equal(report.vocabularyError, null);
+  assert.equal(report.hits.length, 0);
+});
+
+test('custom topics.yml in dir: lints against the loaded vocabulary, not the built-in default', () => {
+  const dir = makeTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'topics.yml'),
+    "- name: incident_response\n  description: Outages.\n  patterns:\n    - '\\boutage\\b'\n",
+  );
+  writeMemory(
+    dir,
+    'custom-ok.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics:\n  - incident_response',
+  );
+  writeMemory(
+    dir,
+    'default-now-unknown.md',
+    'name: b\ndescription: x\ntype: feedback\ntopics:\n  - workflow',
+  );
+
+  const report = lintMemoryDirForUnknownTopics(dir);
+  assert.equal(report.vocabularyError, null);
+  // Known against the custom vocabulary: no hit.
+  assert.equal(
+    report.hits.find((h: any) => h.memoryId === 'custom-ok'),
+    undefined,
+  );
+  // 'workflow' is a built-in default topic but is not part of this custom
+  // vocabulary, so it is now unknown.
+  const unknownHit = report.hits.find(
+    (h: any) => h.memoryId === 'default-now-unknown',
+  );
+  assert.ok(unknownHit);
+  assert.equal(unknownHit?.unknownTopic, 'workflow');
+});
+
+test('custom topics.yml: Levenshtein suggestion works against the custom vocabulary', () => {
+  const dir = makeTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'topics.yml'),
+    "- name: incident_response\n  patterns:\n    - '\\boutage\\b'\n",
+  );
+  writeMemory(
+    dir,
+    'typo.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics:\n  - incident_resp0nse',
+  );
+  const report = lintMemoryDirForUnknownTopics(dir);
+  assert.equal(report.hits.length, 1);
+  assert.equal(report.hits[0].suggestion, 'incident_response');
+});
+
+test('broken topics.yml: vocabularyError is populated and the scan still runs against the built-in default', () => {
+  const dir = makeTmpDir();
+  fs.writeFileSync(path.join(dir, 'topics.yml'), '- name: [unterminated\n');
+  writeMemory(
+    dir,
+    'a.md',
+    'name: a\ndescription: x\ntype: feedback\ntopics:\n  - workflow',
+  );
+  writeMemory(
+    dir,
+    'b.md',
+    'name: b\ndescription: x\ntype: feedback\ntopics:\n  - not-a-real-topic',
+  );
+
+  const report = lintMemoryDirForUnknownTopics(dir);
+  assert.ok(report.vocabularyError && /topics\.yml/.test(report.vocabularyError));
+  // Fell back to the built-in default: 'workflow' is known, the other is not.
+  assert.equal(report.hits.length, 1);
+  assert.equal(report.hits[0].memoryId, 'b');
+});
+
+test('formatReportText: prefixes a clear vocabularyError line, then the normal report', () => {
+  const text = formatReportText({
+    hits: [],
+    scannedCount: 3,
+    vocabularyError: "topics.yml: YAML parse error: bad input",
+  });
+  assert.match(text, /invalid topics\.yml/);
+  assert.match(text, /YAML parse error/);
+  assert.match(text, /3 memory file/);
+});

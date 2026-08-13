@@ -117,6 +117,42 @@ All new fields are optional. Legacy memories still load and can fire via the Con
 
 Canonically, `type` and `topics` live top-level (as in the example above). Most real Claude Code auto-memories instead nest them under `metadata.` (in the reference corpus as of 2026-08, roughly 230 of 285 files carry only `metadata.type`). The loader accepts both locations; on conflict the top-level value wins. New tooling should write top-level. `type` must be one of `user`, `feedback`, `project`, `reference`: a file with an unknown or non-string type is skipped entirely (visible only with `MEMORY_ROUTER_DEBUG=1`), so a typo'd `type` removes that memory from all gates until `memory-router lint --drift` surfaces it.
 
+### Topic vocabulary (`topics.yml`)
+
+The Topic Gate's keyword → topic map ships a built-in 5-topic default (`deployment`, `destructive_ops`, `workflow`, `security`, `testing`, see `src/topic-patterns.ts`). A corpus can override it wholesale — replace, not merge — by dropping a `topics.yml` file at the root of `MEMORY_ROUTER_DIR`:
+
+```yaml
+# <MEMORY_ROUTER_DIR>/topics.yml
+- name: deployment
+  description: Deploys, releases, migrations, rollbacks.
+  patterns:
+    - '\bdeploy(?:ing|ed|ment)?\b'
+    - '\brelease\b'
+- name: incident_response
+  description: Production incidents, outages, on-call escalation.
+  patterns:
+    - '\bincident\b'
+    - '\boutage\b'
+```
+
+See `tests/fixtures/vocab/topics.yml` for a fuller worked example.
+
+Shape: a top-level list of `{ name, description?, patterns? }` entries.
+
+- `name` is required and must be unique across the file.
+- `description` is optional, documentation only — not matched against.
+- `patterns` is an optional list of regex strings, matched case-insensitively. A topic declared with no `patterns:` at all, or whose one pattern fails to compile, degrades to a keyword match on its own `name` rather than being dropped or crashing anything.
+
+Both the Topic Gate and `memory-router lint --unknown-topics` load and validate against whatever `topics.yml` resolves to:
+
+- **Missing file:** the built-in 5-topic default, unchanged.
+- **Present and valid:** the corpus vocabulary, corpus-wide, fully replacing the default — a memory tagged `security` under a custom vocabulary that doesn't declare a `security` entry will not match on that topic anymore.
+- **Present and invalid** (YAML error, missing/duplicate `name`, wrong field shape): rejected with a clear error message.
+  - The **Topic Gate** never crashes over it, it degrades silently to the built-in default — the `UserPromptSubmit` hook must never block a prompt over a broken corpus file. Set `MEMORY_ROUTER_DEBUG=1` to see the rejection reason on stderr.
+  - `memory-router lint --unknown-topics` also falls back to the built-in default for the scan itself, but prints the rejection reason at the top of its report instead of hiding it.
+
+`Topic` is a plain string at the type level — there is no compiled-in closed set left to extend in source. What counts as a known topic is resolved at load time against whichever vocabulary is active, not enforced by TypeScript.
+
 ### `verify:` stale-marker on recall
 
 A memory that names a concrete file, symbol, or flag is making a claim about the current repo state. Memories don't self-update: a file renamed or deleted leaves the memory silently wrong. When a matched memory has `verify:` entries and any `kind: path` entry no longer exists on disk, the router prefixes the memory's injected context with:
@@ -496,7 +532,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 
 **v1, scaffold.**
 
-- ✅ Topic Gate (deterministic keyword → topic map)
+- ✅ Topic Gate (deterministic keyword → topic map; built-in 5-topic default, corpus-overridable via `topics.yml` — see [Topic vocabulary](#topic-vocabulary-topicsyml))
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
 - ✅ Confidence Gate (ambiguity heuristic + sqlite-vec semantic search). Runs only when sync gates are silent; fails open if `OPENAI_API_KEY` is missing or the index is absent.
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract

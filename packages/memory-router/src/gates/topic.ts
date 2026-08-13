@@ -1,10 +1,22 @@
-const { matchedTopics } = require('../topic-patterns');
+const {
+  loadVocabulary,
+  matchedTopicsForVocabulary,
+} = require('../vocab/loader');
 
 const topicGate: Gate = {
   name: 'topic',
   evaluate(ctx: RouterContext, memories: Memory[]): GateHit[] {
     if (!ctx.prompt) return [];
-    const topics = new Set<Topic>(matchedTopics(ctx.prompt));
+    // The Gate interface has no memoryDir slot, and hooks/** (which set
+    // this env var before invoking us) is out of scope for this change —
+    // read it the same way mcp/server.ts and both hook binaries already do.
+    // loadVocabulary never throws: missing/invalid topics.yml degrades to
+    // the built-in default (see src/vocab/loader.ts) so a broken corpus
+    // file can never crash the UserPromptSubmit hook.
+    const vocabulary = loadVocabulary(process.env.MEMORY_ROUTER_DIR);
+    const topics = new Set<Topic>(
+      matchedTopicsForVocabulary(ctx.prompt, vocabulary),
+    );
     if (topics.size === 0) return [];
 
     const hits: GateHit[] = [];
