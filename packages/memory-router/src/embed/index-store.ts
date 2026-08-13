@@ -43,26 +43,40 @@
 //   not expose vec0 column widths).
 //   Provider-level mismatch (an index built under one provider, e.g.
 //   'openai', opened under a different one, e.g. 'ollama') throws
-//   immediately at open time when the caller passes `opts.meta` — different
-//   providers are never comparable regardless of dimensions. A same-
-//   provider MODEL NAME change (e.g. switching MEMORY_ROUTER_EMBED_MODEL
-//   between two OpenAI models) is deliberately NOT rejected here: the
-//   pre-existing v2 per-row `entries.model` tag + `expectedModel` filtering
-//   in getEmbedding/search already makes that safe by excluding stale rows
-//   from any cosine comparison, and tests/query-cache.test.ts already
-//   exercises + depends on that graceful (non-throwing) path. A genuine
-//   DIMENSION mismatch (impossible before this feature, since
-//   EMBED_DIMENSIONS was a single hardcoded constant) always throws — a
-//   width mismatch at the sqlite-vec layer is undefined behavior, so this
-//   fails loud with the exact rebuild command instead of risking silently
-//   wrong neighbours. `opts.meta`/the mismatch throw are opt-in via
-//   `opts.meta` being supplied: src/lint/conflicts.ts (forbidden to modify
+//   immediately at open time when the caller passes `opts.meta`, since
+//   different providers are never comparable regardless of dimensions. A
+//   store that has never recorded provenance (storedProvider === null:
+//   brand-new, or a pre-provenance-tracking legacy index) is NOT
+//   automatically assumed safe to stamp with the active config either: if
+//   it already has rows and any of them are tagged (or NULL-tagged, pre-v2)
+//   for a different model, open throws the same rebuild error instead of
+//   silently overwriting the store's real provenance with whatever happens
+//   to be active right now, see the "Legacy-index provenance guard" block
+//   below. A same-provider MODEL NAME change (e.g. switching
+//   MEMORY_ROUTER_EMBED_MODEL between two OpenAI models) is deliberately
+//   NOT rejected at open time: the pre-existing v2 per-row `entries.model`
+//   tag + `expectedModel` filtering in getEmbedding/search already makes
+//   that safe by excluding stale rows from any cosine comparison, and
+//   tests/query-cache.test.ts already exercises + depends on that graceful
+//   (non-throwing) path, PROVIDED the two models share a dimensionality. A
+//   genuine DIMENSION mismatch (impossible before this feature, since
+//   EMBED_DIMENSIONS was a single hardcoded constant) is not checked at
+//   open time at all: it is caught the moment it's actually acted on, by
+//   the plain `embedding.length`/`queryEmbedding.length` checks already
+//   inside `upsert`, `putCachedQuery` and `search` (a width mismatch at the
+//   sqlite-vec layer is undefined behavior, so those fail loud rather than
+//   risking silently wrong neighbours); those three throws append the
+//   exact rebuild command whenever the caller supplied
+//   `opts.rebuildCommand` (rebuildIndex/semanticSearch always do).
+//   `opts.meta` (the provider/legacy-index guards above) and
+//   `opts.rebuildCommand` (the dimension-throw suffix) are both opt-in via
+//   the caller supplying them: src/lint/conflicts.ts (forbidden to modify
 //   for this task) opens the index with a legacy hardcoded `dimensions`
-//   hint and no `opts.meta`; when that hint disagrees with a stored/
-//   physical dimension we already know, the REAL value wins silently
-//   (the hint is just ignored) rather than throwing, so that caller keeps
-//   working unmodified against a non-1536-dim (e.g. Ollama) index — see
-//   `EMBED_DIMENSIONS` in indexer.ts.
+//   hint and neither `opts.meta` nor `opts.rebuildCommand`; when that hint
+//   disagrees with a stored/physical dimension we already know, the REAL
+//   value wins silently (the hint is just ignored) rather than throwing, so
+//   that caller keeps working unmodified against a non-1536-dim (e.g.
+//   Ollama) index, see `EMBED_DIMENSIONS` in indexer.ts.
 
 const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
@@ -346,6 +360,22 @@ function openIndex(opts: IndexStoreOptions): {
     );
   }
 
+  // Appended to the raw dimension-mismatch throws in upsert/putCachedQuery/
+  // search below (the guards a same-provider, different-dimensionality
+  // model switch actually hits, see the module-level comment's "genuine
+  // DIMENSION mismatch" paragraph). Only when the caller supplied an exact
+  // `opts.rebuildCommand` (rebuildIndex/semanticSearch): a bare test-only
+  // caller (no rebuildCommand, no opts.meta, e.g. tests/index-store.test.ts
+  // constructing a store directly) keeps getting the original terse message
+  // unchanged, since a generic "delete the index file..." fallback hint
+  // wasn't part of that contract and several tests pin the exact original
+  // string.
+  function dimensionMismatchSuffix(): string {
+    return opts.rebuildCommand
+      ? ` Rebuild the index: ${opts.rebuildCommand}`
+      : '';
+  }
+
   // Provider-mismatch check (only enforced when the caller supplies
   // opts.meta — see module-level comment for why src/lint/conflicts.ts's
   // legacy call, which doesn't pass opts.meta, is exempt).
@@ -362,22 +392,35 @@ function openIndex(opts: IndexStoreOptions): {
     );
   }
 
-  // Dimension-mismatch check against a caller-supplied hint. Only enforced
-  // when opts.meta is present (rebuildIndex/semanticSearch); a bare hint
-  // with no opts.meta (src/lint/conflicts.ts's legacy EMBED_DIMENSIONS
-  // constant) is silently overridden by the real stored/physical value
-  // instead — see module-level comment.
-  if (
-    opts.meta &&
-    dimensions !== null &&
-    opts.dimensions !== undefined &&
-    opts.dimensions !== dimensions
-  ) {
-    throw new Error(
-      `embedding index at ${opts.path} was built with provider=${storedProvider ?? 'unknown'} model=${storedModel ?? 'unknown'} dimensions=${dimensions}; ` +
-        `current configuration is provider=${opts.meta.provider} model=${opts.meta.model} dimensions=${opts.dimensions}. ` +
-        `Comparing embeddings of different dimensions is unsafe. Rebuild the index: ${rebuildHint()}`,
-    );
+  // Legacy-index provenance guard: a store that has never recorded
+  // provenance (storedProvider === null) is either brand-new (rowCount 0,
+  // nothing to protect) or a pre-provenance-tracking index whose rows
+  // already carry a v2 `entries.model` tag (or NULL, pre-v2), the actual
+  // source of truth for what embedding space is on disk. recordProvenance()
+  // below must never blindly stamp the ACTIVE config onto such a store when
+  // its existing rows disagree with it: a later search would then trust a
+  // provenance meta row that lies about what's actually indexed. Only
+  // reachable when opts.meta is supplied (rebuildIndex/semanticSearch);
+  // src/lint/conflicts.ts's legacy call (no opts.meta) is exempt, same as
+  // the provider-mismatch check above.
+  if (opts.meta && storedProvider === null) {
+    const { n: rowCount } = db
+      .prepare('SELECT COUNT(*) AS n FROM entries')
+      .get() as { n: number };
+    if (rowCount > 0) {
+      const { n: mismatched } = db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM entries WHERE model IS NULL OR model != ?',
+        )
+        .get(opts.meta.model) as { n: number };
+      if (mismatched > 0) {
+        throw new Error(
+          `embedding index at ${opts.path} has ${mismatched} existing entr(y/ies) not tagged for model=${opts.meta.model} (provider=${opts.meta.provider})` +
+            `${dimensions !== null ? ` (dimensions=${dimensions})` : ''}; the index predates provider/model provenance ` +
+            `tracking and its rows belong to a different embedding space. Rebuild the index: ${rebuildHint()}`,
+        );
+      }
+    }
   }
 
   if (dimensions === null && opts.dimensions !== undefined) {
@@ -519,7 +562,7 @@ function openIndex(opts: IndexStoreOptions): {
       recordProvenance(dimensions);
     } else if (embedding.length !== dimensions) {
       throw new Error(
-        `embedding dimension ${embedding.length} != index dimension ${dimensions}`,
+        `embedding dimension ${embedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
     upsertTx(id, mtime, model, toBlob(embedding));
@@ -662,7 +705,7 @@ function openIndex(opts: IndexStoreOptions): {
     if (!cacheModel || cacheCapacity <= 0) return;
     if (dimensions !== null && embedding.length !== dimensions) {
       throw new Error(
-        `cached embedding dimension ${embedding.length} != index dimension ${dimensions}`,
+        `cached embedding dimension ${embedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
     putCachedQueryTx(
@@ -690,7 +733,7 @@ function openIndex(opts: IndexStoreOptions): {
     if (dimensions === null) return []; // nothing has ever been embedded
     if (queryEmbedding.length !== dimensions) {
       throw new Error(
-        `query dimension ${queryEmbedding.length} != index dimension ${dimensions}`,
+        `query dimension ${queryEmbedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
     const rows = searchStmtLazy().all(toBlob(queryEmbedding), k) as {

@@ -47,6 +47,7 @@ const ENV_KEYS = [
   'MEMORY_ROUTER_EMBED_PROVIDER',
   'MEMORY_ROUTER_EMBED_MODEL',
   'MEMORY_ROUTER_OLLAMA_BASE_URL',
+  'MEMORY_ROUTER_OLLAMA_EMBED_MODEL',
 ] as const;
 
 function withEnv(
@@ -187,6 +188,72 @@ test('resolveProviderConfig: an unrecognized MEMORY_ROUTER_EMBED_PROVIDER value 
       'ollama',
     );
   });
+});
+
+test('resolveProviderConfig: MEMORY_ROUTER_EMBED_PROVIDER normalization tolerates surrounding whitespace and mixed case', () => {
+  withEnv(
+    { MEMORY_ROUTER_EMBED_PROVIDER: '  OpenAI  ', OPENAI_API_KEY: 'sk-test' },
+    () => {
+      assert.equal(resolveProviderConfig()?.provider, 'openai');
+    },
+  );
+  withEnv({ MEMORY_ROUTER_EMBED_PROVIDER: '\tOllama\n' }, () => {
+    assert.equal(resolveProviderConfig()?.provider, 'ollama');
+  });
+});
+
+// ---------------------------------------------------------------------
+// Model-env precedence (mm-v1-T003 fix-round MEDIUM #5): a stray
+// MEMORY_ROUTER_EMBED_MODEL left in the environment for OpenAI must not
+// silently misroute an auto-detected Ollama config. MEMORY_ROUTER_
+// OLLAMA_EMBED_MODEL is the Ollama-specific override for that path;
+// explicit ollama selection keeps honoring the generic var (deliberate
+// user choice), see README "Embedding provider" precedence table.
+// ---------------------------------------------------------------------
+
+test('resolveProviderConfig: auto-detected ollama honors MEMORY_ROUTER_OLLAMA_EMBED_MODEL over a stray MEMORY_ROUTER_EMBED_MODEL', () => {
+  withEnv(
+    {
+      // Almost certainly set for OpenAI, not Ollama.
+      MEMORY_ROUTER_EMBED_MODEL: 'text-embedding-3-large',
+      MEMORY_ROUTER_OLLAMA_EMBED_MODEL: 'mxbai-embed-large',
+    },
+    () => {
+      const cfg = resolveProviderConfig({ autoDetectOllama: true });
+      assert.equal(cfg?.provider, 'ollama');
+      assert.equal(cfg?.model, 'mxbai-embed-large');
+    },
+  );
+});
+
+test('resolveProviderConfig: auto-detected ollama ignores MEMORY_ROUTER_EMBED_MODEL entirely, falling back to the ollama default', () => {
+  withEnv({ MEMORY_ROUTER_EMBED_MODEL: 'text-embedding-3-small' }, () => {
+    const cfg = resolveProviderConfig({ autoDetectOllama: true });
+    assert.equal(cfg?.provider, 'ollama');
+    assert.equal(
+      cfg?.model,
+      'nomic-embed-text',
+      'MEMORY_ROUTER_EMBED_MODEL was almost certainly set for OpenAI; the auto-detected ollama path must not pick it up',
+    );
+  });
+});
+
+test('resolveProviderConfig: explicit ollama selection still honors the generic MEMORY_ROUTER_EMBED_MODEL, unaffected by MEMORY_ROUTER_OLLAMA_EMBED_MODEL', () => {
+  withEnv(
+    {
+      MEMORY_ROUTER_EMBED_PROVIDER: 'ollama',
+      MEMORY_ROUTER_EMBED_MODEL: 'a-deliberately-chosen-model',
+      MEMORY_ROUTER_OLLAMA_EMBED_MODEL: 'should-not-win-here',
+    },
+    () => {
+      const cfg = resolveProviderConfig();
+      assert.equal(
+        cfg?.model,
+        'a-deliberately-chosen-model',
+        'explicit provider selection is a deliberate user choice; the generic var keeps winning',
+      );
+    },
+  );
 });
 
 test('resolveProviderConfig is synchronous: returns a plain value, not a Promise', () => {
@@ -401,10 +468,14 @@ test('rebuildIndex: switching provider against an existing index throws with the
           assert.match(err.message, /provider=openai/);
           assert.match(err.message, /provider=ollama/);
           assert.match(err.message, /rm -rf/);
+          // Fix-round MEDIUM #3: both paths in the rebuild command are
+          // shell single-quoted (see shellSingleQuote in indexer.ts), so
+          // the dir must appear wrapped in literal single quotes here, not
+          // bare.
           assert.match(
             err.message,
             new RegExp(
-              `memory-router index ${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+              `memory-router index '${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`,
             ),
           );
           return true;
@@ -443,6 +514,291 @@ test('semanticSearch: switching provider against an existing index throws instea
     });
   } finally {
     (globalThis as { fetch?: typeof fetch }).fetch = noFetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------
+// rebuildCommandFor shell-quoting (mm-v1-T003 fix-round MEDIUM #3): a
+// memoryDir containing a space must not corrupt the printed remediation
+// command. Exercised indirectly (rebuildCommandFor isn't exported) through
+// the same provider-mismatch error path as the tests above.
+// ---------------------------------------------------------------------
+
+test('rebuild command in a provider-mismatch error shell-quotes a memoryDir containing a space', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-space-'));
+  const dir = path.join(base, 'has space');
+  fs.mkdirSync(dir);
+  for (const f of fs.readdirSync(FIXTURES_DIR)) {
+    fs.copyFileSync(path.join(FIXTURES_DIR, f), path.join(dir, f));
+  }
+
+  const openaiStub = stubFetchWithDimensions(4);
+  try {
+    await withEnv(
+      { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test' },
+      async () => {
+        const first = await rebuildIndex(dir);
+        assert.ok(first.embedded > 0);
+      },
+    );
+  } finally {
+    openaiStub.restore();
+  }
+
+  const noFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+  (globalThis as { fetch?: typeof fetch }).fetch = undefined;
+  try {
+    await withEnv({ MEMORY_ROUTER_EMBED_PROVIDER: 'ollama' }, async () => {
+      const escaped = dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      await assert.rejects(
+        () => rebuildIndex(dir),
+        (err: Error) => {
+          assert.match(
+            err.message,
+            new RegExp(`rm -rf '${escaped}/\\.memory-router'`),
+            'the index dir (which itself contains the space) must be single-quoted',
+          );
+          assert.match(
+            err.message,
+            new RegExp(`memory-router index '${escaped}'`),
+            'the memory dir must be single-quoted',
+          );
+          return true;
+        },
+      );
+    });
+  } finally {
+    (globalThis as { fetch?: typeof fetch }).fetch = noFetch;
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------
+// Friendly embed errors (mm-v1-T003 fix-round MEDIUM #6): an embedBatch
+// failure surfacing through rebuildIndex/semanticSearch is enriched with
+// the resolved provider/baseUrl/model, plus an ollama-specific
+// `ollama serve` / `ollama pull <model>` hint.
+// ---------------------------------------------------------------------
+
+test('rebuildIndex: an embedBatch failure is enriched with provider/baseUrl/model and an ollama-specific hint', async () => {
+  const dir = tmpMemoryDir();
+  const orig = (globalThis as { fetch?: typeof fetch }).fetch;
+  (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+    throw new TypeError('fetch failed: ECONNREFUSED');
+  }) as unknown as typeof fetch;
+  try {
+    await withEnv({ MEMORY_ROUTER_EMBED_PROVIDER: 'ollama' }, async () => {
+      await assert.rejects(
+        () => rebuildIndex(dir),
+        (err: Error) => {
+          assert.match(err.message, /provider=ollama/);
+          assert.match(err.message, /baseUrl=http:\/\/localhost:11434/);
+          assert.match(err.message, /model=nomic-embed-text/);
+          assert.match(err.message, /ollama serve/);
+          assert.match(err.message, /ollama pull nomic-embed-text/);
+          assert.match(err.message, /ECONNREFUSED/);
+          return true;
+        },
+      );
+    });
+  } finally {
+    if (orig) (globalThis as { fetch: typeof fetch }).fetch = orig;
+    else delete (globalThis as { fetch?: typeof fetch }).fetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('rebuildIndex: an embedBatch failure under openai is enriched with provider/baseUrl/model, no ollama hint', async () => {
+  const dir = tmpMemoryDir();
+  const orig = (globalThis as { fetch?: typeof fetch }).fetch;
+  (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+    throw new TypeError('fetch failed: ENOTFOUND');
+  }) as unknown as typeof fetch;
+  try {
+    await withEnv(
+      { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test' },
+      async () => {
+        await assert.rejects(
+          () => rebuildIndex(dir),
+          (err: Error) => {
+            assert.match(err.message, /provider=openai/);
+            assert.match(err.message, /model=text-embedding-3-small/);
+            assert.doesNotMatch(err.message, /ollama serve/);
+            assert.match(err.message, /ENOTFOUND/);
+            return true;
+          },
+        );
+      },
+    );
+  } finally {
+    if (orig) (globalThis as { fetch: typeof fetch }).fetch = orig;
+    else delete (globalThis as { fetch?: typeof fetch }).fetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------
+// Real, reachable dimension mismatch (mm-v1-T003 fix-round MEDIUM #4): a
+// same-provider model switch to a DIFFERENT dimensionality must throw
+// through the actual upsert()/putCachedQuery() guards, WITH the rebuild
+// command attached (opts.rebuildCommand is always set by rebuildIndex/
+// semanticSearch), not the removed dead opts.dimensions-vs-opts.meta
+// branch in index-store.ts, which no real caller ever reached. Before this
+// fix round the dimension check threw a bare "dimension X != index
+// dimension Y" with no rebuild hint, a mutation-survivor gap: nothing
+// asserted the hint text was present.
+// ---------------------------------------------------------------------
+
+test('rebuildIndex: a same-provider dimension switch throws WITH the rebuild command (real upsert() guard)', async () => {
+  const dir = tmpMemoryDir();
+  const stub4 = stubFetchWithDimensions(4);
+  try {
+    await withEnv(
+      { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test' },
+      async () => {
+        const first = await rebuildIndex(dir);
+        assert.ok(first.embedded > 0);
+      },
+    );
+  } finally {
+    stub4.restore();
+  }
+
+  // Touch every fixture file's mtime forward so the next rebuildIndex call
+  // re-embeds all of them under the new (different-dimension) response
+  // instead of skipping them as unchanged.
+  const future = new Date(Date.now() + 60_000);
+  for (const f of fs.readdirSync(dir)) {
+    fs.utimesSync(path.join(dir, f), future, future);
+  }
+
+  const stub8 = stubFetchWithDimensions(8);
+  try {
+    await withEnv(
+      { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test' },
+      async () => {
+        await assert.rejects(
+          () => rebuildIndex(dir),
+          (err: Error) => {
+            assert.match(err.message, /embedding dimension 8 != index dimension 4/);
+            assert.match(
+              err.message,
+              /Rebuild the index: rm -rf/,
+              'the real upsert() guard must include the rebuild command, not just the bare dimension message',
+            );
+            return true;
+          },
+        );
+      },
+    );
+  } finally {
+    stub8.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('semanticSearch: a same-provider dimension switch on the query path throws WITH the rebuild command (real putCachedQuery()/search() guard)', async () => {
+  const dir = tmpMemoryDir();
+  const stub4 = stubFetchWithDimensions(4);
+  try {
+    await withEnv(
+      { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test' },
+      async () => {
+        const first = await rebuildIndex(dir);
+        assert.ok(first.embedded > 0);
+      },
+    );
+  } finally {
+    stub4.restore();
+  }
+
+  const stub8 = stubFetchWithDimensions(8);
+  try {
+    await withEnv(
+      { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test' },
+      async () => {
+        await assert.rejects(
+          () => semanticSearch('a query under the new dimension', [], dir, 5),
+          (err: Error) => {
+            assert.match(err.message, /dimension 8 != index dimension 4/);
+            assert.match(
+              err.message,
+              /Rebuild the index: rm -rf/,
+              'the real query-path guard must include the rebuild command, not just the bare dimension message',
+            );
+            return true;
+          },
+        );
+      },
+    );
+  } finally {
+    stub8.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------
+// Missing test from review (mm-v1-T003 fix-round #10): end-to-end
+// auto-detect at the indexer level, empty env (no explicit provider, no
+// OPENAI_API_KEY), proves rebuildIndex/semanticSearch actually route
+// through the local Ollama config, not just resolveProviderConfig() in
+// isolation.
+// ---------------------------------------------------------------------
+
+test('rebuildIndex + semanticSearch: auto-detect end-to-end (empty env) resolves to and actually uses a local Ollama config', async () => {
+  const dir = tmpMemoryDir();
+  const orig = (globalThis as { fetch?: typeof fetch }).fetch;
+  const calls: { url: string; hadAuth: boolean; model: string }[] = [];
+  (globalThis as { fetch: typeof fetch }).fetch = (async (
+    url: string,
+    init?: { headers?: Record<string, string>; body?: string },
+  ) => {
+    const body = JSON.parse(init?.body ?? '{}') as {
+      model: string;
+      input: string[];
+    };
+    calls.push({
+      url,
+      hadAuth: !!(init?.headers && 'Authorization' in init.headers),
+      model: body.model,
+    });
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({
+        data: body.input.map((_t, index) => ({
+          embedding: [0.1, 0.2, 0.3],
+          index,
+        })),
+      }),
+      text: async () => '',
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  try {
+    await withEnv({}, async () => {
+      const result = await rebuildIndex(dir);
+      assert.ok(
+        result.embedded > 0,
+        'auto-detected ollama should embed, not fail open',
+      );
+      assert.equal(result.reason, undefined);
+
+      const hits = await semanticSearch('anything', [], dir, 5);
+      assert.deepEqual(hits, []);
+    });
+
+    assert.ok(calls.length > 0, 'at least one embed call must have happened');
+    for (const call of calls) {
+      assert.equal(call.url, 'http://localhost:11434/v1/embeddings');
+      assert.equal(call.hadAuth, false, 'ollama takes no auth');
+      assert.equal(call.model, 'nomic-embed-text');
+    }
+  } finally {
+    if (orig) (globalThis as { fetch: typeof fetch }).fetch = orig;
+    else delete (globalThis as { fetch?: typeof fetch }).fetch;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

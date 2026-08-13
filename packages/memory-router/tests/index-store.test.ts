@@ -400,3 +400,177 @@ test('dimension mismatch on upsert or search throws', () => {
     fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
   }
 });
+
+// mm-v1-T003 fix-round MEDIUM #4: the real, reachable dimension-mismatch
+// guards (upsert/putCachedQuery/search) append the exact rebuild command
+// when the caller supplied opts.rebuildCommand (rebuildIndex/semanticSearch
+// always do); a bare caller without it (like the test right above this
+// one) keeps the original terse message, unchanged.
+test('dimension mismatch on upsert/search/putCachedQuery includes the rebuild command when opts.rebuildCommand is set', () => {
+  const dbPath = tmpDb();
+  const store = openIndex({
+    path: dbPath,
+    dimensions: 3,
+    rebuildCommand: 'rm -rf /fake/.memory-router && memory-router index /fake',
+    cache: { model: M, capacity: 10 },
+  });
+  try {
+    assert.throws(
+      () => store.upsert('bad', 100, M, [1, 0]),
+      /dimension 2 != index dimension 3.*Rebuild the index: rm -rf \/fake\/\.memory-router/s,
+    );
+    assert.throws(
+      () => store.search([1, 0], 1),
+      /dimension 2 != index dimension 3.*Rebuild the index: rm -rf \/fake\/\.memory-router/s,
+    );
+    assert.throws(
+      () => store.putCachedQuery('a prompt', [1, 0]),
+      /cached embedding dimension 2 != index dimension 3.*Rebuild the index: rm -rf \/fake\/\.memory-router/s,
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+// mm-v1-T003 fix-round MEDIUM #4: the stored-vs-physical internal
+// consistency check (never exercised by any test before this fix round).
+// A corrupted `embed_dimensions` meta row that disagrees with the actual
+// on-disk FLOAT[N] vec0 table must throw a clear "internally inconsistent"
+// error rather than silently trusting either value.
+test('stored vs physical dimension mismatch (corrupted meta row) throws a clear internal-inconsistency error', () => {
+  const dbPath = tmpDb();
+  const seed = openIndex({ path: dbPath, dimensions: 3 });
+  seed.upsert('a', 100, M, [1, 0, 0]);
+  seed.close();
+
+  const raw = new Database(dbPath);
+  raw.prepare("UPDATE meta SET value = '5' WHERE key = 'embed_dimensions'").run();
+  raw.close();
+
+  assert.throws(
+    () => openIndex({ path: dbPath, dimensions: 3 }),
+    /internally inconsistent.*recorded dimensions=5.*FLOAT\[3\]/s,
+  );
+  fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+});
+
+// mm-v1-T003 fix-round HIGH #2: a store that has never recorded provenance
+// (storedProvider === null) is either brand-new or a legacy,
+// pre-provenance-tracking index whose rows already carry a real model tag.
+// openIndex must never blindly stamp the ACTIVE config onto such a store
+// when its existing rows disagree with it: it must throw the same
+// rebuild-command error the provider-mismatch branch uses, and must NOT
+// write a (false) embed_provider row before throwing.
+test('legacy index (no embed_* provenance meta) with rows under a different model throws a rebuild error and never stamps a false embed_provider', () => {
+  const dbPath = tmpDb();
+  // Build a v2-schema file the way it would have looked BEFORE mm-v1-T003
+  // added provenance tracking: a real FLOAT[1536] vec table + entries.model
+  // populated (both pre-existing since the 0.2.0 v1->v2 migration), but no
+  // embed_provider/embed_model/embed_dimensions meta rows at all.
+  const raw = new Database(dbPath);
+  sqliteVec.load(raw);
+  raw.exec(`
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO meta (key, value) VALUES ('schema_version', '2');
+    CREATE TABLE entries (id TEXT PRIMARY KEY, mtime INTEGER NOT NULL, model TEXT);
+    CREATE VIRTUAL TABLE vec USING vec0(embedding FLOAT[1536] distance_metric=cosine);
+  `);
+  raw
+    .prepare('INSERT INTO entries (id, mtime, model) VALUES (?, ?, ?)')
+    .run('legacy-a', 100, 'text-embedding-3-small');
+  const rowid = (
+    raw.prepare('SELECT rowid FROM entries WHERE id = ?').get('legacy-a') as {
+      rowid: number;
+    }
+  ).rowid;
+  const blob = Buffer.from(new Float32Array(1536).fill(0.1).buffer);
+  raw
+    .prepare('INSERT INTO vec (rowid, embedding) VALUES (?, ?)')
+    .run(BigInt(rowid), blob);
+  raw.close();
+
+  assert.throws(
+    () =>
+      openIndex({
+        path: dbPath,
+        meta: { provider: 'ollama', model: 'nomic-embed-text' },
+        rebuildCommand: 'rm -rf /fake/.memory-router && memory-router index /fake',
+      }),
+    /has 1 existing entr\(y\/ies\) not tagged for model=nomic-embed-text.*Rebuild the index: rm -rf/s,
+  );
+
+  // The throw must happen BEFORE recordProvenance ever runs: no
+  // embed_provider row should have been written.
+  const check = new Database(dbPath);
+  try {
+    const row = check
+      .prepare("SELECT value FROM meta WHERE key = 'embed_provider'")
+      .get() as { value: string } | undefined;
+    assert.equal(
+      row,
+      undefined,
+      'a legacy index must not get a false embed_provider stamp on a failed open',
+    );
+  } finally {
+    check.close();
+  }
+
+  fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+});
+
+// Companion to the throwing case above: a legacy index whose existing rows
+// DO already match the active model is safe to adopt going forward, it
+// gets stamped with provenance now rather than being forced into a
+// spurious rebuild.
+test('legacy index (no embed_* provenance meta) whose rows already match the active model is adopted, not rejected', () => {
+  const dbPath = tmpDb();
+  const raw = new Database(dbPath);
+  sqliteVec.load(raw);
+  raw.exec(`
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO meta (key, value) VALUES ('schema_version', '2');
+    CREATE TABLE entries (id TEXT PRIMARY KEY, mtime INTEGER NOT NULL, model TEXT);
+    CREATE VIRTUAL TABLE vec USING vec0(embedding FLOAT[3] distance_metric=cosine);
+  `);
+  raw
+    .prepare('INSERT INTO entries (id, mtime, model) VALUES (?, ?, ?)')
+    .run('legacy-a', 100, 'nomic-embed-text');
+  const rowid = (
+    raw.prepare('SELECT rowid FROM entries WHERE id = ?').get('legacy-a') as {
+      rowid: number;
+    }
+  ).rowid;
+  const blob = Buffer.from(new Float32Array([0.1, 0.2, 0.3]).buffer);
+  raw
+    .prepare('INSERT INTO vec (rowid, embedding) VALUES (?, ?)')
+    .run(BigInt(rowid), blob);
+  raw.close();
+
+  const store = openIndex({
+    path: dbPath,
+    meta: { provider: 'ollama', model: 'nomic-embed-text' },
+    rebuildCommand: 'rm -rf /fake/.memory-router && memory-router index /fake',
+  });
+  try {
+    assert.deepEqual(store.getEmbedding('legacy-a'), [
+      Math.fround(0.1),
+      Math.fround(0.2),
+      Math.fround(0.3),
+    ]);
+  } finally {
+    store.close();
+  }
+
+  const check = new Database(dbPath);
+  try {
+    const row = check
+      .prepare("SELECT value FROM meta WHERE key = 'embed_provider'")
+      .get() as { value: string } | undefined;
+    assert.equal(row?.value, 'ollama', 'matching legacy rows get adopted and stamped');
+  } finally {
+    check.close();
+  }
+
+  fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+});

@@ -78,3 +78,47 @@ test('semanticSearch returns [] when index file is missing', async () => {
     else process.env.OPENAI_API_KEY = prev;
   }
 });
+
+// mm-v1-T003 fix-round LOW #7: the "embedding index missing" stderr
+// warning is a module-level once-per-process flag, not once-per-call: a
+// long-lived caller (e.g. the MCP server) hitting semanticSearch many
+// times per session over a still-missing index must not spam stderr on
+// every single call. The test right above this one already proves the
+// warning fires (module state persists per test FILE, i.e. per process, in
+// Node's test runner, and that test runs first in this file); by this
+// point in the file the module-level flag is guaranteed already set, so
+// two more calls here, even against a brand-new, never-before-seen dir,
+// must both stay silent.
+test('semanticSearch: "index missing" stderr warning fires at most once per process (module-level flag), not once per call', async () => {
+  const prev = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'sk-test-not-real';
+  try {
+    const dir = tmpDir();
+    const origWrite = process.stderr.write.bind(process.stderr);
+    let stderrCaptured = '';
+    (process.stderr as unknown as { write: typeof origWrite }).write = ((
+      chunk: string | Uint8Array,
+    ) => {
+      stderrCaptured += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof origWrite;
+    try {
+      await semanticSearch('first call in this test', [], dir, 5);
+      await semanticSearch('second call in this test', [], dir, 5);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    const occurrences = (
+      stderrCaptured.match(/embedding index missing/g) ?? []
+    ).length;
+    assert.equal(
+      occurrences,
+      0,
+      'the module-level flag already fired once earlier in this process (see the test above); later calls must stay silent',
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+  } finally {
+    if (prev === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = prev;
+  }
+});

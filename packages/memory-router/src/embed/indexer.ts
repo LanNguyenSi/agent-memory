@@ -20,11 +20,55 @@ const EMBED_DIMENSIONS = 1536;
 const INDEX_SUBDIR = '.memory-router';
 const INDEX_FILENAME = 'index.sqlite';
 
+// Shell single-quotes a value for safe interpolation into the
+// rebuildCommand string below (embedded single quotes are escaped via the
+// standard '\'' idiom: close the quote, emit an escaped quote, reopen).
+// Without this, a memoryDir containing a space or another shell
+// metacharacter would turn the printed remediation command into something
+// that either fails outright or, worse, silently `rm -rf`s the wrong path
+// if a user copy-pastes it.
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 // Exact remediation text for an index built under a different
 // provider/model/dimensions than the current configuration — see
 // index-store.ts's provenance mismatch errors.
 function rebuildCommandFor(memoryDir: string): string {
-  return `rm -rf ${join(memoryDir, INDEX_SUBDIR)} && memory-router index ${memoryDir}`;
+  const indexDir = join(memoryDir, INDEX_SUBDIR);
+  return `rm -rf ${shellSingleQuote(indexDir)} && memory-router index ${shellSingleQuote(memoryDir)}`;
+}
+
+// Warned at most once per process (a long-lived caller, e.g. the MCP
+// server, can call semanticSearch many times per session): repeating this
+// on every single missing-index call would just be stderr noise once the
+// user has already seen the hint. Module-level flag, same
+// once-per-process shape as the intent already documented (see
+// semanticSearch below) for the stale-model warning.
+let missingIndexWarned = false;
+
+// Enriches an embedBatch() failure (a raw fetch/HTTP error) with the
+// resolved provider + baseUrl the call was actually made against, so a
+// user staring at "fetch failed" or a bare timeout knows WHICH endpoint
+// misbehaved instead of guessing between OpenAI and a local Ollama daemon.
+// For ollama specifically, folds in the two most common fixes verbatim
+// from README "Embedding provider" (`ollama serve`, `ollama pull
+// <model>`) since an unreachable/missing-model local daemon is the
+// overwhelmingly likely cause on that path.
+function describeEmbedError(
+  err: unknown,
+  cfg: { provider: string; baseUrl?: string; model: string },
+): Error {
+  const causeMessage = err instanceof Error ? err.message : String(err);
+  const parts = [
+    `embedding call failed (provider=${cfg.provider} baseUrl=${cfg.baseUrl ?? 'default'} model=${cfg.model}): ${causeMessage}`,
+  ];
+  if (cfg.provider === 'ollama') {
+    parts.push(
+      `If this is a local Ollama daemon: run \`ollama serve\` (or start the app) and \`ollama pull ${cfg.model}\` if the model isn't downloaded yet.`,
+    );
+  }
+  return new Error(parts.join(' '));
 }
 
 // Hard cap on the query-embedding cache. Evicts oldest by `accessed_at`
@@ -68,7 +112,8 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
       embedded: 0,
       removed: 0,
       skipped: 0,
-      reason: 'OPENAI_API_KEY not set — confidence gate will remain silent',
+      reason:
+        'MEMORY_ROUTER_EMBED_PROVIDER=openai selected but OPENAI_API_KEY is not set - confidence gate will remain silent',
     };
   }
 
@@ -117,12 +162,17 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
     let embedded = 0;
     for (let i = 0; i < toEmbed.length; i += BATCH) {
       const batch = toEmbed.slice(i, i + BATCH);
-      const vectors = await embedBatch({
-        apiKey: cfg.apiKey,
-        model: cfg.model,
-        baseUrl: cfg.baseUrl,
-        inputs: batch.map((b) => buildEmbedInput(b.memory)),
-      });
+      let vectors: number[][];
+      try {
+        vectors = await embedBatch({
+          apiKey: cfg.apiKey,
+          model: cfg.model,
+          baseUrl: cfg.baseUrl,
+          inputs: batch.map((b) => buildEmbedInput(b.memory)),
+        });
+      } catch (err) {
+        throw describeEmbedError(err, cfg);
+      }
       for (let j = 0; j < batch.length; j++) {
         store.upsert(batch[j].memory.id, batch[j].mtime, cfg.model, vectors[j]);
         embedded++;
@@ -151,9 +201,12 @@ async function semanticSearch(
 
   const idx = indexPath(memoryDir);
   if (!existsSync(idx)) {
-    process.stderr.write(
-      'memory-router: embedding index missing — run `memory-router index <dir>` to build it.\n',
-    );
+    if (!missingIndexWarned) {
+      missingIndexWarned = true;
+      process.stderr.write(
+        'memory-router: embedding index missing — run `memory-router index <dir>` to build it.\n',
+      );
+    }
     return [];
   }
 
@@ -180,12 +233,16 @@ async function semanticSearch(
       debug(`query cache hit (size=${store.cacheSize()})`);
     } else {
       debug(`query cache miss — embedding (size=${store.cacheSize()})`);
-      [queryVec] = await embedBatch({
-        apiKey: cfg.apiKey,
-        model: cfg.model,
-        baseUrl: cfg.baseUrl,
-        inputs: [prompt],
-      });
+      try {
+        [queryVec] = await embedBatch({
+          apiKey: cfg.apiKey,
+          model: cfg.model,
+          baseUrl: cfg.baseUrl,
+          inputs: [prompt],
+        });
+      } catch (err) {
+        throw describeEmbedError(err, cfg);
+      }
       store.putCachedQuery(prompt, queryVec);
     }
     const hits = store.search(queryVec, k, cfg.model);

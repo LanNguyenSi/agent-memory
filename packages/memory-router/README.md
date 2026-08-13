@@ -282,15 +282,26 @@ The embedder is configurable, so the semantic path works on a machine with no Op
 | Explicit Ollama | `MEMORY_ROUTER_EMBED_PROVIDER=ollama` | `nomic-embed-text` | none |
 | Auto-detect | unset | `OPENAI_API_KEY` present → OpenAI; otherwise → Ollama | as above |
 
-`MEMORY_ROUTER_EMBED_PROVIDER` is case-insensitive; an unrecognized value is treated as unset (falls through to auto-detect) rather than erroring. An explicit `openai` selection with no `OPENAI_API_KEY` fails open (same as today), it never silently substitutes Ollama.
+`MEMORY_ROUTER_EMBED_PROVIDER` is case-insensitive and tolerates surrounding whitespace; an unrecognized value is treated as unset (falls through to auto-detect) rather than erroring. An explicit `openai` selection with no `OPENAI_API_KEY` fails open (same as today), it never silently substitutes Ollama.
 
-Overrides, both providers:
+Privacy note: under auto-detect with no `OPENAI_API_KEY`, prompt text and memory bodies are sent as-is to whichever endpoint `MEMORY_ROUTER_OLLAMA_BASE_URL` resolves to (default `http://localhost:11434`), with no check that the endpoint is actually who it claims to be.
 
-- `MEMORY_ROUTER_EMBED_MODEL` — model name for whichever provider is active.
+Overrides:
+
+- `MEMORY_ROUTER_EMBED_MODEL`: model name override. Applies to OpenAI always, and to Ollama when the provider was chosen *explicitly* (`MEMORY_ROUTER_EMBED_PROVIDER=ollama`, a deliberate choice). It is deliberately NOT consulted on the *auto-detected* Ollama path: a `MEMORY_ROUTER_EMBED_MODEL` left over in the environment was almost certainly set for OpenAI, and picking it up there would silently point Ollama at a model name it doesn't have.
+- `MEMORY_ROUTER_OLLAMA_EMBED_MODEL`: model name override for the auto-detected Ollama path specifically; not consulted anywhere else.
 - `OPENAI_BASE_URL` — OpenAI-compatible proxy base URL (OpenAI path only).
 - `MEMORY_ROUTER_OLLAMA_BASE_URL` — Ollama base URL, default `http://localhost:11434`. Ollama is queried through its OpenAI-compatible `/v1/embeddings` endpoint, unauthenticated.
 
-Embedding dimensionality is never hardcoded: it's read off the first real embed response and recorded in the index alongside the provider and model. An index queried under a different provider (or, rarely, a different dimensionality under the same provider) refuses to silently compare incompatible vector spaces — `memory-router index`/the Confidence Gate raise an error naming the exact rebuild command (`rm -rf <dir>/.memory-router && memory-router index <dir>`) instead of returning wrong neighbours. Switching `MEMORY_ROUTER_EMBED_MODEL` between two models of the *same* provider (e.g. two OpenAI models) is unaffected by this check — the existing per-memory model tag already excludes stale rows from a search, no rebuild required.
+Model-variable precedence:
+
+| Path | Model resolution |
+| --- | --- |
+| Explicit OpenAI, or auto-detected OpenAI (`OPENAI_API_KEY` present) | `MEMORY_ROUTER_EMBED_MODEL`, else `text-embedding-3-small` |
+| Explicit Ollama (`MEMORY_ROUTER_EMBED_PROVIDER=ollama`) | `MEMORY_ROUTER_EMBED_MODEL`, else `nomic-embed-text` |
+| Auto-detected Ollama (no `OPENAI_API_KEY`, no explicit provider) | `MEMORY_ROUTER_OLLAMA_EMBED_MODEL`, else `nomic-embed-text` (`MEMORY_ROUTER_EMBED_MODEL` is not consulted) |
+
+Embedding dimensionality is never hardcoded: it's read off the first real embed response and recorded in the index alongside the provider and model. An index opened under a different provider refuses at open time to silently compare incompatible vector spaces. A same-provider dimensionality change (rare, e.g. switching to a differently-sized OpenAI model) isn't checked at open time; it's instead caught the moment it's actually written or queried, by the same plain dimension check that would fire against sqlite-vec's fixed column width anyway. Either way `memory-router index`/the Confidence Gate raise an error naming the exact rebuild command (`rm -rf '<dir>/.memory-router' && memory-router index '<dir>'`) instead of returning wrong neighbours. Switching `MEMORY_ROUTER_EMBED_MODEL` between two *same-dimension* models of the same provider (e.g. two same-width OpenAI models) is unaffected by either check: the existing per-memory model tag already excludes stale rows from a search, no rebuild required.
 
 Local Ollama setup: `ollama pull nomic-embed-text`, then run `ollama serve` (or use the app) before `memory-router index`/normal hook usage.
 
@@ -499,7 +510,7 @@ prompts:
 
 Your corpus's own `golden.yml` lives in the memory dir itself (synced alongside the `.md` files by [agent-memory-sync](../agent-memory-sync)), **not** in this repo; this package only ships the synthetic fixture under `tests/fixtures/eval/` used by its own unit tests. Curate your golden set from real prompts you've actually asked, labelled with the memory ids you'd want to fire.
 
-**What gets measured:** `eval` mirrors exactly what the `UserPromptSubmit` hook would select for the same prompt: sync gates (topic, tool) first, then the confidence gate only when the sync gates were silent, with the same fail-open fallback on a semantic-search error. Without an embedding index (`<dir>/.memory-router/index.sqlite`, built by `memory-router index`) and `OPENAI_API_KEY`, the confidence gate can't contribute a hit; `eval` still runs and measures the sync path, and the report says so explicitly via `"semantic path: inactive"` rather than silently reporting a gap as a "measured" zero. When the semantic path IS active, this has a real-world cost: every prompt in the golden set whose sync gates are silent fires a live embeddings API call against your configured provider, so it costs money per call and the prompt text leaves the machine; size your golden set with that in mind.
+**What gets measured:** `eval` mirrors exactly what the `UserPromptSubmit` hook would select for the same prompt: sync gates (topic, tool) first, then the confidence gate only when the sync gates were silent, with the same fail-open fallback on a semantic-search error. Without an embedding index (`<dir>/.memory-router/index.sqlite`, built by `memory-router index`) and a resolvable embedding provider (an `OPENAI_API_KEY`, or, since mm-v1-T003, an auto-detected local Ollama daemon, see "Embedding provider" below), the confidence gate can't contribute a hit; `eval` still runs and measures the sync path, and the report says so explicitly via `"semantic path: inactive"` rather than silently reporting a gap as a "measured" zero. `"semantic path: configured"` means only that an index exists and a provider resolved, not that the provider is actually reachable: this is a config check, not a live reachability probe, so a configured-but-unreachable Ollama daemon (or one missing the configured model) still reports as configured until the first real embed call fails, same fail-open shape as an unreachable OpenAI endpoint already has today. When the semantic path IS configured, this has a real-world cost: every prompt in the golden set whose sync gates are silent fires a live embeddings API call against your configured provider, so it costs money (OpenAI) or local compute (Ollama) per call and the prompt text leaves the machine to whichever endpoint is configured; size your golden set with that in mind.
 
 Golden ids that don't resolve against the corpus (a stale or mistyped memory id) are reported, not silenced: the text report prints a `WARNING:` line listing them, and `--json` carries the same list as the top-level `unknownExpectIds` array (empty when every id resolves). This never changes precision/recall/MRR (an unresolvable id still deflates recall for its prompt exactly as before); it just makes the cause visible instead of a silent gap.
 

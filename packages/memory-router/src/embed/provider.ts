@@ -92,11 +92,27 @@ function buildOpenAIConfig(apiKey: string): ProviderConfig {
   };
 }
 
-function buildOllamaConfig(): ProviderConfig {
+// `explicit`: the caller asked for Ollama by name
+// (MEMORY_ROUTER_EMBED_PROVIDER=ollama), a deliberate choice, so the
+// generic MEMORY_ROUTER_EMBED_MODEL override keeps applying exactly as it
+// always has. `auto-detect`: nothing was asked for explicitly, this is a
+// fallback the caller opted into via autoDetectOllama, and a
+// MEMORY_ROUTER_EMBED_MODEL left over in the environment was almost
+// certainly set for OpenAI (the far more common case) and would silently
+// misroute the auto-detected Ollama call to a model name Ollama doesn't
+// have, so the generic var is deliberately NOT consulted on this path.
+// MEMORY_ROUTER_OLLAMA_EMBED_MODEL is the Ollama-specific override for
+// exactly this path; see README "Embedding provider" for the precedence
+// table.
+function buildOllamaConfig(source: 'explicit' | 'auto-detect'): ProviderConfig {
+  const model =
+    source === 'explicit'
+      ? (process.env.MEMORY_ROUTER_EMBED_MODEL ?? OLLAMA_DEFAULT_MODEL)
+      : (process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL ?? OLLAMA_DEFAULT_MODEL);
   return {
     provider: 'ollama',
     apiKey: '',
-    model: process.env.MEMORY_ROUTER_EMBED_MODEL ?? OLLAMA_DEFAULT_MODEL,
+    model,
     baseUrl:
       process.env.MEMORY_ROUTER_OLLAMA_BASE_URL ?? OLLAMA_DEFAULT_BASE_URL,
   };
@@ -146,13 +162,13 @@ function resolveProviderConfig(
     return buildOpenAIConfig(apiKey);
   }
   if (explicit === 'ollama') {
-    return buildOllamaConfig();
+    return buildOllamaConfig('explicit');
   }
 
   // No explicit (or an unrecognized) provider: auto-detect.
   const apiKey = process.env.OPENAI_API_KEY;
   if (apiKey) return buildOpenAIConfig(apiKey);
-  if (opts.autoDetectOllama) return buildOllamaConfig();
+  if (opts.autoDetectOllama) return buildOllamaConfig('auto-detect');
   return null;
 }
 
