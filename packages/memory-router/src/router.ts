@@ -92,6 +92,9 @@ interface ResolveBlendedDeps {
 //   no HTTP call, no throw) when either is missing, so there is no separate
 //   availability probe here, and this call happens exactly once per prompt
 //   (one query embedding, or a query-cache hit — see src/embed/indexer.ts).
+//   A hit scoring below MEMORY_ROUTER_BLEND_MIN_SEMANTIC (fix-round 2,
+//   default 0.5) is dropped before it ever reaches this formula — treated
+//   as "no semantic score" below, not as a weak one.
 // - topicBoost: the (deterministic) Topic Gate's match is no longer a
 //   standalone full-score hit; it can only nudge a memory's score, never
 //   flood it to 1.0 and shadow everything else.
@@ -105,8 +108,9 @@ interface ResolveBlendedDeps {
 //
 // Degraded mode (post-hoc fix, see task notes): when the semantic path
 // contributes NOTHING for this prompt, whether because no index/provider is
-// available (semanticSearch no-ops, see src/embed/indexer.ts) or because of
-// a caught semantic-search error below, resolveBlended returns EXACTLY what
+// available (semanticSearch no-ops, see src/embed/indexer.ts), because of a
+// caught semantic-search error below, or because every candidate scored
+// below the relevance floor above, resolveBlended returns EXACTLY what
 // resolve(ctx, memories, {maxHits}) (the old sync-only topic/tool path)
 // would: the same hits, the same flat 1.0 gate scores, the same load-order
 // ties. No topic boost, no recency/type modifier is applied in this case.
@@ -132,12 +136,17 @@ async function resolveBlended(
 ): Promise<GateHit[]> {
   if (!ctx.prompt) return [];
   const maxHits = opts.maxHits ?? 5;
+  const weights = loadBlendWeights();
 
   // Wider than maxHits on purpose: a memory that ranks outside the raw
   // semantic top-k can still win a slot once topic/recency/type are folded
   // in, so the candidate pool going into the blend is deliberately more
-  // generous than the final cap.
-  const semanticK = Math.max(maxHits, 10);
+  // generous than the final cap. Width is env-overridable via
+  // MEMORY_ROUTER_BLEND_CANDIDATE_K (default 10, see BLEND_DEFAULTS.candidateK
+  // in src/gates/confidence.ts); rounded defensively since an env override
+  // is free-form text and the value below flows straight into a search
+  // "how many rows" argument.
+  const semanticK = Math.max(maxHits, Math.round(weights.candidateK));
   let semanticHits: { memory: Memory; score: number }[] = [];
   try {
     semanticHits = await deps.semanticSearch(ctx.prompt, memories, memoryDir, semanticK);
@@ -147,13 +156,26 @@ async function resolveBlended(
     );
   }
 
-  // Semantic path contributed nothing (no index/provider, or the caught
-  // error above): degrade to EXACTLY the pre-blend sync-only resolver
-  // rather than running any topic-boost/recency/type scoring, see the
-  // module comment above this function for why.
+  // Relevance floor (mm-v1-T004 fix-round 2, HIGH): drop any semantic hit
+  // scoring below MEMORY_ROUTER_BLEND_MIN_SEMANTIC (default 0.5, see
+  // BLEND_DEFAULTS.minSemanticScore in src/gates/confidence.ts) BEFORE the
+  // degradation guard below. A sub-floor cosine match is noise, not a real
+  // signal; filtering it out here (rather than letting it into the blend at
+  // a near-zero weight) means a corpus/provider that only ever returns weak
+  // matches for a prompt degrades to the deterministic topic-only path
+  // instead of quietly blending in scores that were never a real match. A
+  // memory that also has an independent topic hit is unaffected by this
+  // filter — the filter only removes the SEMANTIC contribution, topic
+  // candidacy is evaluated separately below.
+  semanticHits = semanticHits.filter((h) => h.score >= weights.minSemanticScore);
+
+  // Semantic path contributed nothing (no index/provider, the caught error
+  // above, or every candidate falling below the relevance floor):
+  // degrade to EXACTLY the pre-blend sync-only resolver rather than running
+  // any topic-boost/recency/type scoring, see the module comment above this
+  // function for why.
   if (semanticHits.length === 0) return resolve(ctx, memories, { maxHits });
 
-  const weights = loadBlendWeights();
   const topicHits: GateHit[] = topicGate.evaluate(ctx, memories);
   const topicById = new Map<string, GateHit>(topicHits.map((h) => [h.memory.id, h]));
   const semanticById = new Map<string, number>(
@@ -175,6 +197,16 @@ async function resolveBlended(
     const memory = byId.get(id);
     if (!memory) continue;
 
+    // .has(), not "score > 0": MEMORY_ROUTER_BLEND_MIN_SEMANTIC can be
+    // overridden down to 0 (see the relevance-floor comment above and
+    // envFloat's non-negative guard in src/gates/confidence.ts), which lets
+    // a genuine zero-score semantic hit survive the floor filter. Gating
+    // gate/reason attribution on "score > 0" would then mislabel that
+    // candidate as a phantom topic hit (gate: 'topic', reason: '') even
+    // though it has no topic match at all — it's semantic-originated (a
+    // real semanticById entry), just weighted zero (mm-v1-T004 fix-round 2
+    // LOW #9).
+    const hasSemanticHit = semanticById.has(id);
     const semanticScore = semanticById.get(id) ?? 0;
     const topicHit = topicById.get(id);
     const topicBoost = topicHit ? weights.topicBoost : 0;
@@ -196,18 +228,53 @@ async function resolveBlended(
       recencyModifier(mtimeMs, weights, now);
 
     const reasonParts: string[] = [];
-    if (semanticScore > 0) reasonParts.push(`semantic match (score=${semanticScore.toFixed(2)})`);
+    if (hasSemanticHit) reasonParts.push(`semantic match (score=${semanticScore.toFixed(2)})`);
     if (topicHit) reasonParts.push(topicHit.reason);
 
     blended.push({
       memory,
-      gate: semanticScore > 0 ? 'confidence' : 'topic',
+      gate: hasSemanticHit ? 'confidence' : 'topic',
       score,
       reason: reasonParts.join('; '),
     });
   }
 
-  return dedupeAndRank([...blended, ...toolHits], maxHits);
+  return rankWithToolPrivilege(blended, toolHits, maxHits);
+}
+
+// Privileges deterministic Tool-Gate hits ahead of the maxHits cap
+// (mm-v1-T004 fix-round 2, MEDIUM #2): a memory ctx.tool directly matched
+// (score 1.0, see gates/tool.ts) must never be evicted from the result by
+// blend-scored memories whose semantic+topicBoost+modifiers sum happens to
+// exceed 1.0 — plain dedupeAndRank (highest score wins the slot) would let
+// that happen on any prompt with more than maxHits strong blend candidates.
+// Attribution (which gate/score/reason wins for a memory present in BOTH
+// `blended` and `toolHits`) is unchanged from before this fix: whichever
+// has the higher score, same as dedupeAndRank always did. Only SLOT
+// ALLOCATION changes: every deduped tool hit fills a slot first, remaining
+// slots go to the highest-ranked blend hits, then the combined list is
+// capped at maxHits.
+function rankWithToolPrivilege(
+  blended: GateHit[],
+  toolHits: GateHit[],
+  maxHits: number,
+): GateHit[] {
+  const merged = new Map<string, GateHit>();
+  for (const hit of [...blended, ...toolHits]) {
+    const prev = merged.get(hit.memory.id);
+    if (!prev || hit.score > prev.score) merged.set(hit.memory.id, hit);
+  }
+
+  const toolIds = new Set(toolHits.map((h) => h.memory.id));
+  const privileged: GateHit[] = [];
+  const rest: GateHit[] = [];
+  for (const hit of merged.values()) {
+    (toolIds.has(hit.memory.id) ? privileged : rest).push(hit);
+  }
+  privileged.sort((a, b) => b.score - a.score);
+  rest.sort((a, b) => b.score - a.score);
+
+  return [...privileged, ...rest].slice(0, maxHits);
 }
 
 module.exports = {

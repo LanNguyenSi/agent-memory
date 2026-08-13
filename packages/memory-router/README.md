@@ -34,7 +34,12 @@ echo '{"prompt":"can I git push --force to master to fix this?"}' \
   | MEMORY_ROUTER_DIR=/tmp/memory-router-demo \
     node dist/hooks/user-prompt-submit.js
 
-# Negative: nothing matches, stdout stays empty (Claude's context stays clean).
+# Negative: nothing matches, stdout stays empty (Claude's context stays
+# clean). This scratch corpus has no embedding index (see below), so the
+# semantic path no-ops entirely here; once an index exists, an unrelated
+# prompt still yields empty stdout because the relevance floor
+# (MEMORY_ROUTER_BLEND_MIN_SEMANTIC) filters out noise-level cosine scores
+# before they can produce a hit, see "How it works" below.
 echo '{"prompt":"rename foo to bar"}' \
   | MEMORY_ROUTER_DIR=/tmp/memory-router-demo \
     node dist/hooks/user-prompt-submit.js
@@ -50,7 +55,7 @@ The positive prompt prints one line of JSON on stdout (plus a stderr line — se
 
 `1.00` is the flat pre-blend topic score for this demo (no embedding index, see below, so the semantic path contributes nothing and the blend degrades to exactly the old topic-only sync path, see "How it works" below), not a blended value. This scratch corpus has no embedding index, so **both** commands above also print one line on stderr: `memory-router: embedding index missing — run 'memory-router index <dir>' to build it.` — the score-blend resolver (mm-v1-T004) attempts the semantic path on every prompt, not only when the deterministic gates stay silent, so this warning surfaces even on the positive prompt the Topic Gate already matched. It's informational, not a failure: stdout still carries the hit above (and stays empty for the negative prompt, exit 0 either way).
 
-Claude Code consumes the stdout contract on every prompt and injects `additionalContext` as system context for the model. The negative prompt prints nothing on stdout and exits 0: when no signal fires, stdout stays empty so the context window stays clean.
+Claude Code consumes the stdout contract on every prompt and injects `additionalContext` as system context for the model. The negative prompt prints nothing on stdout and exits 0: when no signal fires, stdout stays empty so the context window stays clean. Here that's because this scratch corpus has no embedding index at all (the semantic path no-ops entirely, see above); once an index exists, the same "no signal, no output" guarantee is enforced by the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, default 0.5) discarding any sub-floor cosine score before it can produce a hit, not by the semantic path staying silent on its own.
 
 The same scratch corpus works through `memory-router lint` (drift / topics / conflict checks), `memory-router stale --repo-root <path>` (stale path / symbol references), and the MCP server (`memory_search`, `memory_resolve`). The wiring for all of those is below.
 
@@ -81,20 +86,20 @@ The `bin/` entries land in `node_modules/.bin/` (and on `PATH` for a global inst
 
 ## How it works
 
-`UserPromptSubmit` and the MCP server's `memory_resolve` both resolve a prompt through the **score-blend resolver** (`resolveBlended`, mm-v1-T004): every signal below is combined into one score per memory, deduped by memory id (highest score wins), and capped at N (default 5).
+`UserPromptSubmit` and the MCP server's `memory_resolve` both resolve a prompt through the **score-blend resolver** (`resolveBlended`, mm-v1-T004): every signal below is combined into one score per memory, deduped by memory id (highest score wins), and capped at N (default 5) — with a deterministic Tool Gate hit always privileged into that cap ahead of blend-scored memories, see the Tool Gate paragraph below.
 
 | Signal | What it is | Role in the blend |
 |------|--------|---------------|
-| **Semantic score** | sqlite-vec cosine similarity between the prompt and each memory's embedding | The dominant signal. Runs unconditionally whenever an embedding index + provider are available for the corpus — no longer gated behind the deterministic signals staying silent (see "Why a blend, not gates" below) |
+| **Semantic score** | sqlite-vec cosine similarity between the prompt and each memory's embedding | The dominant signal. Runs unconditionally whenever an embedding index + provider are available for the corpus — no longer gated behind the deterministic signals staying silent (see "Why a blend, not gates" below). A score below the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, default 0.5) is dropped before it can enter the blend at all — treated as no semantic score, not a weak one |
 | **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory. No longer a standalone full-score (1.0) hit |
 | **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
 | **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker: the type most consistently actionable in the corpus today gets a small nudge |
 
-A memory with neither a semantic score nor a topic match contributes nothing and is excluded — the recency/type modifiers alone can never surface an otherwise-silent memory, only shape the ranking of one some other signal already selected. Blend weights are overridable via the `MEMORY_ROUTER_BLEND_*` env namespace (`MEMORY_ROUTER_BLEND_TOPIC_BOOST`, `MEMORY_ROUTER_BLEND_RECENCY_WEIGHT`, `MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS`, `MEMORY_ROUTER_BLEND_TYPE_WEIGHT`); the built-in defaults are deliberately **uncalibrated** — no rollout measurement has tuned them yet (tracked as mm-v1-T008) — see `src/gates/confidence.ts` for the exact defaults and shape rationale.
+A memory with neither a semantic score (once the relevance floor is applied) nor a topic match contributes nothing and is excluded — the recency/type modifiers alone can never surface an otherwise-silent memory, only shape the ranking of one some other signal already selected. Blend weights are overridable via the `MEMORY_ROUTER_BLEND_*` env namespace (`MEMORY_ROUTER_BLEND_TOPIC_BOOST`, `MEMORY_ROUTER_BLEND_RECENCY_WEIGHT`, `MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS`, `MEMORY_ROUTER_BLEND_TYPE_WEIGHT`, `MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, `MEMORY_ROUTER_BLEND_CANDIDATE_K`); the built-in defaults are deliberately **uncalibrated** — no rollout measurement has tuned them yet (tracked as mm-v1-T008) — see `src/gates/confidence.ts` for the exact defaults and shape rationale. A negative override for any of these is invalid and falls back to the built-in default rather than being accepted (a "boost"/"weight"/"floor"/candidate count that goes negative would invert the blend's intended shape, not merely rescale it).
 
-Without an embedding index or a resolvable embedding provider, or on a semantic-search failure, the blend degrades to exactly the same output the old topic-only sync path (`resolve()`) would produce: the same memories, in the same order, at the same flat `1.0` score. No topic boost, no recency/type modifier is applied in this case, so a corpus with more topic candidates than the cap behaves identically to today's topic-only degradation.
+Without an embedding index or a resolvable embedding provider, on a semantic-search failure, or when every semantic-search hit for a prompt falls below the relevance floor, the blend degrades to exactly the same output the old topic-only sync path (`resolve()`) would produce: the same memories, in the same order, at the same flat `1.0` score. No topic boost, no recency/type modifier is applied in this case, so a corpus with more topic candidates than the cap behaves identically to today's topic-only degradation.
 
-Separately, the **Tool Gate** (`PreToolUse` hook, against memory `triggers.command_pattern` and `triggers.tools`) stays a deterministic, unblended full-score (1.0) match — before `Bash(git push --force)`, `Bash(docker compose up)`, etc. It is not part of the semantic blend (there is no prompt to embed at that point in the tool-call lifecycle), but `memory_resolve` still consults it when a `tool` argument is passed, exactly as before.
+Separately, the **Tool Gate** (`PreToolUse` hook, against memory `triggers.command_pattern` and `triggers.tools`) stays a deterministic, unblended full-score (1.0) match — before `Bash(git push --force)`, `Bash(docker compose up)`, etc. It is not part of the semantic blend (there is no prompt to embed at that point in the tool-call lifecycle), but `memory_resolve` still consults it when a `tool` argument is passed, exactly as before. Within an active blend, a Tool Gate hit is privileged into the final N-slot cap ahead of blend-scored memories: since a blended score (semantic + topic boost + modifiers) can exceed the Tool Gate's flat `1.0`, plain highest-score-wins slot allocation could otherwise evict a deterministic tool match on a prompt with more than N strong blend candidates.
 
 #### Why a blend, not gates
 
@@ -221,7 +226,9 @@ Both binaries consume Claude-Code's hook stdin contract and emit
 { "hookSpecificOutput": { "additionalContext": "<rendered markdown>" } }
 ```
 
-on stdout, Claude Code injects `additionalContext` as system context for the model. When no gate fires, stdout stays empty to keep the model's context clean.
+on stdout, Claude Code injects `additionalContext` as system context for the model. When no gate fires, stdout stays empty to keep the model's context clean — once an embedding index exists, that guarantee rests on the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, default 0.5, see "How it works" below): a genuinely unrelated prompt still yields zero hits because a weak/noise cosine score never clears the floor, rather than leaking a near-irrelevant memory into context.
+
+Cost/privacy note: once an embedding index exists AND an embedding provider resolves (see "Embedding provider" below), the score-blend resolver queries it on **every** prompt sent through the hook, not only when the deterministic gates stay silent (see "Why a blend, not gates" below) — this is an ongoing per-prompt cost (OpenAI API calls) or local load (Ollama), and the prompt text itself leaves the machine to whichever endpoint is configured. To stop this, delete the index (`rm -rf <dir>/.memory-router`): the resolver then fails open to the topic-only sync path, same as before an index was ever built.
 
 ### As an MCP server (imperative queries)
 
@@ -529,6 +536,8 @@ Golden ids that don't resolve against the corpus (a stale or mistyped memory id)
 
 The report also states which topic vocabulary the Topic Gate used for the run, via `vocabularySource`: `"built-in default"`, or `"custom (<dir>/topics.yml)"` when the corpus overrides it (see [Topic vocabulary](#topic-vocabulary-topicsyml)). `eval` always scores against `--dir`'s (or `$MEMORY_ROUTER_DIR`'s) own `topics.yml`, never a stray `MEMORY_ROUTER_DIR` left over in the environment, so a run pointed at the wrong corpus, or hitting a broken `topics.yml`, shows up here instead of silently scoring against the wrong vocabulary.
 
+The report also states, via `semanticContributedCount`, how many of the golden set's prompts had at least one hit actually won by the semantic/confidence gate (a semantic score that cleared the relevance floor and beat out the other candidates for a slot) — printed as a `semantic contributed: N/M prompts` line in the text report. This is distinct from `semanticPathActive` above: that only proves an index + provider are *configured*; `semanticContributedCount` proves the semantic signal actually *won* a slot for a given prompt, which can be far lower than `M` even with `semanticPathActive: true` (e.g. every candidate falling below `MEMORY_ROUTER_BLEND_MIN_SEMANTIC` on a given prompt, or the Topic Gate simply out-scoring it).
+
 **Metric definitions**, per prompt:
 
 - **Precision** = `|expect ∩ got| / |got|` (`0` when nothing was returned).
@@ -553,6 +562,7 @@ Caveat: when two or more memories tie on score for the same prompt, the tie is b
   "semanticPathActive": false,
   "vocabularySource": "built-in default",
   "unknownExpectIds": [],
+  "semanticContributedCount": 0,
   "perPrompt": [
     {
       "prompt": "merge this PR for the billing module",
@@ -580,7 +590,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 
 **v1, scaffold.**
 
-- ✅ Score-blend resolver (mm-v1-T004): semantic score (sqlite-vec, OpenAI or Ollama) as the dominant signal, Topic Gate as a boost, recency/type as tie-breaking modifiers. Runs unconditionally whenever an index + provider are available; fails open to the exact flat pre-blend topic-only resolver (no recency/type modifiers) if no provider is configured/reachable, the index is absent, or the semantic call errors.
+- ✅ Score-blend resolver (mm-v1-T004): semantic score (sqlite-vec, OpenAI or Ollama, filtered by a relevance floor) as the dominant signal, Topic Gate as a boost, recency/type as tie-breaking modifiers, a Tool Gate hit always privileged into the final cap. Runs unconditionally whenever an index + provider are available; fails open to the exact flat pre-blend topic-only resolver (no recency/type modifiers) if no provider is configured/reachable, the index is absent, every candidate falls below the relevance floor, or the semantic call errors.
 - ✅ Topic Gate (deterministic keyword → topic map; built-in 5-topic default, corpus-overridable via `topics.yml`, see [Topic vocabulary](#topic-vocabulary-topicsyml))
 - ✅ Tool Gate (regex match on Bash command + tool-name match, with ReDoS guardrails)
 - ✅ Hook binaries (`UserPromptSubmit`, `PreToolUse`) with stdin/stdout contract

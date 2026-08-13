@@ -3,7 +3,7 @@
 // --json schema (stable, documented in README.md "Golden-set eval"):
 //   {
 //     goldenPath, dir, corpusSize, semanticPathActive, vocabularySource,
-//     unknownExpectIds,
+//     unknownExpectIds, semanticContributedCount,
 //     perPrompt: [{ prompt, expect, got, isNegativeControl, precision, recall, reciprocalRank }],
 //     aggregate: { precision, recall, mrr, positiveCount,
 //                  negativeControls: { total, passed, failed, rate } }
@@ -23,6 +23,9 @@ function formatEvalReportText(report: EvalReportLike): string {
     }`,
   );
   lines.push(`vocabulary: ${report.vocabularySource}`);
+  lines.push(
+    `semantic contributed: ${report.semanticContributedCount}/${report.perPrompt.length} prompts`,
+  );
   if (report.unknownExpectIds.length > 0) {
     lines.push(
       `WARNING: golden file references ${report.unknownExpectIds.length} expect id(s) not found in the corpus (scoring is unaffected — this is a warning only): ${report.unknownExpectIds.join(", ")}`,
@@ -81,6 +84,7 @@ interface EvalReportLike {
   semanticPathActive: boolean;
   vocabularySource: string;
   unknownExpectIds: string[];
+  semanticContributedCount: number;
   perPrompt: {
     prompt: string;
     expect: string[];

@@ -357,6 +357,15 @@ test("runGoldenEval: full run against the fixture corpus + golden set matches th
   );
   assert.equal(report.vocabularySource, "built-in default");
   assert.equal(report.perPrompt.length, 6);
+  // No index is built for the fixture corpus (see semanticPathActive above),
+  // so the confidence gate can never win a slot for any prompt: every hit
+  // in this run comes from the topic-only degraded path (mm-v1-T004
+  // fix-round 2 LOW #8).
+  assert.equal(
+    report.semanticContributedCount,
+    0,
+    "no embedding index exists for the fixture corpus, so the semantic gate cannot have contributed to any prompt",
+  );
   // The fixture golden.yml deliberately labels "rotate the leaked token"
   // with a phantom id (feedback_never_fires_phantom) as a negative-control
   // for the recall<1 case — it never matches any fixture corpus memory, so

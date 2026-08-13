@@ -242,6 +242,18 @@ export interface EvalReport {
   unknownExpectIds: string[];
   perPrompt: PromptMetric[];
   aggregate: AggregateMetrics;
+  /**
+   * How many of the golden set's prompts had at least one hit attributed
+   * to the semantic/confidence gate (resolveBlended's `gate: 'confidence'`
+   * — i.e. a semantic-search score that cleared the relevance floor and
+   * won a slot, see src/router.ts). Out of `perPrompt.length` total
+   * prompts (see formatEvalReportText's "semantic contributed: N/M
+   * prompts" line). Distinct from `semanticPathActive` above, which only
+   * proves an index + provider are CONFIGURED, not that the semantic
+   * signal actually won a slot for any given prompt — mm-v1-T004
+   * fix-round 2 LOW #8.
+   */
+  semanticContributedCount: number;
 }
 
 /**
@@ -283,6 +295,7 @@ async function runGoldenEval(
   const unknownExpectIds = findUnknownExpectIds(golden.prompts, memories);
 
   const perPrompt: PromptMetric[] = [];
+  let semanticContributedCount = 0;
   for (const entry of golden.prompts) {
     // cwd is deliberately omitted: no gate consulted by promptToHits (topic,
     // tool, confidence) reads ctx.cwd today, so there is nothing here to
@@ -295,6 +308,12 @@ async function runGoldenEval(
     const ctx: RouterContext = { prompt: entry.prompt, memoryDir: dir };
     const hits = await promptToHits(ctx, memories, dir);
     const got = hits.map((h) => h.memory.id);
+    // "Contributed" means the semantic gate actually WON a slot in this
+    // prompt's own result (see resolveBlended's gate: 'confidence'
+    // attribution in src/router.ts, which is only ever set for a hit that
+    // cleared the relevance floor) — not merely that the semantic path was
+    // configured/reachable (that's semanticPathActive above).
+    if (hits.some((h) => h.gate === "confidence")) semanticContributedCount++;
     const scored = scorePrompt(entry.expect, got);
     perPrompt.push({
       prompt: entry.prompt,
@@ -313,6 +332,7 @@ async function runGoldenEval(
     unknownExpectIds,
     perPrompt,
     aggregate: aggregateMetrics(perPrompt),
+    semanticContributedCount,
   };
 }
 

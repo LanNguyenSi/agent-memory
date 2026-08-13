@@ -265,10 +265,17 @@ Commands:
     JSON is routed to stderr so CI can pipe both fds.
 
   test <prompt> [--dir <path>] [--semantic] [--max-hits <n>] [--json]
-    Dry-run a prompt against the live router (the same matcher the
-    UserPromptSubmit hook calls). Prints the memories that would fire,
-    their gate (topic / tool / confidence), score, and description so
-    you can verify a freshly-tagged memory routes the way you intended.
+    Dry-run a prompt against the OLD sync-gates-first resolver (Topic Gate
+    then Tool Gate; the Confidence Gate only when --semantic is passed) —
+    NOT the score-blend resolver (resolveBlended, mm-v1-T004) the
+    UserPromptSubmit hook and 'eval' below actually use today. This is a
+    deliberate, documented divergence: 'test' stayed on the pre-blend
+    resolver to dry-run the deterministic topic/tool gates (and the
+    confidence gate in isolation via --semantic) without the blend's
+    combined scoring, so its output is NOT a preview of what the hook
+    would inject for the same prompt — use 'eval' for that. Prints the
+    memories that would fire, their gate (topic / tool / confidence),
+    score, and description.
     Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR env. The
     sync gates (topic, tool) always run; --semantic also runs the async
     confidence gate (requires OPENAI_API_KEY; degrades to a stderr
@@ -279,12 +286,15 @@ Commands:
   eval <golden.yml> [--dir <path>] [--json]
     Run a golden set of (prompt, expected memory ids) pairs against the
     corpus and report precision / recall per prompt plus aggregate
-    precision / recall / MRR (mean reciprocal rank). A REPORT, not a gate:
-    exits 0 on any error-free run regardless of how the metrics look
-    (baseline measurement for the pre-retrieval-rework status quo).
-    Mirrors exactly what the UserPromptSubmit hook would select for each
-    prompt (sync gates, then the confidence gate only when sync is
-    silent), so this measures the resolver path actually in production.
+    precision / recall / MRR (mean reciprocal rank), plus how many prompts
+    the semantic signal actually contributed a hit to. A REPORT, not a
+    gate: exits 0 on any error-free run regardless of how the metrics look.
+    Mirrors exactly what the UserPromptSubmit hook selects for each
+    prompt: the score-blend resolver (resolveBlended, mm-v1-T004) —
+    semantic score (once it clears the MEMORY_ROUTER_BLEND_MIN_SEMANTIC
+    relevance floor) as the dominant signal, Topic Gate as a boost,
+    recency/type as tie-breakers — unlike the 'test' verb above, which
+    stayed on the old pre-blend resolver.
     golden.yml format:
         prompts:
           - prompt: "user prompt text"
