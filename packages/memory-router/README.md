@@ -135,13 +135,13 @@ The Topic Gate's keyword → topic map ships a built-in 5-topic default (`deploy
     - '\boutage\b'
 ```
 
-See `tests/fixtures/vocab/topics.yml` for a fuller worked example.
+A fuller worked example (three custom topics, descriptions) is available at [`tests/fixtures/vocab/topics.yml`](https://github.com/LanNguyenSi/agent-memory/blob/master/packages/memory-router/tests/fixtures/vocab/topics.yml) in the repo — that path is source-tree only (not part of the published npm package), so treat it as an optional cross-reference; the inline block above is a complete, self-contained example on its own.
 
 Shape: a top-level list of `{ name, description?, patterns? }` entries.
 
 - `name` is required and must be unique across the file.
 - `description` is optional, documentation only — not matched against.
-- `patterns` is an optional list of regex strings, matched case-insensitively. A topic declared with no `patterns:` at all, or whose one pattern fails to compile, degrades to a keyword match on its own `name` rather than being dropped or crashing anything.
+- `patterns` is an optional list of regex strings, matched case-insensitively. A topic declared with no `patterns:` at all, whose one pattern fails to compile, or whose pattern is rejected by the ReDoS safety screen (see [Trust Model](#trust-model)) degrades to a keyword match on its own `name` rather than being dropped or crashing anything.
 
 Both the Topic Gate and `memory-router lint --unknown-topics` load and validate against whatever `topics.yml` resolves to:
 
@@ -482,6 +482,8 @@ Your corpus's own `golden.yml` lives in the memory dir itself (synced alongside 
 
 Golden ids that don't resolve against the corpus (a stale or mistyped memory id) are reported, not silenced: the text report prints a `WARNING:` line listing them, and `--json` carries the same list as the top-level `unknownExpectIds` array (empty when every id resolves). This never changes precision/recall/MRR (an unresolvable id still deflates recall for its prompt exactly as before); it just makes the cause visible instead of a silent gap.
 
+The report also states which topic vocabulary the Topic Gate used for the run, via `vocabularySource`: `"built-in default"`, or `"custom (<dir>/topics.yml)"` when the corpus overrides it (see [Topic vocabulary](#topic-vocabulary-topicsyml)). `eval` always scores against `--dir`'s (or `$MEMORY_ROUTER_DIR`'s) own `topics.yml`, never a stray `MEMORY_ROUTER_DIR` left over in the environment — so a run pointed at the wrong corpus, or hitting a broken `topics.yml`, shows up here instead of silently scoring against the wrong vocabulary.
+
 **Metric definitions**, per prompt:
 
 - **Precision** = `|expect ∩ got| / |got|` (`0` when nothing was returned).
@@ -504,6 +506,7 @@ Caveat: when two or more memories tie on score for the same prompt, the tie is b
   "dir": "/path/to/memory",
   "corpusSize": 42,
   "semanticPathActive": false,
+  "vocabularySource": "built-in default",
   "unknownExpectIds": [],
   "perPrompt": [
     {
@@ -545,10 +548,10 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 
 Memory files under `MEMORY_ROUTER_DIR` are treated as **author-trusted code**. They ship regexes (`triggers.command_pattern`), keyword lists, and markdown bodies that directly shape Claude's context. In the current deployment they live alongside your Claude-Code session (`~/.claude/...`) and are synced via [agent-memory-sync](../agent-memory-sync), i.e. you wrote them.
 
-The tool gate defends against **author mistakes**, not a malicious author:
+The tool gate — and, since mm-v1-T002, the topic vocabulary loader (`src/vocab/loader.ts`) for `topics.yml` patterns — defends against **author mistakes**, not a malicious author:
 
-- `command_pattern` is rejected when it exceeds 200 characters or contains an obvious nested-quantifier shape (`(a+)+`, `(a*)*`, etc.), the two most common ReDoS footguns.
-- No sandbox / `vm` timeout: a subtle pathological pattern would still stall the PreToolUse hook. Don't point `MEMORY_ROUTER_DIR` at untrusted content.
+- `command_pattern` (tool gate) and `topics.yml` `patterns:` entries (topic vocabulary) are both rejected when they exceed 200 characters or contain an obvious nested-quantifier shape (`(a+)+`, `(a*)*`, etc.), the two most common ReDoS footguns. A rejected `topics.yml` pattern degrades the same way a non-compiling one does: keyword match on the topic's own `name` (see [Topic vocabulary](#topic-vocabulary-topicsyml)) rather than being compiled and run.
+- No sandbox / `vm` timeout: a subtle pathological pattern would still stall the PreToolUse hook (or the UserPromptSubmit hook, for a `topics.yml` pattern). Don't point `MEMORY_ROUTER_DIR` at untrusted content.
 
 If memory files ever arrive from a shared or remote source, tighten this before deploying: add a regex execution timeout, move matching off the hook hot path, or move to a backtracking-free engine (e.g. `re2`).
 

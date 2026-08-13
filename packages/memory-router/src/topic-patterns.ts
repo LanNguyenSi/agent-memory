@@ -1,8 +1,13 @@
-// Shared topic → keyword patterns used by both the Topic Gate (runtime
-// matching against user prompts) and the Tag CLI (offline matching against
-// memory name/description/body). Single source of truth — drift between the
-// two surfaces would mean a memory tagged "workflow" never fires on a
-// workflow prompt.
+// TOPIC_PATTERNS is:
+//   (a) the built-in *default* topic vocabulary, consumed via
+//       src/vocab/loader.ts's `defaultVocabulary()` — a corpus overrides
+//       this wholesale by dropping a `topics.yml` at the root of its memory
+//       dir (see src/vocab/loader.ts and README.md "Topic vocabulary").
+//   (b) the *only* vocabulary the offline `tag` CLI (src/tag/heuristics.ts)
+//       scores against — the tag CLI is unaware of a corpus's `topics.yml`
+//       override (out of scope for mm-v1-T002, see CHANGELOG), so a corpus
+//       running a custom vocabulary will see `tag` propose topics from this
+//       built-in set only.
 
 const TOPIC_PATTERNS: Record<Topic, RegExp[]> = {
   deployment: [
@@ -48,19 +53,6 @@ const TOPIC_PATTERNS: Record<Topic, RegExp[]> = {
   ],
 };
 
-// Runtime matcher: any single regex hit is enough — we want the Topic Gate
-// to fire permissively on a user prompt.
-function matchedTopics(text: string): Topic[] {
-  const hits: Topic[] = [];
-  for (const [topic, patterns] of Object.entries(TOPIC_PATTERNS) as [
-    Topic,
-    RegExp[],
-  ][]) {
-    if (patterns.some((p) => p.test(text))) hits.push(topic);
-  }
-  return hits;
-}
-
 // Offline tagger: weighted score per topic so a memory that merely mentions
 // "test" in passing doesn't get tagged `testing`. Name matches are 3x, the
 // description 2x, body 1x — a topic has to appear in the "what is this about"
@@ -103,4 +95,4 @@ function countMatches(patterns: RegExp[], text: string): number {
   return total;
 }
 
-module.exports = { TOPIC_PATTERNS, matchedTopics, scoreTopics };
+module.exports = { TOPIC_PATTERNS, scoreTopics };

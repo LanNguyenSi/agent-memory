@@ -11,6 +11,7 @@
 // small.
 const { loadVocabularyResult } = require('../vocab/loader');
 const { loadMemoriesFromDir } = require('../memory/loader');
+const { singleLine } = require('../debug');
 
 export interface UnknownTopicHit {
   path: string;
@@ -120,8 +121,13 @@ export function lintMemoryDirForUnknownTopics(dir: string): LintReport {
 export function formatReportText(report: LintReport): string {
   // Surface an invalid topics.yml up front, even though the scan below
   // still ran (against the built-in default) rather than aborting.
+  // Normalized to one line before interpolation: a YAML parse error ships a
+  // multi-line caret-pointer snippet (see src/debug.ts's singleLine, which
+  // debug()-gated diagnostics already use), and this line isn't gated by
+  // MEMORY_ROUTER_DEBUG, so an un-normalized error would corrupt this
+  // report's line structure by default.
   const prefix = report.vocabularyError
-    ? `memory-router lint: invalid topics.yml, falling back to the built-in default vocabulary\n  ${report.vocabularyError}\n\n`
+    ? `memory-router lint: invalid topics.yml, falling back to the built-in default vocabulary\n  ${singleLine(report.vocabularyError)}\n\n`
     : '';
 
   if (report.hits.length === 0) {

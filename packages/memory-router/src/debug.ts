@@ -19,4 +19,8 @@ function debug(msg: string): void {
   process.stderr.write(`[memory-router] ${singleLine(msg)}\n`);
 }
 
-module.exports = { debug };
+// Exported so other one-line-guarantee stderr writers (e.g.
+// lint/topics.ts's formatReportText, gates/topic.ts's unconditional
+// degrade notice) can normalize a possibly-multi-line message (YAML
+// parser errors, etc.) without duplicating this whitespace-collapse logic.
+module.exports = { debug, singleLine };

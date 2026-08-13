@@ -30,6 +30,11 @@ const { join } = require('node:path');
 const { parse: parseYaml } = require('yaml');
 const { debug: debugWarn } = require('../debug');
 const { TOPIC_PATTERNS } = require('../topic-patterns');
+// Reused rather than duplicated: a `topics.yml` pattern is author-trusted
+// content just like a memory's `triggers.command_pattern` (see gates/tool.ts
+// and README.md "Trust Model"), so it gets the same ReDoS screen. Already
+// exported from gates/tool.ts for this purpose.
+const { isSafePattern } = require('../gates/tool');
 
 const VOCAB_FILENAME = 'topics.yml';
 
@@ -55,20 +60,51 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// `\b` is a transition between a \w char and a non-\w char. For a name
+// whose first or last character is itself non-\w (e.g. the topic name
+// `.env` or `c++`), a `\b…\b`-wrapped pattern can never match the name at
+// all: the boundary immediately touching a non-\w literal char requires the
+// OTHER neighbor to be \w, which is never guaranteed (e.g. ".env" at the
+// very start of a string, or "c++" immediately followed by whitespace, both
+// fail `\b\.env\b` / `\bc\+\+\b`). Lookarounds against the same \w charset
+// `\b` uses give the identical boundary semantics for ordinary
+// (all-word-char) names while also matching names that start/end on
+// punctuation.
 function keywordFallback(name: string): RegExp {
-  return new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i');
+  const escaped = escapeRegExp(name);
+  return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'i');
 }
 
+// Defensive copy: callers (see tests/vocab-loader.test.ts) must not be able
+// to mutate the module-level TOPIC_PATTERNS by mutating a vocabulary object
+// they were handed. topicNames is already a fresh array (Object.keys), but
+// `patterns`'s per-topic RegExp[] arrays need their own copy too — a
+// `.push()` on a returned array would otherwise corrupt TOPIC_PATTERNS for
+// every subsequent defaultVocabulary() call in the same process.
 function defaultVocabulary(): CompiledVocabulary {
+  const patterns: Record<string, RegExp[]> = {};
+  for (const [topic, pats] of Object.entries(TOPIC_PATTERNS)) {
+    patterns[topic] = [...(pats as RegExp[])];
+  }
   return {
     source: 'default',
     topicNames: Object.keys(TOPIC_PATTERNS),
-    patterns: TOPIC_PATTERNS,
+    patterns,
   };
 }
 
 function compilePatterns(name: string, rawPatterns: string[]): RegExp[] {
   const compiled = rawPatterns.map((p) => {
+    // ReDoS screen first, same guard gates/tool.ts applies to a memory's
+    // `triggers.command_pattern`: a `topics.yml` pattern is equally
+    // author-trusted content, so an unsafe shape degrades exactly like a
+    // non-compiling pattern rather than being compiled and run.
+    if (!isSafePattern(p)) {
+      debugWarn(
+        `topics.yml: topic '${name}' pattern ${JSON.stringify(p)} rejected by the ReDoS safety screen (too long or a nested-quantifier shape); degrading to keyword match on the topic name`,
+      );
+      return keywordFallback(name);
+    }
     try {
       return new RegExp(p, 'i');
     } catch (err) {
@@ -97,12 +133,18 @@ function readEntryFields(
     );
   }
   const raw = entry as RawEntry;
-  const name = raw.name;
-  if (typeof name !== 'string' || name.trim() === '') {
+  const rawName = raw.name;
+  if (typeof rawName !== 'string' || rawName.trim() === '') {
     throw new VocabularyError(
       `topics.yml: entry ${index} is missing required field 'name'`,
     );
   }
+  // Trimmed before it becomes the topic key: an author's stray leading/
+  // trailing whitespace in `name:` must not produce a topic that never
+  // matches its own keyword fallback (keywordFallback would otherwise embed
+  // the untrimmed whitespace into the regex) or a duplicate-name miss
+  // against an otherwise-identical trimmed entry elsewhere in the file.
+  const name = rawName.trim();
   if (raw.description !== undefined && typeof raw.description !== 'string') {
     throw new VocabularyError(
       `topics.yml: topic '${name}' field 'description' must be a string`,
@@ -204,9 +246,9 @@ function loadVocabulary(memoryDir: string | undefined): CompiledVocabulary {
   return loadVocabularyResult(memoryDir).vocabulary;
 }
 
-// Runtime matcher generalizing topic-patterns.ts's `matchedTopics` over a
-// loaded vocabulary (default or custom): any single regex hit on a topic is
-// enough — permissive on purpose, same contract as the original.
+// Runtime matcher against a loaded vocabulary (default or custom): any
+// single regex hit on a topic is enough — permissive on purpose, mirrors
+// the old built-in-only matcher's contract before topics.yml existed.
 function matchedTopicsForVocabulary(
   text: string,
   vocabulary: CompiledVocabulary,
@@ -220,11 +262,22 @@ function matchedTopicsForVocabulary(
 }
 
 module.exports = {
-  VOCAB_FILENAME,
-  VocabularyError,
+  // Production surface: every non-test caller (gates/topic.ts,
+  // lint/topics.ts, src/eval/runner.ts) uses loadVocabularyResult /
+  // loadVocabulary / defaultVocabulary / matchedTopicsForVocabulary.
   defaultVocabulary,
-  loadVocabularyOrThrow,
   loadVocabularyResult,
   loadVocabulary,
   matchedTopicsForVocabulary,
+  // Test-only from here down: VOCAB_FILENAME, VocabularyError, and
+  // loadVocabularyOrThrow exist so tests/vocab-loader.test.ts can assert
+  // the throwing contract and the on-disk filename directly. No production
+  // code in this package imports loadVocabularyOrThrow (production always
+  // wants the never-throws loadVocabularyResult/loadVocabulary). Not
+  // lint-enforced yet — a `lint --strict "no production import of
+  // loadVocabularyOrThrow"` rule is filed as a follow-up (task 0a32c3ad),
+  // out of scope for this fix round.
+  VOCAB_FILENAME,
+  VocabularyError,
+  loadVocabularyOrThrow,
 };

@@ -1,5 +1,6 @@
+const { singleLine } = require('../debug');
 const {
-  loadVocabulary,
+  loadVocabularyResult,
   matchedTopicsForVocabulary,
 } = require('../vocab/loader');
 
@@ -7,13 +8,28 @@ const topicGate: Gate = {
   name: 'topic',
   evaluate(ctx: RouterContext, memories: Memory[]): GateHit[] {
     if (!ctx.prompt) return [];
-    // The Gate interface has no memoryDir slot, and hooks/** (which set
-    // this env var before invoking us) is out of scope for this change —
-    // read it the same way mcp/server.ts and both hook binaries already do.
-    // loadVocabulary never throws: missing/invalid topics.yml degrades to
-    // the built-in default (see src/vocab/loader.ts) so a broken corpus
-    // file can never crash the UserPromptSubmit hook.
-    const vocabulary = loadVocabulary(process.env.MEMORY_ROUTER_DIR);
+    // ctx.memoryDir (threaded by every caller that knows its own corpus dir
+    // today: cli.ts's `test`/`eval` verbs, src/eval/runner.ts) wins over the
+    // MEMORY_ROUTER_DIR env var. The env var stays as the fallback ONLY for
+    // callers that can't thread a dir — today that's hooks/** (out of scope
+    // for this change) and mcp/server.ts, both of which already set/read
+    // this same env var. loadVocabularyResult never throws: missing/invalid
+    // topics.yml degrades to the built-in default (see src/vocab/loader.ts)
+    // so a broken corpus file can never crash the UserPromptSubmit hook.
+    const memoryDir = ctx.memoryDir ?? process.env.MEMORY_ROUTER_DIR;
+    const { vocabulary, error } = loadVocabularyResult(memoryDir);
+    if (error) {
+      // Unconditional (not gated behind MEMORY_ROUTER_DEBUG=1) — same
+      // convention as gates/tool.ts's unsafe-command_pattern rejection
+      // notice: one plain `memory-router: ` prefixed stderr line so a
+      // degrade to the built-in default is never silently invisible in
+      // production. stdout stays untouched (reserved for the hook's
+      // additionalContext contract). Distinct from debug.ts's bracketed
+      // `[memory-router]` convention, which stays opt-in via the env flag.
+      process.stderr.write(
+        `memory-router: invalid topics.yml, falling back to the built-in default vocabulary: ${singleLine(error)}\n`,
+      );
+    }
     const topics = new Set<Topic>(
       matchedTopicsForVocabulary(ctx.prompt, vocabulary),
     );

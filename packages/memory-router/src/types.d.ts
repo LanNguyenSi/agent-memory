@@ -75,6 +75,16 @@ declare global {
     prompt?: string;
     cwd?: string;
     tool?: ToolCall;
+    /**
+     * The memory dir this ctx's prompt/tool call is being resolved against.
+     * The Topic Gate (src/gates/topic.ts) prefers this over the
+     * `MEMORY_ROUTER_DIR` env var when loading `<memoryDir>/topics.yml` —
+     * the env var stays as a fallback for callers that still can't thread a
+     * dir (only the hooks/** binaries today, which set the env var before
+     * invoking the router and are out of scope here). Optional and unset
+     * by every caller that doesn't (yet) know its own dir.
+     */
+    memoryDir?: string;
   }
 
   interface GateHit {

@@ -35,7 +35,29 @@ test('missing topics.yml: default vocabulary, unchanged built-in set', () => {
     [...vocab.topicNames].sort(),
     Object.keys(TOPIC_PATTERNS).sort(),
   );
-  assert.equal(vocab.patterns, TOPIC_PATTERNS, 'same object, no copy needed');
+  // Deep-equal, not the same object: defaultVocabulary() returns a
+  // defensive copy (see the isolation test below) so a caller mutating the
+  // returned vocabulary can never corrupt the module-level TOPIC_PATTERNS.
+  assert.deepEqual(vocab.patterns, TOPIC_PATTERNS);
+});
+
+test('defaultVocabulary(): returns a defensive copy — mutating the return value does not leak into TOPIC_PATTERNS or a later call', () => {
+  const before = TOPIC_PATTERNS.deployment.length;
+  const vocab1 = defaultVocabulary();
+  vocab1.patterns.deployment.push(/should-not-leak-anywhere/i);
+
+  assert.equal(
+    TOPIC_PATTERNS.deployment.length,
+    before,
+    'module-level TOPIC_PATTERNS must be untouched by a mutation on the returned vocabulary',
+  );
+
+  const vocab2 = defaultVocabulary();
+  assert.equal(
+    vocab2.patterns.deployment.length,
+    before,
+    'a second, independent call must not see the first call\'s leaked mutation either',
+  );
 });
 
 test('undefined memoryDir: default vocabulary, no error', () => {
@@ -194,4 +216,108 @@ test('entry that is not a mapping (e.g. a bare string) is rejected', () => {
   const dir = makeTmpDir();
   writeVocab(dir, '- just-a-string\n');
   assert.throws(() => loadVocabularyOrThrow(dir), /not a mapping/);
+});
+
+// --- ReDoS safety screen (HIGH fix) --------------------------------------
+
+test('unsafe pattern (nested-quantifier ReDoS shape) is rejected, degrades to keyword match on the topic name, does not throw or drop the topic', () => {
+  const dir = makeTmpDir();
+  writeVocab(
+    dir,
+    '- name: redos_topic\n  patterns:\n    - "^(a+)+$"\n    - "\\\\bvalid\\\\b"\n',
+  );
+  const vocab = loadVocabularyOrThrow(dir); // must not throw
+  assert.equal(vocab.topicNames.length, 1);
+  assert.equal(vocab.patterns.redos_topic.length, 2);
+
+  // The valid sibling pattern still works.
+  assert.ok(
+    matchedTopicsForVocabulary('this is valid input', vocab).includes(
+      'redos_topic',
+    ),
+  );
+  // The unsafe pattern degraded to a keyword match on the topic's own name
+  // rather than being compiled and run.
+  assert.ok(
+    matchedTopicsForVocabulary('mentions redos_topic by name', vocab).includes(
+      'redos_topic',
+    ),
+  );
+});
+
+test('unsafe pattern never reaches RegExp: a classic catastrophic-backtracking input resolves in milliseconds', () => {
+  const dir = makeTmpDir();
+  writeVocab(dir, '- name: redos_topic\n  patterns:\n    - "^(a+)+$"\n');
+  const vocab = loadVocabularyOrThrow(dir);
+
+  // Bait string: against the raw `^(a+)+$` on a vulnerable engine this
+  // would blow past any reasonable per-gate time budget. Against the
+  // keyword-fallback regex it degraded to, it's a plain substring scan.
+  const evilInput = 'a'.repeat(35) + '!';
+  const start = Date.now();
+  matchedTopicsForVocabulary(evilInput, vocab);
+  const elapsedMs = Date.now() - start;
+  assert.ok(
+    elapsedMs < 500,
+    `gate run must stay in the millisecond range, took ${elapsedMs}ms`,
+  );
+});
+
+test('overlong pattern (> 200 chars) is rejected by the same ReDoS screen, degrades to keyword match', () => {
+  const dir = makeTmpDir();
+  const overlong = 'a'.repeat(201);
+  writeVocab(dir, `- name: overlong_topic\n  patterns:\n    - "${overlong}"\n`);
+  const vocab = loadVocabularyOrThrow(dir);
+  assert.ok(
+    matchedTopicsForVocabulary('mentions overlong_topic by name', vocab).includes(
+      'overlong_topic',
+    ),
+  );
+});
+
+// --- Name hygiene (MEDIUM fix): trimming + keyword-fallback boundary -----
+
+test('name is trimmed before it becomes the topic key: whitespace-padded "name:" behaves identically to the trimmed form', () => {
+  const dir = makeTmpDir();
+  writeVocab(
+    dir,
+    '- name: "  deployment  "\n  patterns:\n    - "\\\\bship\\\\b"\n',
+  );
+  const vocab = loadVocabularyOrThrow(dir);
+  assert.deepEqual(vocab.topicNames, ['deployment']);
+  assert.ok('deployment' in vocab.patterns);
+  assert.ok(
+    matchedTopicsForVocabulary('time to ship', vocab).includes('deployment'),
+  );
+});
+
+test('topic named ".env" with no patterns matches its own name via keyword fallback (lookaround boundary, not \\b)', () => {
+  const dir = makeTmpDir();
+  writeVocab(dir, '- name: .env\n');
+  const vocab = loadVocabularyOrThrow(dir);
+  // \b\.env\b can never match ".env" at all (the boundary immediately
+  // touching the non-word '.' requires the OTHER side to be a word char,
+  // which is never guaranteed for a name that starts on punctuation) — this
+  // is exactly the bug the lookaround fix closes.
+  assert.ok(
+    matchedTopicsForVocabulary('check the .env file before committing', vocab)
+      .includes('.env'),
+  );
+  assert.ok(
+    matchedTopicsForVocabulary('.env holds secrets', vocab).includes('.env'),
+  );
+});
+
+test('topic named "c++" with no patterns matches its own name via keyword fallback', () => {
+  const dir = makeTmpDir();
+  writeVocab(dir, '- name: "c++"\n');
+  const vocab = loadVocabularyOrThrow(dir);
+  assert.ok(
+    matchedTopicsForVocabulary('I love c++ programming', vocab).includes(
+      'c++',
+    ),
+  );
+  assert.ok(
+    matchedTopicsForVocabulary('rewrite it in c++', vocab).includes('c++'),
+  );
 });

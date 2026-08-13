@@ -10,6 +10,8 @@ const {
   __levenshtein,
 } = require('../src/lint/topics');
 const { TOPIC_PATTERNS } = require('../src/topic-patterns');
+const { loadVocabularyResult } = require('../src/vocab/loader');
+const { singleLine } = require('../src/debug');
 
 const KNOWN_TOPICS = Object.keys(TOPIC_PATTERNS);
 
@@ -259,4 +261,32 @@ test('formatReportText: prefixes a clear vocabularyError line, then the normal r
   assert.match(text, /invalid topics\.yml/);
   assert.match(text, /YAML parse error/);
   assert.match(text, /3 memory file/);
+});
+
+test('formatReportText: a real (broken-fixture) vocabularyError is normalized to a single line before interpolation', () => {
+  const dir = makeTmpDir();
+  fs.writeFileSync(path.join(dir, 'topics.yml'), '- name: [unterminated\n');
+  const { error } = loadVocabularyResult(dir);
+  // Sanity: the real error IS genuinely multi-line (the `yaml` package
+  // ships a caret-pointer snippet spanning several lines) — otherwise this
+  // test wouldn't actually exercise the normalization at all.
+  assert.ok(
+    error && error.includes('\n'),
+    'expected a real, multi-line vocabularyError from the broken fixture',
+  );
+
+  const text = formatReportText({
+    hits: [],
+    scannedCount: 0,
+    vocabularyError: error,
+  });
+  assert.equal(
+    text.includes(error as string),
+    false,
+    'the raw multi-line error text must never appear verbatim in the report',
+  );
+  assert.ok(
+    text.includes(singleLine(error as string)),
+    'the single-line-normalized (src/debug.ts singleLine) error text must appear in the report',
+  );
 });

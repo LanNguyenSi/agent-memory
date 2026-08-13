@@ -22,6 +22,7 @@ interface EvalReportLike {
   dir: string;
   corpusSize: number;
   semanticPathActive: boolean;
+  vocabularySource: string;
   unknownExpectIds: string[];
   perPrompt: {
     prompt: string;
@@ -52,6 +53,7 @@ function buildReport(): EvalReportLike {
     dir: "/tmp/corpus",
     corpusSize: 2,
     semanticPathActive: false,
+    vocabularySource: "built-in default",
     unknownExpectIds: [],
     perPrompt: [
       {
@@ -92,11 +94,19 @@ function buildReport(): EvalReportLike {
   };
 }
 
-test("formatEvalReportText: header lines report golden path, corpus size, semantic path state", () => {
+test("formatEvalReportText: header lines report golden path, corpus size, semantic path state, vocabulary source", () => {
   const text = formatEvalReportText(buildReport());
   assert.match(text, /golden: golden\.yml/);
   assert.match(text, /corpus: \/tmp\/corpus \(2 memories\)/);
   assert.match(text, /semantic path: inactive/);
+  assert.match(text, /vocabulary: built-in default/);
+});
+
+test("formatEvalReportText: vocabulary line reflects a custom source verbatim", () => {
+  const report = buildReport();
+  report.vocabularySource = "custom (/tmp/corpus/topics.yml)";
+  const text = formatEvalReportText(report);
+  assert.match(text, /vocabulary: custom \(\/tmp\/corpus\/topics\.yml\)/);
 });
 
 test("formatEvalReportText: semantic path ACTIVE renders the blended-measurement message", () => {
