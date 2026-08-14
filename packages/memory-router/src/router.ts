@@ -142,7 +142,7 @@ async function resolveBlended(
   // semantic top-k can still win a slot once topic/recency/type are folded
   // in, so the candidate pool going into the blend is deliberately more
   // generous than the final cap. Width is env-overridable via
-  // MEMORY_ROUTER_BLEND_CANDIDATE_K (default 10, see BLEND_DEFAULTS.candidateK
+  // MEMORY_ROUTER_BLEND_CANDIDATE_K (default 5, see BLEND_DEFAULTS.candidateK
   // in src/gates/confidence.ts); rounded defensively since an env override
   // is free-form text and the value below flows straight into a search
   // "how many rows" argument.

@@ -33,16 +33,23 @@ function confidenceThreshold(ambiguity: number): number {
 // resolveBlended() (src/router.ts) combines a semantic score (the dominant
 // signal, a raw cosine similarity typically in [0.3, 0.9] for a real match),
 // a Topic Gate boost, and small recency/type modifiers into one score per
-// memory. The weights below are the DEFAULTS for that blend and are
-// DELIBERATELY UNCALIBRATED: no rollout measurement has tuned them yet (see
-// mm-v1-T008, "measure against the golden set, then calibrate"). They only
-// encode the intended *shape*: topicBoost is one order of magnitude below a
-// typical semantic score (a nudge, not a standalone signal — the old
-// gates/topic.ts flat 1.0 score is exactly the bug this replaces), and
+// memory. The weights below are the DEFAULTS for that blend. topicBoost and
+// candidateK were CALIBRATED in mm-v1-T008 against the reference corpus
+// (289 memories, 16-positive/4-negative golden set, Ollama bge-m3): a small
+// topicBoost lets the semantic signal dominate the ranking (MRR 0.648 ->
+// 0.710 vs the pre-calibration 0.15), and a candidate pool of 5 stops
+// weak semantic candidates from flooding the final cap (P 0.238 -> 0.288,
+// R 0.453 -> 0.547). See README "Calibration" for the full measurement
+// table. minSemanticScore is deliberately NOT hard-calibrated: raw cosine
+// ranges are provider- and model-specific (bge-m3 relevance sits ~0.75-0.85
+// where OpenAI embeddings score far lower), so the floor keeps a permissive
+// default and MUST be tuned per corpus via MEMORY_ROUTER_BLEND_MIN_SEMANTIC
+// (0.78 measured for Ollama bge-m3 on the reference corpus). The shape
+// intent is unchanged: topicBoost is a nudge, not a standalone signal (the
+// old gates/topic.ts flat 1.0 score is exactly the bug this replaces), and
 // recency/type are a further order of magnitude below that (tie-breakers
-// only). Every weight is overridable via the MEMORY_ROUTER_BLEND_* env
-// namespace so a corpus can retune without a code change while T008 is
-// pending.
+// only; no measurable golden-set effect in T008, left as shaped). Every
+// weight stays overridable via the MEMORY_ROUTER_BLEND_* env namespace.
 interface BlendWeights {
   /** Additive score when the Topic Gate matches, on top of any semantic score. */
   topicBoost: number;
@@ -78,12 +85,12 @@ interface BlendWeights {
 }
 
 const BLEND_DEFAULTS: BlendWeights = {
-  topicBoost: 0.15,
+  topicBoost: 0.05,
   recencyWeight: 0.05,
   recencyHalfLifeDays: 30,
   typeWeight: 0.03,
   minSemanticScore: 0.5,
-  candidateK: 10,
+  candidateK: 5,
 };
 
 // A negative override is invalid for every weight in this module (a

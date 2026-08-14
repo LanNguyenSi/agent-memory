@@ -39,7 +39,7 @@ const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'memories');
 // to compute "expected" would make the assertion circular: a bug that zeros
 // out a weight would zero both sides identically). Keep these in sync with
 // src/gates/confidence.ts by hand.
-const DEFAULT_TOPIC_BOOST = 0.15;
+const DEFAULT_TOPIC_BOOST = 0.05;
 const DEFAULT_RECENCY_WEIGHT = 0.05;
 const DEFAULT_RECENCY_HALFLIFE_DAYS = 30;
 const DEFAULT_TYPE_WEIGHT = 0.03;
@@ -514,7 +514,7 @@ test('resolveBlended: ctx.tool still resolves via the deterministic Tool Gate in
 
 test('resolveBlended: a Tool-Gate hit is privileged ahead of the maxHits cap and is never evicted by blend-scored memories exceeding 1.0 (mm-v1-T004 fix-round 2 MEDIUM #2)', async () => {
   // Three blended-only candidates each score semantic(0.95) + topicBoost
-  // (default 0.15) + type/recency modifiers > 1.0 — strictly above the
+  // (default 0.05) + type/recency modifiers > 1.0 — strictly above the
   // Tool Gate's flat 1.0. With maxHits=2 and plain highest-score-wins
   // slot allocation (the pre-fix behavior), all 2 slots would go to the
   // blend candidates and toolMem would be evicted entirely, even though
@@ -726,14 +726,17 @@ test('resolveBlended: MEMORY_ROUTER_BLEND_CANDIDATE_K overrides the semantic can
   }
 });
 
-test('resolveBlended: a negative MEMORY_ROUTER_BLEND_CANDIDATE_K override falls back to the built-in default (10) rather than narrowing the candidate pool', async () => {
+test('resolveBlended: a negative MEMORY_ROUTER_BLEND_CANDIDATE_K override falls back to the built-in default (5) rather than narrowing the candidate pool', async () => {
   const mem = fakeMemory('mem');
   const ctx: RouterContext = { prompt: NO_TOPIC_PROMPT, memoryDir: NOVOCAB_DIR };
   const prev = process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K;
   process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K = '-3';
   try {
     let capturedK: number | undefined;
-    await resolveBlended(ctx, [mem], '/fake/dir', { maxHits: 5 }, {
+    // maxHits 3 < the default candidateK 5, so a captured k of 5 proves the
+    // fallback consulted BLEND_DEFAULTS.candidateK, not the maxHits floor
+    // (semanticK = max(maxHits, candidateK)).
+    await resolveBlended(ctx, [mem], '/fake/dir', { maxHits: 3 }, {
       semanticSearch: async (
         _prompt: string,
         _memories: Memory[],
@@ -744,7 +747,7 @@ test('resolveBlended: a negative MEMORY_ROUTER_BLEND_CANDIDATE_K override falls 
         return [];
       },
     });
-    assert.equal(capturedK, 10, `expected the negative override to fall back to the built-in default (10), got ${capturedK}`);
+    assert.equal(capturedK, 5, `expected the negative override to fall back to the built-in default (5), got ${capturedK}`);
   } finally {
     if (prev === undefined) delete process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K;
     else process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K = prev;
