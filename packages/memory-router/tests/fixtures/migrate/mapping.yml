@@ -1,0 +1,5 @@
+# Curated topic-mapping fixture used by tests/migrate-cli.test.ts. Maps the
+# static corpus's otherwise-untagged `user_untagged` memory to a fixed
+# topic, proving --mapping is actually consulted end to end.
+- id: "user_untagged"
+  topics: [mapped_topic]
