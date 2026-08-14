@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-14
+
+**Memory-Management v1: schema v1, topic vocabulary as corpus data, multi-provider embeddings, score-blend resolver, eval/migrate/consolidate verbs, deterministic load order, calibrated defaults (mm-v1-T002 through T008).**
+
 ### Added
 
 - `memory-router consolidate --dir <path> [--near-threshold <n>] [--json]` (mm-v1-T007): report-only corpus health check. No LLM, no automatic merges, never writes to the corpus (not even a temp file, verified by a directory-snapshot test both at the direct-call and CLI-subprocess level). Corpus dir resolution mirrors `test`/`eval`/`migrate`: `--dir` flag, then `$MEMORY_ROUTER_DIR`. Four independent, read-only passes:
