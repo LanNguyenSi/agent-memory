@@ -3,14 +3,23 @@
 // --json schema (stable):
 //   {
 //     dir, scannedCount,
-//     exactDupes: { normalization, groups: [{ hash, ids, paths }] },
-//     nearDupes: { status: "ok"|"skipped", reason?, threshold,
-//                  indexedCount, totalCount, pairs: [{ aId, aPath, bId, bPath, similarity }] },
+//     exactDupes: { normalization, groups: [{ hash, ids, paths }],
+//                   emptyBodies: [{ id, path }] },
+//     nearDupes: { status: "ok"|"skipped", reason: string|null, threshold,
+//                  indexedCount, totalCount, pairs: [{ aId, aPath, bId, bPath, similarity }],
+//                  staleModelRows?, staleModelReason? },
 //     stale: <StaleReport, verbatim from src/lint/stale.ts>,
 //     schema: { scannedCount, untaggedCount, untaggedIds,
 //               legacyFormatCount, legacyFormatRate, legacyFormatIds,
+//               invalidTopicsShapeCount, invalidTopicsShapeIds,
 //               loaderRejects: [{ path, reason }] }
 //   }
+// `nearDupes.reason` is always present (never simply absent) so the key set
+// is stable regardless of status: null on "ok", the skip explanation on
+// "skipped". `staleModelRows`/`staleModelReason` are only present on an
+// "ok" result when the index has rows for the missing memories but under a
+// different embedding model than the one currently active (see
+// src/consolidate/near-dupes.ts).
 //
 // A report, not a gate: `memory-router consolidate` never writes anything
 // and always exits 0 on an error-free run, regardless of how many findings
@@ -24,6 +33,11 @@ interface ExactDupeGroupLike {
   paths: string[];
 }
 
+interface EmptyBodyLike {
+  id: string;
+  path: string;
+}
+
 interface NearDupePairLike {
   aId: string;
   aPath: string;
@@ -34,11 +48,13 @@ interface NearDupePairLike {
 
 interface NearDupeResultLike {
   status: 'ok' | 'skipped';
-  reason?: string;
+  reason?: string | null;
   threshold: number;
   indexedCount: number;
   totalCount: number;
   pairs: NearDupePairLike[];
+  staleModelRows?: number;
+  staleModelReason?: string;
 }
 
 interface SchemaMetricsLike {
@@ -48,13 +64,15 @@ interface SchemaMetricsLike {
   legacyFormatCount: number;
   legacyFormatRate: number;
   legacyFormatIds: string[];
+  invalidTopicsShapeCount: number;
+  invalidTopicsShapeIds: string[];
   loaderRejects: { path: string; reason: string }[];
 }
 
 interface ConsolidateReportLike {
   dir: string;
   scannedCount: number;
-  exactDupes: { normalization: string; groups: ExactDupeGroupLike[] };
+  exactDupes: { normalization: string; groups: ExactDupeGroupLike[]; emptyBodies: EmptyBodyLike[] };
   nearDupes: NearDupeResultLike;
   // Loosely typed here (only the fields this formatter touches are named)
   // since the real StaleReport type lives in src/lint/stale.ts and this
@@ -84,6 +102,14 @@ function formatConsolidateReportText(report: ConsolidateReportLike): string {
       for (const p of g.paths) lines.push(`    ${p}`);
     }
   }
+  if (report.exactDupes.emptyBodies.length > 0) {
+    lines.push(
+      `empty bodies (excluded from dupe grouping): ${report.exactDupes.emptyBodies.length}`,
+    );
+    for (const e of report.exactDupes.emptyBodies) {
+      lines.push(`  ${e.id}  ${e.path}`);
+    }
+  }
   lines.push('');
 
   lines.push(`--- near duplicates (cosine >= ${report.nearDupes.threshold}) ---`);
@@ -93,6 +119,9 @@ function formatConsolidateReportText(report: ConsolidateReportLike): string {
     lines.push(
       `coverage: ${report.nearDupes.indexedCount}/${report.nearDupes.totalCount} memories had a usable index vector`,
     );
+    if (report.nearDupes.staleModelReason) {
+      lines.push(`  ${report.nearDupes.staleModelReason}`);
+    }
     if (report.nearDupes.pairs.length === 0) {
       lines.push('none found');
     } else {
@@ -119,6 +148,10 @@ function formatConsolidateReportText(report: ConsolidateReportLike): string {
   );
   if (report.schema.legacyFormatIds.length > 0) {
     lines.push(`  ${report.schema.legacyFormatIds.join(', ')}`);
+  }
+  lines.push(`invalid topics shape: ${report.schema.invalidTopicsShapeCount}/${report.schema.scannedCount}`);
+  if (report.schema.invalidTopicsShapeIds.length > 0) {
+    lines.push(`  ${report.schema.invalidTopicsShapeIds.join(', ')}`);
   }
   lines.push(`loader rejects: ${report.schema.loaderRejects.length}`);
   for (const r of report.schema.loaderRejects) {

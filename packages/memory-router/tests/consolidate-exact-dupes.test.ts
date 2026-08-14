@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   findExactDupes,
+  findEmptyBodies,
   normalizeBody,
   hashBody,
   NORMALIZATION_DESCRIPTION,
@@ -73,4 +74,42 @@ test('findExactDupes: empty corpus returns no groups', () => {
 test('NORMALIZATION_DESCRIPTION is a non-empty documented string', () => {
   assert.equal(typeof NORMALIZATION_DESCRIPTION, 'string');
   assert.ok(NORMALIZATION_DESCRIPTION.length > 0);
+});
+
+// mm-v1-T007 fix round LOW #9: empty/whitespace-only bodies never form a
+// dupe group; they're reported separately.
+test('findExactDupes: two memories with empty bodies never form a dupe group', () => {
+  const memories = [memory('empty_a', ''), memory('empty_b', '   \n\t  ')];
+  assert.deepEqual(findExactDupes(memories), []);
+});
+
+test('findExactDupes: an empty-body memory does not suppress a real dupe group among the others', () => {
+  const memories = [
+    memory('empty_only', ''),
+    memory('z_second', 'Always run tests.  Always run tests.'),
+    memory('a_first', 'always run tests. always run tests.'),
+  ];
+  const groups = findExactDupes(memories);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].ids, ['a_first', 'z_second']);
+});
+
+test('findEmptyBodies: reports empty and whitespace-only bodies, sorted by id, non-empty bodies excluded', () => {
+  const memories = [
+    memory('z_blank', '   '),
+    memory('a_blank', ''),
+    memory('has_content', 'something here'),
+  ];
+  assert.deepEqual(findEmptyBodies(memories), [
+    { id: 'a_blank', path: '/corpus/a_blank.md' },
+    { id: 'z_blank', path: '/corpus/z_blank.md' },
+  ]);
+});
+
+test('findEmptyBodies: a corpus with no empty bodies returns an empty list', () => {
+  assert.deepEqual(findEmptyBodies([memory('only', 'nothing to see here')]), []);
+});
+
+test('findEmptyBodies: empty corpus returns an empty list', () => {
+  assert.deepEqual(findEmptyBodies([]), []);
 });

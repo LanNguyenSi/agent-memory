@@ -18,9 +18,11 @@ function buildReport(overrides: Record<string, unknown> = {}) {
     exactDupes: {
       normalization: 'trim, collapse whitespace, lowercase, sha256',
       groups: [{ hash: 'abc123', ids: ['a', 'b'], paths: ['/tmp/corpus/a.md', '/tmp/corpus/b.md'] }],
+      emptyBodies: [] as { id: string; path: string }[],
     },
     nearDupes: {
       status: 'ok' as const,
+      reason: null as string | null,
       threshold: 0.95,
       indexedCount: 3,
       totalCount: 3,
@@ -39,6 +41,8 @@ function buildReport(overrides: Record<string, unknown> = {}) {
       legacyFormatCount: 1,
       legacyFormatRate: 1 / 3,
       legacyFormatIds: ['c'],
+      invalidTopicsShapeCount: 0,
+      invalidTopicsShapeIds: [] as string[],
       loaderRejects: [{ path: '/tmp/corpus/broken.md', reason: 'no frontmatter' }],
     },
     ...overrides,
@@ -64,8 +68,8 @@ test('formatConsolidateReportText: renders every section with real findings', ()
 
 test('formatConsolidateReportText: empty-findings corpus renders "none found" for both dupe sections', () => {
   const report = buildReport({
-    exactDupes: { normalization: 'x', groups: [] },
-    nearDupes: { status: 'ok', threshold: 0.95, indexedCount: 0, totalCount: 0, pairs: [] },
+    exactDupes: { normalization: 'x', groups: [], emptyBodies: [] },
+    nearDupes: { status: 'ok', reason: null, threshold: 0.95, indexedCount: 0, totalCount: 0, pairs: [] },
     schema: {
       scannedCount: 0,
       untaggedCount: 0,
@@ -73,6 +77,8 @@ test('formatConsolidateReportText: empty-findings corpus renders "none found" fo
       legacyFormatCount: 0,
       legacyFormatRate: 0,
       legacyFormatIds: [],
+      invalidTopicsShapeCount: 0,
+      invalidTopicsShapeIds: [],
       loaderRejects: [],
     },
   });
@@ -80,6 +86,7 @@ test('formatConsolidateReportText: empty-findings corpus renders "none found" fo
   assert.match(text, /exact duplicates[\s\S]*?none found/);
   assert.match(text, /near duplicates[\s\S]*?none found/);
   assert.match(text, /loader rejects: 0/);
+  assert.match(text, /invalid topics shape: 0\/0/);
 });
 
 test('formatConsolidateReportText: a skipped near-dupe pass renders the reason, not "none found"', () => {
@@ -91,6 +98,59 @@ test('formatConsolidateReportText: a skipped near-dupe pass renders the reason, 
   assert.ok(!text.includes('none found'), 'a skip reason must render, never the "none found" fallback');
 });
 
+test('formatConsolidateReportText: empty/whitespace-only bodies render under their own section, separate from dupe groups', () => {
+  const report = buildReport({
+    exactDupes: {
+      normalization: 'x',
+      groups: [],
+      emptyBodies: [
+        { id: 'blank_one', path: '/tmp/corpus/blank_one.md' },
+        { id: 'blank_two', path: '/tmp/corpus/blank_two.md' },
+      ],
+    },
+  });
+  const text = formatConsolidateReportText(report);
+  assert.match(text, /empty bodies \(excluded from dupe grouping\): 2/);
+  assert.match(text, /blank_one\s+\/tmp\/corpus\/blank_one\.md/);
+  assert.match(text, /blank_two\s+\/tmp\/corpus\/blank_two\.md/);
+});
+
+test('formatConsolidateReportText: invalid topics shape renders its own line, distinct from untagged', () => {
+  const report = buildReport({
+    schema: {
+      scannedCount: 4,
+      untaggedCount: 1,
+      untaggedIds: ['b'],
+      legacyFormatCount: 0,
+      legacyFormatRate: 0,
+      legacyFormatIds: [],
+      invalidTopicsShapeCount: 1,
+      invalidTopicsShapeIds: ['d'],
+      loaderRejects: [],
+    },
+  });
+  const text = formatConsolidateReportText(report);
+  assert.match(text, /invalid topics shape: 1\/4\n {2}d\n/);
+});
+
+test('formatConsolidateReportText: a stale-model-disclosure reason renders under the coverage line', () => {
+  const report = buildReport({
+    nearDupes: {
+      status: 'ok',
+      reason: null,
+      threshold: 0.95,
+      indexedCount: 1,
+      totalCount: 2,
+      pairs: [],
+      staleModelRows: 1,
+      staleModelReason: '1 indexed entry is stored under a different embedding model than the currently active model=model-B',
+    },
+  });
+  const text = formatConsolidateReportText(report);
+  assert.match(text, /coverage: 1\/2/);
+  assert.match(text, /stored under a different embedding model than the currently active model=model-B/);
+});
+
 test('formatConsolidateReportJson: emits the documented stable shape, parseable and round-trippable', () => {
   const report = buildReport();
   const json = formatConsolidateReportJson(report);
@@ -98,9 +158,12 @@ test('formatConsolidateReportJson: emits the documented stable shape, parseable 
   assert.equal(parsed.dir, '/tmp/corpus');
   assert.equal(parsed.scannedCount, 3);
   assert.deepEqual(parsed.exactDupes.groups[0].ids, ['a', 'b']);
+  assert.deepEqual(parsed.exactDupes.emptyBodies, []);
   assert.equal(parsed.nearDupes.status, 'ok');
+  assert.equal(parsed.nearDupes.reason, null, 'reason must be explicit null on the ok path, a stable key set');
   assert.equal(parsed.nearDupes.pairs[0].similarity, 0.97);
   assert.equal(parsed.schema.untaggedCount, 1);
+  assert.equal(parsed.schema.invalidTopicsShapeCount, 0);
   assert.equal(parsed.schema.loaderRejects[0].reason, 'no frontmatter');
   assert.ok(json.endsWith('\n'));
 });

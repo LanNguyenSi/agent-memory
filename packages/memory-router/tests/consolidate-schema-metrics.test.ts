@@ -103,6 +103,85 @@ test('buildSchemaMetrics: legacyFormatRate is 0 (not NaN) on a corpus with zero 
   }
 });
 
+// mm-v1-T007 fix round LOW #6: topics classification mirrors loader.ts's
+// resolution precedence exactly, rather than checking non-empty-array
+// presence at each location independently of the other.
+test('scanRawFrontmatter: a top-level topics: [] shadows a non-empty metadata.topics (UNTAGGED, matching the loader), not TAGGED', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-schema-metrics-shape-'));
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'shadowed.md'),
+      '---\nname: a\ntype: feedback\ntopics: []\nmetadata:\n  topics: [x, y]\n---\nbody\n',
+    );
+    const entries: RawScanEntryLike[] = scanRawFrontmatter(dir);
+    const e = entries.find((x) => x.id === 'shadowed')!;
+    assert.equal(e.ok, true);
+    assert.equal((e as { topicsShape?: string }).topicsShape, 'untagged');
+
+    const metrics = buildSchemaMetrics(dir);
+    assert.equal(metrics.untaggedCount, 1);
+    assert.deepEqual(metrics.untaggedIds, ['shadowed']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scanRawFrontmatter: a nullish (explicit YAML null) top-level topics falls through to metadata.topics, matching the loader\'s `??`', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-schema-metrics-shape-'));
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'falls_through.md'),
+      '---\nname: a\ntype: feedback\ntopics:\nmetadata:\n  topics: [x]\n---\nbody\n',
+    );
+    const metrics = buildSchemaMetrics(dir);
+    assert.equal(metrics.untaggedCount, 0);
+    assert.deepEqual(metrics.untaggedIds, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scanRawFrontmatter/buildSchemaMetrics: a non-list resolved topics value (string or map) is bucketed as invalidTopicsShape, not folded into untagged', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-schema-metrics-shape-'));
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'string_topics.md'),
+      '---\nname: a\ntype: feedback\ntopics: notalist\n---\nbody\n',
+    );
+    fs.writeFileSync(
+      path.join(dir, 'map_topics.md'),
+      '---\nname: b\ntype: feedback\ntopics:\n  a: 1\n---\nbody\n',
+    );
+    fs.writeFileSync(
+      path.join(dir, 'string_meta_topics.md'),
+      '---\nname: c\ntype: feedback\nmetadata:\n  topics: notalist\n---\nbody\n',
+    );
+
+    const entries: RawScanEntryLike[] = scanRawFrontmatter(dir);
+    for (const id of ['string_topics', 'map_topics', 'string_meta_topics']) {
+      const e = entries.find((x) => x.id === id)!;
+      assert.equal((e as { topicsShape?: string }).topicsShape, 'invalid-shape', id);
+    }
+
+    const metrics = buildSchemaMetrics(dir);
+    assert.equal(metrics.invalidTopicsShapeCount, 3);
+    assert.deepEqual(
+      [...metrics.invalidTopicsShapeIds].sort(),
+      ['map_topics', 'string_meta_topics', 'string_topics'],
+    );
+    // None of these are double-counted as untagged.
+    assert.equal(metrics.untaggedCount, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildSchemaMetrics: the static fixture corpus has zero invalid-shape topics (no regression on the existing untagged/legacy counts)', () => {
+  const metrics = buildSchemaMetrics(STATIC_CORPUS);
+  assert.equal(metrics.invalidTopicsShapeCount, 0);
+  assert.deepEqual(metrics.invalidTopicsShapeIds, []);
+});
+
 test('buildSchemaMetrics: MEMORY.md and non-.md files are never scanned', () => {
   const dir = copyStaticCorpus();
   fs.writeFileSync(path.join(dir, 'MEMORY.md'), '# pointer file, not a memory\n');

@@ -99,3 +99,28 @@ test('runConsolidate: default repoRoots falls back to [process.cwd()] without th
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// mm-v1-T007 fix round LOW #9: empty-body memories are wired through into
+// exactDupes.emptyBodies, on a dedicated ad-hoc corpus (not the shared
+// static fixture, so its scannedCount assertions elsewhere stay untouched).
+test('runConsolidate: exactDupes.emptyBodies surfaces empty/whitespace-only-body memories', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-consolidate-analyze-empty-'));
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'blank_one.md'),
+      '---\nname: blank one\ntype: reference\ntopics: [testing]\n---\n\n   \n',
+    );
+    fs.writeFileSync(
+      path.join(dir, 'has_body.md'),
+      '---\nname: has body\ntype: reference\ntopics: [testing]\n---\n\nreal content here\n',
+    );
+    const report = runConsolidate(dir, { repoRoots: [dir] });
+    assert.equal(report.scannedCount, 2);
+    assert.deepEqual(report.exactDupes.groups, []);
+    assert.deepEqual(report.exactDupes.emptyBodies, [
+      { id: 'blank_one', path: path.join(dir, 'blank_one.md') },
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

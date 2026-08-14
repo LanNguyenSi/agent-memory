@@ -2,14 +2,16 @@
 // no automatic merges, never writes to the corpus (not even a temp file
 // inside it). It combines four independent, read-only passes over a memory
 // dir so an operator can decide what to consolidate by hand:
-//   - exact duplicates (normalized body-hash groups)
+//   - exact duplicates (normalized body-hash groups; empty/whitespace-only
+//     bodies never form a group, they're reported separately as
+//     exactDupes.emptyBodies)
 //   - near duplicates  (cosine over EXISTING embedding-index vectors)
 //   - stale references (delegates entirely to src/lint/stale.ts, unchanged)
 //   - schema metrics   (untagged, legacy-format, loader-reject reasons)
 
 const { loadMemoriesFromDir } = require('../memory/loader');
 const { lintMemoryDirForStale } = require('../lint/stale');
-const { findExactDupes, NORMALIZATION_DESCRIPTION } = require('./exact-dupes');
+const { findExactDupes, findEmptyBodies, NORMALIZATION_DESCRIPTION } = require('./exact-dupes');
 const { findNearDupes, DEFAULT_NEAR_THRESHOLD } = require('./near-dupes');
 const { buildSchemaMetrics } = require('./schema-metrics');
 
@@ -31,6 +33,7 @@ function runConsolidate(dir: string, options: ConsolidateOptions = {}) {
   const memories: Memory[] = loadMemoriesFromDir(dir);
 
   const exactGroups = findExactDupes(memories);
+  const emptyBodies = findEmptyBodies(memories);
   const nearDupes = findNearDupes(dir, memories, threshold);
   // stale.ts's own public API, called exactly as the `stale` CLI verb calls
   // it (default options: verify:-only refs, no --scan-body/--check-urls;
@@ -44,6 +47,7 @@ function runConsolidate(dir: string, options: ConsolidateOptions = {}) {
     exactDupes: {
       normalization: NORMALIZATION_DESCRIPTION,
       groups: exactGroups,
+      emptyBodies,
     },
     nearDupes,
     stale,

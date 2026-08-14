@@ -574,3 +574,98 @@ test('legacy index (no embed_* provenance meta) whose rows already match the act
 
   fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
 });
+
+// mm-v1-T007 fix round HIGH #1: `readonly: true` opens the underlying
+// better-sqlite3 connection with `{ readonly: true, fileMustExist: true }`
+// and skips every write-at-open-time path (WAL pragma, CREATE TABLE/CREATE
+// VIRTUAL TABLE DDL, applyMigrations, recordProvenance). The single
+// concrete, deterministic, behavioral difference this produces is that a
+// write attempt through the returned store is REJECTED by SQLite itself
+// rather than silently succeeding. This is what near-dupes.ts's
+// `readonly: true` (src/consolidate/near-dupes.ts) actually buys: a future
+// bug that adds a stray write call there can no longer corrupt a shared
+// index file. Reads (getEmbedding/search/listEntries/
+// countEntriesWithStaleModel) are unaffected either way.
+test('readonly: true rejects a write through the returned store, while the same file opened normally accepts it', () => {
+  const dbPath = tmpDb();
+  const seed = openIndex({ path: dbPath, dimensions: 2 });
+  seed.upsert('a', 100, M, [1, 0]);
+  seed.close();
+
+  const ro = openIndex({ path: dbPath, dimensions: 2, readonly: true });
+  try {
+    assert.throws(
+      () => ro.upsert('b', 100, M, [0, 1]),
+      /attempt to write a readonly database/,
+      'upsert must be rejected by SQLite itself, not silently accepted',
+    );
+    assert.throws(
+      () => ro.remove('a'),
+      /attempt to write a readonly database/,
+      'remove must be rejected too',
+    );
+    // Reads through the SAME readonly store still work.
+    assert.deepEqual(ro.getEmbedding('a', M), [1, 0]);
+    assert.equal(ro.listEntries().length, 1);
+  } finally {
+    ro.close();
+  }
+
+  // The write attempts above never touched the file: reopening normally
+  // and writing succeeds exactly as if the readonly attempts never
+  // happened.
+  const rw = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    rw.upsert('b', 100, M, [0, 1]);
+    assert.equal(rw.listEntries().length, 2);
+  } finally {
+    rw.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('readonly: true still enforces the provider-mismatch throw (the meta table stays readable without a write)', () => {
+  const dbPath = tmpDb();
+  const seed = openIndex({
+    path: dbPath,
+    dimensions: 2,
+    meta: { provider: 'openai', model: M },
+  });
+  seed.upsert('a', 100, M, [1, 0]);
+  seed.close();
+
+  assert.throws(
+    () =>
+      openIndex({
+        path: dbPath,
+        readonly: true,
+        meta: { provider: 'ollama', model: 'nomic-embed-text' },
+        rebuildCommand: 'rm -rf /fake/.memory-router && memory-router index /fake',
+      }),
+    /provider=openai.*provider=ollama.*Rebuild the index/s,
+    'the provider-mismatch guard must still fire on a readonly open',
+  );
+  fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+});
+
+test('readonly: true against a nonexistent file throws cleanly instead of creating one', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-store-ro-missing-'));
+  const dbPath = path.join(dir, 'does-not-exist.sqlite');
+  assert.throws(() => openIndex({ path: dbPath, readonly: true }));
+  assert.equal(fs.existsSync(dbPath), false, 'a readonly open must never create the file');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('omitting readonly (existing callsites) keeps full read-write behavior unchanged: a brand-new file still gets its tables created', () => {
+  const dbPath = tmpDb();
+  // No `readonly` key at all, mirroring every pre-existing callsite
+  // (indexer.ts, lint/conflicts.ts, and every other test in this file).
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    store.upsert('a', 100, M, [1, 0]);
+    assert.deepEqual(store.getEmbedding('a', M), [1, 0]);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});

@@ -153,6 +153,68 @@ test('consolidate --near-threshold: a value swallowing the next flag is rejected
   }
 });
 
+// mm-v1-T007 fix round LOW #8: `Number.parseFloat` alone silently accepts
+// trailing garbage ("0.5abc" -> 0.5); the parser must reject the whole
+// token instead of quietly truncating it to a number the user never typed.
+test('consolidate --near-threshold: a value with trailing garbage ("0.5abc") is rejected, not truncated to 0.5', () => {
+  const dir = copyStaticCorpus();
+  try {
+    const { status, stderr } = run(['consolidate', '--dir', dir, '--near-threshold', '0.5abc']);
+    assert.equal(status, 1);
+    assert.match(stderr, /--near-threshold expects a number in \(0, 1\], got "0\.5abc"/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('consolidate --near-threshold=<n>: the inline form is accepted and reflected in the report', () => {
+  const dir = copyStaticCorpus();
+  try {
+    const { status, stdout } = run(['consolidate', '--dir', dir, '--near-threshold=0.8', '--json']);
+    assert.equal(status, 0, stdout);
+    const parsed = JSON.parse(stdout) as { nearDupes: { threshold: number } };
+    assert.equal(parsed.nearDupes.threshold, 0.8);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('consolidate --near-threshold=<n>: trailing garbage on the inline form is also rejected', () => {
+  const dir = copyStaticCorpus();
+  try {
+    const { status, stderr } = run(['consolidate', '--dir', dir, '--near-threshold=0.5abc']);
+    assert.equal(status, 1);
+    assert.match(stderr, /--near-threshold expects a number in \(0, 1\], got "0\.5abc"/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// mm-v1-T007 fix round LOW #10: args.repoRoots (already parsed generically
+// for `stale`) is threaded through into runConsolidate's stale pass.
+test('consolidate --repo-root: threaded through to the stale pass, changing whether a verify: path ref is reported stale', () => {
+  const dir = copyStaticCorpus();
+  const repoRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'memory-router-consolidate-cli-reporoot-'),
+  );
+  fs.mkdirSync(path.join(repoRoot, 'does', 'not'), { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, 'does', 'not', 'exist.ts'), '// present under this root\n');
+  try {
+    const { status, stdout } = run(['consolidate', '--dir', dir, '--repo-root', repoRoot, '--json']);
+    assert.equal(status, 0, stdout);
+    const parsed = JSON.parse(stdout) as { stale: { hits: { memoryId: string }[] } };
+    const staleHit = parsed.stale.hits.find((h) => h.memoryId === 'reference_stale_ref');
+    assert.equal(
+      staleHit,
+      undefined,
+      'the ref now resolves under the explicit --repo-root, so it must not be reported stale',
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('consolidate: $MEMORY_ROUTER_DIR env resolves the corpus when --dir is omitted', () => {
   const dir = copyStaticCorpus();
   try {
@@ -184,5 +246,8 @@ test('consolidate: nonexistent corpus dir exits 1 with a clear message', () => {
 test('--help lists the consolidate verb', () => {
   const { status, stdout } = run(['--help']);
   assert.equal(status, 0);
-  assert.match(stdout, /consolidate \[--dir <path>\] \[--near-threshold <n>\] \[--json\]/);
+  assert.match(
+    stdout,
+    /consolidate \[--dir <path>\] \[--near-threshold <n>\] \[--repo-root <path>\] \[--repo-roots <p1> <p2> \.\.\.\] \[--json\]/,
+  );
 });

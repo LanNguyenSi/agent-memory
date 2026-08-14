@@ -19,6 +19,20 @@
 // type whitelist can't drift between the two independently of this file.
 // Keep this logic in sync with loader.ts's parseMemoryFileWithReason if that
 // ever changes.
+//
+// topics classification (mm-v1-T007 fix round LOW #6): mirrors loader.ts's
+// own resolution precedence EXACTLY (`fm.topics ?? fm.metadata?.topics ??
+// []`) rather than checking "is there a non-empty array at either
+// location" independently of each other. A top-level `topics:` key wins
+// whenever it is present and non-null, REGARDLESS of its shape or
+// emptiness: an explicit `topics: []` shadows a non-empty
+// `metadata.topics` exactly the way it shadows it in the loader (both end
+// up UNTAGGED), and only an actually-nullish top-level `topics:` (absent,
+// or an explicit YAML null) falls through to `metadata.topics`. A resolved
+// value that isn't a list at all (a scalar, string, or map) is neither
+// "tagged" nor "untagged": it's reported under its own `invalid-shape`
+// bucket, the same way `src/migrate/transform.ts` treats the identical
+// shape, instead of being silently folded into "no topics".
 
 const { readFileSync, readdirSync, statSync } = require('node:fs');
 const { basename, extname, join } = require('node:path');
@@ -36,8 +50,19 @@ interface RawScanEntry {
   /** Only set when ok === true. */
   hasTopLevelType?: boolean;
   hasMetadataType?: boolean;
+  /** Non-empty-array presence checks, independent of precedence. Kept for
+   * their existing, narrower meaning; `topicsShape` below is what
+   * buildSchemaMetrics actually buckets on. */
   hasTopLevelTopics?: boolean;
   hasMetadataTopics?: boolean;
+  /**
+   * loader.ts-mirrored topics classification (see the file-level comment):
+   *   'tagged'        the resolved value is a non-empty array
+   *   'untagged'      the resolved value is an array of length 0
+   *   'invalid-shape' the resolved value is present but not an array
+   * Only set when ok === true.
+   */
+  topicsShape?: 'tagged' | 'untagged' | 'invalid-shape';
 }
 
 function hasNonEmptyArray(value: unknown): boolean {
@@ -130,6 +155,20 @@ function scanRawFrontmatter(dir: string): RawScanEntry[] {
       continue;
     }
 
+    // Mirrors loader.ts's `fm.topics ?? fm.metadata?.topics ?? []` exactly:
+    // a NULLISH top-level topics (absent, or an explicit YAML `topics:`
+    // with no value) falls through to metadata.topics; anything else at
+    // the top level (including an explicit `[]`, or a non-array value)
+    // wins outright. See the file-level comment for why this differs from
+    // the independent hasTopLevelTopics/hasMetadataTopics booleans above.
+    const hasOwnTopLevelTopics = fm.topics !== undefined && fm.topics !== null;
+    const resolvedTopics = hasOwnTopLevelTopics ? fm.topics : (fm.metadata?.topics ?? []);
+    const topicsShape: 'tagged' | 'untagged' | 'invalid-shape' = !Array.isArray(resolvedTopics)
+      ? 'invalid-shape'
+      : resolvedTopics.length > 0
+        ? 'tagged'
+        : 'untagged';
+
     out.push({
       path,
       id,
@@ -138,6 +177,7 @@ function scanRawFrontmatter(dir: string): RawScanEntry[] {
       hasMetadataType: Boolean(fm.metadata?.type),
       hasTopLevelTopics: hasNonEmptyArray(fm.topics),
       hasMetadataTopics: hasNonEmptyArray(fm.metadata?.topics),
+      topicsShape,
     });
   }
   return out;
@@ -151,6 +191,16 @@ interface SchemaMetrics {
   // 0 when scannedCount is 0 (nothing to divide by, not NaN/Infinity).
   legacyFormatRate: number;
   legacyFormatIds: string[];
+  /**
+   * Files whose resolved topics value (top-level `topics` when present and
+   * non-null, else `metadata.topics`, exactly mirroring loader.ts) is
+   * present but not a list at all (a scalar, string, or map). Distinct
+   * from `untagged`: an invalid shape isn't "no topics", it's "topics
+   * that can't be used as topics", the same distinction `migrate` already
+   * makes.
+   */
+  invalidTopicsShapeCount: number;
+  invalidTopicsShapeIds: string[];
   loaderRejects: { path: string; reason: string }[];
 }
 
@@ -164,15 +214,22 @@ function buildSchemaMetrics(dir: string): SchemaMetrics {
     // listing order.
     .sort((a, b) => a.path.localeCompare(b.path));
 
-  // "untagged": no topics at EITHER location (top-level or metadata.).
+  // "untagged": the loader-mirrored resolved topics value is an empty
+  // array (see scanRawFrontmatter's topicsShape comment for the exact
+  // precedence this mirrors).
   const untagged = ok
-    .filter((e) => !e.hasTopLevelTopics && !e.hasMetadataTopics)
+    .filter((e) => e.topicsShape === 'untagged')
     .sort((a, b) => a.id.localeCompare(b.id));
   // "legacy format": metadata.type carries the type, but top-level `type`
   // does not: the pre-schema-v1 Claude Code auto-memory shape (see
   // src/migrate/transform.ts's `type` hoist, which fixes exactly this).
   const legacyFormat = ok
     .filter((e) => !e.hasTopLevelType && e.hasMetadataType)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  // "invalid topics shape": the resolved topics value exists but isn't a
+  // list at all.
+  const invalidTopicsShape = ok
+    .filter((e) => e.topicsShape === 'invalid-shape')
     .sort((a, b) => a.id.localeCompare(b.id));
 
   return {
@@ -182,6 +239,8 @@ function buildSchemaMetrics(dir: string): SchemaMetrics {
     legacyFormatCount: legacyFormat.length,
     legacyFormatRate: ok.length > 0 ? legacyFormat.length / ok.length : 0,
     legacyFormatIds: legacyFormat.map((e) => e.id),
+    invalidTopicsShapeCount: invalidTopicsShape.length,
+    invalidTopicsShapeIds: invalidTopicsShape.map((e) => e.id),
     loaderRejects,
   };
 }

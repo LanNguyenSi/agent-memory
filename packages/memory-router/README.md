@@ -365,14 +365,15 @@ Report-only corpus health check. **No LLM, no automatic merges, and it never wri
 ```bash
 memory-router consolidate --dir ~/.claude/projects/PROJECT/memory
 memory-router consolidate --dir ~/.claude/projects/PROJECT/memory --near-threshold 0.9 --json
+memory-router consolidate --dir ~/.claude/projects/PROJECT/memory --repo-root ~/git/myrepo
 ```
 
 Corpus dir resolution is the same as `test`/`eval`/`migrate`: `--dir` flag, then `$MEMORY_ROUTER_DIR`. Four independent, read-only passes:
 
-- **Exact duplicates.** Groups memories whose BODY, after normalization, hashes identically. Frontmatter (`name`, `topics`, `severity`, ...) is not compared, only the body. Normalization: trim, collapse whitespace runs (spaces/tabs/newlines) to a single space, lowercase, then sha256 the result.
-- **Near duplicates.** Pairwise cosine similarity over EXISTING embedding-index vectors only (`<dir>/.memory-router/index.sqlite`, built separately by [`memory-router index`](#building-the-embedding-index)); this pass makes no live embedding API calls. It runs only when the index exists AND was built under the currently configured embedding provider/model (the same provenance contract `memory-router index` enforces, see "Embedding provider" below); a missing or incompatible index is SKIPPED with an explicit reason in the report, never a silent gap. `--near-threshold` sets the cosine floor (default `0.95`).
-- **Stale references.** Delegates entirely to [`memory-router stale`](#stale-memory-references), unchanged: same `verify:` frontmatter contract, same output, default repo root `process.cwd()`.
-- **Schema metrics.** `untagged` (no `topics:` at either the top level or `metadata.topics`), `legacy format` (`metadata.type` present without a top-level `type`, the pre-schema-v1 shape [`migrate`](#migrating-to-schema-v1-memory-router-migrate) backfills) with its rate, and `loader rejects` (files `src/memory/loader.ts` silently drops, with the reject reason, since the loader itself only debug-warns them and never surfaces why).
+- **Exact duplicates.** Groups memories whose BODY, after normalization, hashes identically. Frontmatter (`name`, `topics`, `severity`, ...) is not compared, only the body. Normalization: trim, collapse whitespace runs (spaces/tabs/newlines) to a single space, lowercase, then sha256 the result. An empty or whitespace-only body never forms a group with another empty body (two memories with no content share nothing meaningful); such memories are listed separately under `exactDupes.emptyBodies` instead of silently vanishing from the report.
+- **Near duplicates.** Pairwise cosine similarity over EXISTING embedding-index vectors only (`<dir>/.memory-router/index.sqlite`, built separately by [`memory-router index`](#building-the-embedding-index)); this pass makes no live embedding API calls, and opens the index **read-only** (a write attempt through it is rejected by SQLite itself, not merely discouraged by convention). It runs only when the index exists AND was built under the currently configured embedding provider/model (the same provenance contract `memory-router index` enforces, see "Embedding provider" below); a missing, incompatible, or corrupted/unreadable index is SKIPPED with an explicit reason in the report, never a silent gap and never a crash of the whole `consolidate` run. `--near-threshold` sets the cosine floor (default `0.95`, in `(0, 1]`; the value is strictly validated as a whole number, e.g. `0.5abc` is rejected rather than silently truncated to `0.5`). When `indexedCount < totalCount`, the report also discloses whether the gap is because those memories were never indexed at all, or because they ARE indexed but under a different embedding model than the one currently active (`staleModelRows`/`staleModelReason`): the latter needs a rebuild (`memory-router index`), not just a re-run, and looks identical to the former from the counts alone otherwise.
+- **Stale references.** Delegates entirely to [`memory-router stale`](#stale-memory-references), unchanged: same `verify:` frontmatter contract, same output, default repo root `process.cwd()`. Override with `--repo-root <path>` / `--repo-roots <p1> <p2> ...`, the same two flag forms `stale` itself accepts.
+- **Schema metrics.** `untagged` (the resolved topics value, top-level `topics:` when present and non-null else `metadata.topics`, mirroring the loader's own `fm.topics ?? fm.metadata?.topics ?? []` precedence exactly, so an explicit top-level `topics: []` shadows a non-empty `metadata.topics` the same way it does at runtime, is an empty array), `invalid topics shape` (that resolved value is present but isn't a list at all, e.g. a string or a YAML map; reported separately from `untagged` rather than folded into it, the same distinction [`migrate`](#migrating-to-schema-v1-memory-router-migrate) makes), `legacy format` (`metadata.type` present without a top-level `type`, the pre-schema-v1 shape `migrate` backfills) with its rate, and `loader rejects` (files `src/memory/loader.ts` silently drops, with the reject reason, since the loader itself only debug-warns them and never surfaces why).
 
 Always a report, never a gate: exits 0 on any error-free run regardless of how many findings it surfaces (same contract as `eval`/`migrate`'s dry-run path).
 
@@ -386,23 +387,28 @@ Always a report, never a gate: exits 0 on any error-free run regardless of how m
     "normalization": "trim, collapse whitespace runs (spaces/tabs/newlines) to a single space, lowercase, then sha256 the result",
     "groups": [
       { "hash": "…", "ids": ["a", "b"], "paths": ["/path/to/memory/a.md", "/path/to/memory/b.md"] }
-    ]
+    ],
+    "emptyBodies": [{ "id": "blank", "path": "/path/to/memory/blank.md" }]
   },
   "nearDupes": {
     "status": "ok",                 // "ok" | "skipped"
-    "reason": null,                 // set when status is "skipped"
+    "reason": null,                 // always present: null on "ok" (shown here), the skip explanation on "skipped" (a stable key set either way)
     "threshold": 0.95,
     "indexedCount": 40,             // memories that had a usable, same-model index vector
     "totalCount": 42,               // indexedCount < totalCount means the index is stale
     "pairs": [
       { "aId": "a", "aPath": "/path/to/memory/a.md", "bId": "c", "bPath": "/path/to/memory/c.md", "similarity": 0.97 }
     ]
+    // "staleModelRows"/"staleModelReason" only appear on an "ok" result when
+    // indexedCount < totalCount AND some of the missing rows exist in the
+    // index but under a different embedding model than the one active now.
   },
   "stale": { /* verbatim StaleReport, see "Stale memory references" --json */ },
   "schema": {
     "scannedCount": 42,
     "untaggedCount": 2, "untaggedIds": ["…"],
     "legacyFormatCount": 5, "legacyFormatRate": 0.119, "legacyFormatIds": ["…"],
+    "invalidTopicsShapeCount": 1, "invalidTopicsShapeIds": ["…"],
     "loaderRejects": [{ "path": "/path/to/memory/broken.md", "reason": "no YAML frontmatter delimiter (`---`) found" }]
   }
 }
@@ -728,7 +734,7 @@ Exits 1 only on a real setup error: `golden.yml` missing or unparsable, or the c
 - ✅ Lint surface (`drift`, `unknown-topics`, `conflicts`)
 - ✅ Stale detector (`stale --repo-root <path>` with `verify:` frontmatter contract)
 - ✅ Schema v1 migration (`migrate --dir <path> [--apply] [--mapping <file>]`, mm-v1-T006): mechanical, idempotent frontmatter backfill (hoist `metadata.type`, derive `topics` in order from a `metadata.topics` hoist, a curated mapping, then a vocabulary pattern match, stamp `created` from mtime). No LLM, no guessing.
-- ✅ Corpus health report (`consolidate --dir <path> [--near-threshold <n>]`, mm-v1-T007): exact-dupe body-hash groups, near-dupe cosine over the existing embedding index (skipped-with-reason when missing/incompatible, never silent), stale references (reuses `stale` unmodified), and schema metrics (untagged, legacy-format rate, loader rejects). No LLM, no automatic merges, never writes.
+- ✅ Corpus health report (`consolidate --dir <path> [--near-threshold <n>] [--repo-root <path>]`, mm-v1-T007, fix round): exact-dupe body-hash groups (empty/whitespace-only bodies reported separately, never grouped), near-dupe cosine over a **read-only** view of the existing embedding index (skipped-with-reason when missing/incompatible/corrupted, never silent, never a crash; distinguishes "never indexed" from "indexed under a stale model"), stale references (reuses `stale` unmodified, `--repo-root`/`--repo-roots` threaded through), and schema metrics (untagged, invalid topics shape, legacy-format rate, loader rejects). No LLM, no automatic merges, never writes.
 - 🚧 Embedding pipeline, follow-up task (share with [codebase-oracle](https://github.com/LanNguyenSi/codebase-oracle))
 
 ## Trust Model

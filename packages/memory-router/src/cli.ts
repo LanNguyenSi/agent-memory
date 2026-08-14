@@ -87,6 +87,22 @@ interface ParsedArgs {
   nearThreshold: number;
 }
 
+// Full-string numeric match (mm-v1-T007 fix round LOW #8): `Number.
+// parseFloat` alone silently accepts trailing garbage ("0.5abc" -> 0.5),
+// so a typo'd --near-threshold value used to pass validation with a
+// truncated, unintended number instead of being rejected. Anchored ^...$
+// so the ENTIRE token must be numeric; parseFloat only runs after this
+// passes. Accepts an optional sign, a required integer or decimal part,
+// and an optional exponent -- the same shapes `--near-threshold=<n>`'s
+// inline form is documented to accept.
+const STRICT_NUMBER_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function parseStrictNumber(raw: string): number | null {
+  if (!STRICT_NUMBER_RE.test(raw)) return null;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   let apply = false;
@@ -155,8 +171,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         process.stderr.write('error: --near-threshold requires a number in (0, 1]\n');
         process.exit(1);
       }
-      const n = Number.parseFloat(next);
-      if (!Number.isFinite(n) || n <= 0 || n > 1) {
+      const n = parseStrictNumber(next);
+      if (n === null || n <= 0 || n > 1) {
         process.stderr.write(`error: --near-threshold expects a number in (0, 1], got "${next}"\n`);
         process.exit(1);
       }
@@ -165,8 +181,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     else if (a.startsWith('--near-threshold=')) {
       const raw = a.slice('--near-threshold='.length);
-      const n = Number.parseFloat(raw);
-      if (!Number.isFinite(n) || n <= 0 || n > 1) {
+      const n = parseStrictNumber(raw);
+      if (n === null || n <= 0 || n > 1) {
         process.stderr.write(`error: --near-threshold expects a number in (0, 1], got "${raw}"\n`);
         process.exit(1);
       }
@@ -425,30 +441,47 @@ Commands:
           topics: [testing, workflow]
     First rule to match (in file order) wins.
 
-  consolidate [--dir <path>] [--near-threshold <n>] [--json]
+  consolidate [--dir <path>] [--near-threshold <n>] [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--json]
     Report-only corpus health check. No LLM, no automatic merges, NEVER
     writes (not even a temp file inside the corpus dir); every finding is
     for the operator to act on by hand. Four independent passes:
       exact dupes   Groups memories whose BODY, after normalization (trim,
                     collapse whitespace runs to a single space, lowercase),
-                    hashes identically. Frontmatter is not compared.
+                    hashes identically. Frontmatter is not compared. An
+                    empty or whitespace-only body never forms a group (two
+                    memories with no content share nothing meaningful);
+                    such memories are listed separately under "empty
+                    bodies".
       near dupes    Pairwise cosine similarity over EXISTING embedding-
                     index vectors only (<dir>/.memory-router/index.sqlite,
                     built separately by 'memory-router index'); no live
-                    embedding API calls are made here. Runs only when the
-                    index exists AND is compatible with the currently
-                    configured embedding provider (same provenance contract
-                    'memory-router index' enforces, mm-v1-T003); missing or
-                    incompatible is SKIPPED with an explicit reason in the
-                    report, never a silent gap. --near-threshold sets the
-                    cosine floor (default 0.95).
+                    embedding API calls are made, and the index is opened
+                    read-only. Runs only when the index exists AND is
+                    compatible with the currently configured embedding
+                    provider (same provenance contract 'memory-router
+                    index' enforces, mm-v1-T003); missing, incompatible, or
+                    unreadable (a corrupted index file) is SKIPPED with an
+                    explicit reason in the report, never a silent gap or a
+                    crash. --near-threshold sets the cosine floor (default
+                    0.95, strictly validated: a value with trailing
+                    non-numeric characters is rejected, not truncated).
+                    When some memories have no usable index vector, the
+                    report also states whether that's because they were
+                    never indexed at all, or because they ARE indexed but
+                    under a different embedding model than the one
+                    currently active (a rebuild, not a re-index, fixes
+                    that case).
       stale refs    Delegates to 'memory-router stale' unchanged (default
-                    repo root: process.cwd()), same verify:-frontmatter
-                    contract, same output.
-      schema        untagged (no topics: at either the top level or
-                    metadata.topics), legacy format (metadata.type present
-                    without a top-level type, the pre-schema-v1 shape
-                    'migrate' backfills), and loader rejects (files
+                    repo root: process.cwd(), override via --repo-root /
+                    --repo-roots, same flag forms as the 'stale' verb
+                    below), same verify:-frontmatter contract, same output.
+      schema        untagged (the resolved topics value, top-level topics:
+                    when present and non-null else metadata.topics, is an
+                    empty array), invalid topics shape (that resolved value
+                    is present but isn't a list at all, e.g. a string or a
+                    map), legacy format (metadata.type present without a
+                    top-level type, the pre-schema-v1 shape 'migrate'
+                    backfills), and loader rejects (files
                     src/memory/loader.ts silently drops, with the reject
                     reason, since the loader itself only debugWarns them).
     Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR (same as
@@ -888,6 +921,7 @@ async function runMigrate(
 async function runConsolidateCli(
   dir: string,
   nearThreshold: number,
+  repoRoots: string[],
   json: boolean,
 ): Promise<void> {
   const fs = require('node:fs');
@@ -905,7 +939,7 @@ async function runConsolidateCli(
 
   let report;
   try {
-    report = runConsolidate(dir, { nearThreshold });
+    report = runConsolidate(dir, { nearThreshold, repoRoots });
   } catch (err: unknown) {
     process.stderr.write(`error: ${String(err)}\n`);
     process.exit(1);
@@ -991,7 +1025,7 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
-    await runConsolidateCli(dir, args.nearThreshold, args.json);
+    await runConsolidateCli(dir, args.nearThreshold, args.repoRoots, args.json);
     return;
   }
 
