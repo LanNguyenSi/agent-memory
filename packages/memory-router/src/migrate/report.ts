@@ -3,27 +3,40 @@
 // --json schema (stable):
 //   {
 //     dir, mapping, apply,
+//     vocabulary,       // "default" | "custom" — which topic vocabulary this
+//                        // run resolved against (topics.yml absent/invalid
+//                        // vs. present and valid)
+//     vocabularyError,  // string | null — the rejection reason when a
+//                        // present topics.yml failed to load (vocabulary
+//                        // still falls back to "default" in that case);
+//                        // null when there was nothing to reject
 //     files: [{ id, path, skipped, reason, changed,
 //               type: { action, value?, source? },
 //               topics: { action, value?, source? },
 //               created: { action, value?, source? } }],
 //     summary: { total, changed, unchanged, skipped,
 //                untaggedTopics: [id...], missingType: [id...],
+//                invalidTopicsShape: [id...],
 //                applied: number|null, errored: [string...] }
 //   }
 //
 // `applied` is null in a dry run (no writes attempted) and the count of
 // files actually written under --apply. `errored` carries per-file write
-// failures (only possible under --apply); a non-empty list is still exit 0
-// per the "report, not a gate" contract (see cli.ts --help for `migrate`),
-// same as `eval`.
+// failures (only possible under --apply); a non-empty `errored` list makes
+// the CLI exit 1 (see cli.ts's runMigrate), since it means a real write
+// failed. A dry-run report, or an untagged/missing/invalid-shape finding on
+// its own, never does: that stays exit 0, same "report, not a gate"
+// contract as `eval`.
 //
-// `topics.action`/`topics.source` together spell out which of the five
+// `topics.action`/`topics.source` together spell out which of the six
 // precedence states a file landed in (see transform.ts's resolveTopics):
-// kept (action "kept", top-level topics already present), hoisted (action
-// "set", source "metadata.topics"), mapped (action "set", source
-// "mapping"), derived (action "set", source "vocabulary-pattern"), or
-// untagged (action "missing", none of the above matched).
+// kept (action "kept", top-level topics already present), kept but flagged
+// (action "kept", source "invalid-shape": a non-empty top-level topics in a
+// shape other than a list of strings, never overwritten but surfaced for
+// manual review), hoisted (action "set", source "metadata.topics"), mapped
+// (action "set", source "mapping"), derived (action "set", source
+// "vocabulary-pattern"), or untagged (action "missing", none of the above
+// matched).
 
 interface FieldResultLike {
   action: 'kept' | 'set' | 'missing';
@@ -45,6 +58,8 @@ interface FilePlanLike {
 interface MigrationPlanLike {
   dir: string;
   mappingPath: string | null;
+  vocabularySource?: 'default' | 'custom';
+  vocabularyError?: string | null;
   files: FilePlanLike[];
 }
 
@@ -65,6 +80,11 @@ function buildSummary(
   const missingType = plan.files
     .filter((f) => !f.skipped && f.type.action === 'missing')
     .map((f) => f.id);
+  const invalidTopicsShape = plan.files
+    .filter(
+      (f) => !f.skipped && f.topics.action === 'kept' && f.topics.source === 'invalid-shape',
+    )
+    .map((f) => f.id);
   const changed = plan.files.filter((f) => f.changed).length;
   const skipped = plan.files.filter((f) => f.skipped).length;
   const unchanged = plan.files.length - changed - skipped;
@@ -76,13 +96,35 @@ function buildSummary(
     skipped,
     untaggedTopics,
     missingType,
+    invalidTopicsShape,
     applied: applyResult ? applyResult.applied : null,
     errored: applyResult ? applyResult.errored : [],
   };
 }
 
+// Human-readable disclosure of which topic vocabulary this run resolved
+// against, printed unconditionally in the text header (not just on
+// failure) so a corpus operator always knows whether a topics.yml was
+// consulted at all. Falls back to the "no topics.yml" phrasing when the
+// plan doesn't carry vocabulary info (e.g. a hand-built plan in a test
+// that predates this field) rather than printing "undefined".
+function formatVocabularyLine(plan: MigrationPlanLike): string {
+  if (plan.vocabularyError) {
+    return `vocabulary: default (topics.yml rejected: ${plan.vocabularyError})`;
+  }
+  if (plan.vocabularySource === 'custom') {
+    return 'vocabulary: custom (topics.yml)';
+  }
+  return 'vocabulary: default (no topics.yml)';
+}
+
 function describeField(label: string, field: FieldResultLike, applied: boolean): string | null {
-  if (field.action === 'kept') return null; // already canonical, nothing to show
+  if (field.action === 'kept') {
+    if (label === 'topics' && field.source === 'invalid-shape') {
+      return `  ${label}: kept (invalid shape, needs manual review)`;
+    }
+    return null; // already canonical, nothing to show
+  }
   if (field.action === 'missing') {
     return `  ${label}: ${label === 'topics' ? 'untagged' : 'missing'} — no ${
       label === 'type'
@@ -109,6 +151,7 @@ function formatMigrationReportText(
     `dir: ${plan.dir} (${plan.files.length} memory file${plan.files.length === 1 ? '' : 's'})`,
   );
   lines.push(`mapping: ${plan.mappingPath ?? 'none'}`);
+  lines.push(formatVocabularyLine(plan));
   lines.push('');
 
   for (const file of plan.files) {
@@ -151,6 +194,11 @@ function formatMigrationReportText(
       `missing type (${summary.missingType.length}): ${summary.missingType.join(', ')}`,
     );
   }
+  if (summary.invalidTopicsShape.length > 0) {
+    lines.push(
+      `invalid topics shape (${summary.invalidTopicsShape.length}): ${summary.invalidTopicsShape.join(', ')}`,
+    );
+  }
   if (summary.errored.length > 0) {
     lines.push(`errors (${summary.errored.length}):`);
     for (const e of summary.errored) lines.push(`  ${e}`);
@@ -167,6 +215,8 @@ function formatMigrationReportJson(
     dir: plan.dir,
     mapping: plan.mappingPath,
     apply: applyResult !== null,
+    vocabulary: plan.vocabularySource ?? 'default',
+    vocabularyError: plan.vocabularyError ?? null,
     files: plan.files.map((f) => ({
       id: f.id,
       path: f.path,

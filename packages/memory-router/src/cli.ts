@@ -34,6 +34,7 @@ const {
   formatMigrationReportText,
   formatMigrationReportJson,
 } = require('./migrate/report');
+const { loadVocabularyResult } = require('./vocab/loader');
 
 interface ParsedArgs {
   cmd: string;
@@ -118,7 +119,22 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === '--check-urls') checkUrls = true;
     else if (a === '--dir') testDir = argv[++i];
     else if (a.startsWith('--dir=')) testDir = a.slice('--dir='.length);
-    else if (a === '--mapping') mappingPath = argv[++i];
+    else if (a === '--mapping') {
+      // A value starting with `--` is almost certainly the next flag being
+      // swallowed as the mapping path (e.g. `--mapping --json`), not a
+      // real file path: reject with a clear message rather than silently
+      // trying to load a file literally named "--json". Idiom mirrors the
+      // --max-hits guard below.
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('--')) {
+        process.stderr.write(
+          `error: --mapping expects a file path${next === undefined ? '' : `, got "${next}"`}\n`,
+        );
+        process.exit(1);
+      }
+      mappingPath = next;
+      i++;
+    }
     else if (a.startsWith('--mapping=')) mappingPath = a.slice('--mapping='.length);
     else if (a === '--max-hits') {
       // Refuse to swallow the next flag as a value: `--max-hits --json`
@@ -336,22 +352,35 @@ Commands:
       type      hoist metadata.type to top-level type, only when no valid
                 top-level type already exists.
       topics    resolve top-level topics from, in order: (1) keep a
-                non-empty top-level topics as-is, (2) hoist a valid
-                metadata.topics array verbatim, (3) the curated --mapping
-                file (id or filename-prefix -> topics), (4) a vocabulary
-                pattern match against name+description ONLY (never the
-                body). No source at any step leaves the file untagged,
-                reported under "untagged topics".
+                non-empty top-level topics as-is, any shape (an invalid
+                shape, i.e. not a list of strings, is still kept, never
+                overwritten, but flagged "invalid shape, needs manual
+                review" instead of silently passed through as normal),
+                (2) hoist a valid metadata.topics array verbatim, (3) the
+                curated --mapping file (id or filename-prefix -> topics),
+                (4) a vocabulary pattern match against name+description
+                ONLY (never the body). No source at any step leaves the
+                file untagged, reported under "untagged topics".
       created   stamped from the file's mtime, marked '# approx (mtime)',
                 only when no created key exists yet.
+    The vocabulary step (4) is disclosed up front, not just on failure:
+    the report header prints "vocabulary: default (no topics.yml)",
+    "vocabulary: custom (topics.yml)", or "vocabulary: default (topics.yml
+    rejected: <reason>)" when the corpus has a topics.yml that fails to
+    load. A rejected topics.yml is a setup error under --apply (exit 1,
+    same as an invalid --mapping file, before anything is written); a dry
+    run still runs, with the rejection reason shown as the hint.
     Dry-run by default; --apply writes. Only *.md files are scanned,
     MEMORY.md and non-.md files (topics.yml, golden.yml, ...) are never
     touched. Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR
     env (same as 'test'/'eval'). --mapping <file> points at a curated
     topic-mapping YAML file (see src/migrate/mapping.ts); an invalid
     mapping file is a setup error (exit 1), never silently ignored.
-    --json emits a machine-readable report on stdout. A report, not a
-    gate: exits 0 on any error-free run, same as 'eval'.
+    --json emits a machine-readable report on stdout. Dry-run and
+    untagged/missing/invalid-shape findings always exit 0 (a report, not
+    a gate, same as 'eval'); --apply exits 1 only when a write actually
+    fails for one or more files (a real per-file I/O error, surfaced
+    under "errored" in the report).
     mapping file format:
         - prefix: "feedback_"
           topics: [workflow]
@@ -753,9 +782,21 @@ async function runMigrate(
     }
   }
 
+  // Vocabulary is loaded once here (not inside planMigration) so a broken
+  // topics.yml can be gated the same way an invalid --mapping file already
+  // is: a --apply setup error, exit 1, before any write is attempted. A
+  // dry run still proceeds; the rejection reason is disclosed via the
+  // report's "vocabulary:" header line / --json vocabularyError instead.
+  const vocabularyResult = loadVocabularyResult(dir);
+  if (apply && vocabularyResult.error) {
+    process.stderr.write(`error: topics.yml rejected: ${vocabularyResult.error}\n`);
+    process.exit(1);
+  }
+
   const plan = planMigration(dir, {
     mappingRules,
     mappingPath: mappingPath ?? null,
+    vocabularyResult,
   });
   const applyResult = apply ? applyMigration(plan) : null;
 
@@ -763,6 +804,14 @@ async function runMigrate(
     process.stdout.write(formatMigrationReportJson(plan, applyResult));
   } else {
     process.stdout.write(formatMigrationReportText(plan, applyResult));
+  }
+
+  // A report, not a gate, for a dry run or for untagged/missing/invalid-
+  // shape findings alone: those always exit 0, same as `eval`. A non-empty
+  // `errored` list under --apply means a real per-file write failed, which
+  // does gate the exit code.
+  if (applyResult && applyResult.errored.length > 0) {
+    process.exit(1);
   }
 }
 

@@ -513,3 +513,305 @@ test('migrate: a file missing the required name field is skipped', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- null/invalid frontmatter guard (fix-round 2, #3) -----------------------
+
+test('migrate: an empty frontmatter block (--- \\n\\n ---) is skipped as "not a YAML object", not crashed on; a healthy neighbor is still planned', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(path.join(dir, 'empty_frontmatter.md'), '---\n\n---\n\nbody\n');
+  fs.writeFileSync(
+    path.join(dir, 'healthy_neighbor.md'),
+    '---\nname: healthy neighbor\ndescription: deploy release\nmetadata:\n  type: feedback\n---\n\nbody\n',
+  );
+  try {
+    const plan = planMigration(dir);
+
+    const broken = plan.files.find((x: { id: string }) => x.id === 'empty_frontmatter');
+    assert.ok(broken, 'the empty-frontmatter file must still appear in the plan');
+    assert.equal(broken.skipped, true);
+    assert.match(broken.reason, /frontmatter is not a YAML object/);
+
+    const healthy = plan.files.find((x: { id: string }) => x.id === 'healthy_neighbor');
+    assert.ok(healthy, 'a healthy neighbor must still be planned, run must not abort');
+    assert.equal(healthy.skipped, false);
+    assert.equal(healthy.type.action, 'set');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: a top-level YAML list between the frontmatter delimiters is skipped as "not a YAML object", not crashed on', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(path.join(dir, 'list_frontmatter.md'), '---\n- one\n- two\n---\n\nbody\n');
+  try {
+    const plan = planMigration(dir);
+    const f = plan.files.find((x: { id: string }) => x.id === 'list_frontmatter');
+    assert.ok(f);
+    assert.equal(f.skipped, true);
+    assert.match(f.reason, /frontmatter is not a YAML object/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: an unexpected planFile failure (file becomes unreadable after listing) is turned into a skipped entry, not a run abort', () => {
+  const dir = mkTmpDir();
+  const badFile = path.join(dir, 'goes_unreadable.md');
+  fs.writeFileSync(
+    badFile,
+    '---\nname: goes unreadable\ndescription: deploy release\nmetadata:\n  type: feedback\n---\n\nbody\n',
+  );
+  fs.writeFileSync(
+    path.join(dir, 'healthy_neighbor2.md'),
+    '---\nname: healthy neighbor 2\ndescription: deploy release\nmetadata:\n  type: feedback\n---\n\nbody\n',
+  );
+  fs.chmodSync(badFile, 0o000);
+  try {
+    let plan;
+    try {
+      plan = planMigration(dir);
+    } finally {
+      fs.chmodSync(badFile, 0o644); // restore so cleanup (rmSync) can remove it
+    }
+
+    const broken = plan.files.find((x: { id: string }) => x.id === 'goes_unreadable');
+    assert.ok(broken, 'the unreadable file must still appear in the plan, not abort the run');
+    assert.equal(broken.skipped, true);
+    assert.match(broken.reason, /unexpected error/);
+
+    const healthy = plan.files.find((x: { id: string }) => x.id === 'healthy_neighbor2');
+    assert.ok(healthy, 'a healthy neighbor must still be planned');
+    assert.equal(healthy.skipped, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- non-array topics protection (fix-round 2, #4) ---------------------------
+
+test('migrate: an existing non-empty top-level topics of an invalid shape (scalar string) is kept, never overwritten, and flagged for manual review', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'topics_scalar_string.md'),
+    '---\nname: scalar topics\ndescription: deploy release rollback\ntopics: "not-a-list-but-present"\nmetadata:\n  type: feedback\n  topics: [would_be_overwritten]\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('topics_scalar_string', dir);
+    assert.deepEqual(f.topics, {
+      action: 'kept',
+      value: 'not-a-list-but-present',
+      source: 'invalid-shape',
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: an empty-string top-level topics is treated as absent, falls through to the normal precedence (not flagged invalid-shape)', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'topics_empty_string.md'),
+    '---\nname: empty topics\ndescription: deploy release rollback\ntopics: ""\nmetadata:\n  type: feedback\n---\n\nbody\n',
+  );
+  try {
+    const f = planFor('topics_empty_string', dir);
+    assert.equal(f.topics.action, 'set');
+    assert.equal(f.topics.source, 'vocabulary-pattern');
+    assert.deepEqual(f.topics.value, ['deployment']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- vocabulary disclosure (fix-round 2, #5) ---------------------------------
+
+test('migrate: planMigration reports vocabularySource "default" and vocabularyError null when no topics.yml exists', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'plain_case.md'),
+    '---\nname: plain\ndescription: deploy release\nmetadata:\n  type: feedback\n---\n\nbody\n',
+  );
+  try {
+    const plan = planMigration(dir);
+    assert.equal(plan.vocabularySource, 'default');
+    assert.equal(plan.vocabularyError, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: planMigration reports vocabularySource "custom" for a valid topics.yml', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(path.join(dir, 'topics.yml'), '- name: incident\n  patterns: ["\\\\bincident\\\\b"]\n');
+  fs.writeFileSync(
+    path.join(dir, 'plain_case.md'),
+    '---\nname: plain\ndescription: deploy release\nmetadata:\n  type: feedback\n---\n\nbody\n',
+  );
+  try {
+    const plan = planMigration(dir);
+    assert.equal(plan.vocabularySource, 'custom');
+    assert.equal(plan.vocabularyError, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: planMigration falls back to "default" and reports vocabularyError for a broken topics.yml', () => {
+  const dir = mkTmpDir();
+  fs.writeFileSync(path.join(dir, 'topics.yml'), 'not_a_list: true\n');
+  fs.writeFileSync(
+    path.join(dir, 'plain_case.md'),
+    '---\nname: plain\ndescription: deploy release\nmetadata:\n  type: feedback\n---\n\nbody\n',
+  );
+  try {
+    const plan = planMigration(dir);
+    assert.equal(plan.vocabularySource, 'default');
+    assert.match(plan.vocabularyError, /topics\.yml/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- separator preservation (fix-round 2, #8) --------------------------------
+
+test('migrate --apply: a file with NO blank line after frontmatter keeps that exact separator (no blank line is forced in)', () => {
+  const dir = mkTmpDir();
+  const file = path.join(dir, 'no_blank_separator.md');
+  const original =
+    '---\nname: no blank sep\ndescription: deploy release rollback\nmetadata:\n  type: feedback\n---\nbody text directly after the delimiter, no blank line\n';
+  fs.writeFileSync(file, original);
+  try {
+    const plan = planMigration(dir);
+    const f = plan.files.find((x: { id: string }) => x.id === 'no_blank_separator');
+    assert.equal(f.changed, true);
+
+    const result = applyMigration(plan);
+    assert.equal(result.applied, 1);
+    const after = fs.readFileSync(file, 'utf8');
+
+    assert.match(
+      after,
+      /---\nbody text directly after the delimiter, no blank line\n$/,
+      'no blank line must be introduced between the closing delimiter and the body',
+    );
+    assert.ok(
+      !after.includes('---\n\nbody text directly after the delimiter'),
+      'must not force a blank line where the original had none',
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate --apply: a file WITH a blank line after frontmatter keeps exactly that blank line (regression guard)', () => {
+  const dir = mkTmpDir();
+  const file = path.join(dir, 'one_blank_separator.md');
+  const original =
+    '---\nname: one blank sep\ndescription: deploy release rollback\nmetadata:\n  type: feedback\n---\n\nbody text after exactly one blank line\n';
+  fs.writeFileSync(file, original);
+  try {
+    const plan = planMigration(dir);
+    applyMigration(plan);
+    const after = fs.readFileSync(file, 'utf8');
+    assert.match(after, /---\n\nbody text after exactly one blank line\n$/);
+    assert.ok(!after.includes('---\n\n\nbody text after exactly one blank line'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- serialization fidelity: lineWidth (fix-round 2, #1) ---------------------
+
+test('migrate --apply: lineWidth:0 avoids yaml\'s default 80-col reflow; pre-existing frontmatter lines survive byte-identical when only `created` is appended', () => {
+  const dir = mkTmpDir();
+  const file = path.join(dir, 'fidelity_case.md');
+  const longDescriptionLine =
+    "description: this description line is deliberately written past eighty characters to trigger yaml's default line-wrapping reflow at the default lineWidth of 80";
+  const original =
+    '---\n' +
+    'name: fidelity check\n' +
+    '# a frontmatter comment about this memory\n' +
+    `${longDescriptionLine}\n` +
+    'type: reference\n' +
+    'topics:\n' +
+    '  - workflow\n' +
+    'folded: >-\n' +
+    '  This is a folded scalar\n' +
+    '  that spans multiple physical lines\n' +
+    '  and should not crash migrate.\n' +
+    'literal: |\n' +
+    '  line one of a literal block\n' +
+    '  line two of a literal block\n' +
+    'severity: medium\n' +
+    'verify:\n' +
+    '  - kind: path\n' +
+    '    value: some/path/here.ts\n' +
+    'metadata: \n' + // deliberate trailing space after the colon
+    '  originSessionId: xyz789\n' +
+    '---\n' +
+    '\n' +
+    'Body text untouched by migrate.\n';
+  fs.writeFileSync(file, original);
+  try {
+    const plan = planMigration(dir);
+    const f = plan.files.find((x: { id: string }) => x.id === 'fidelity_case');
+    assert.ok(f);
+    assert.equal(f.type.action, 'kept', 'type is already valid top-level, kept as-is');
+    assert.equal(f.topics.action, 'kept', 'topics is already valid top-level, kept as-is');
+    assert.equal(f.created.action, 'set', 'created is the only field missing');
+    assert.equal(f.changed, true);
+
+    const result = applyMigration(plan);
+    assert.equal(result.applied, 1);
+    const after = fs.readFileSync(file, 'utf8');
+
+    // The actual regression: yaml's default 80-column reflow used to split
+    // this line across two physical lines. lineWidth: 0 disables that; the
+    // line must survive whole, byte-identical to the original.
+    assert.ok(
+      after.includes(`${longDescriptionLine}\n`),
+      'the >80-char description line must not be reflowed across multiple lines',
+    );
+
+    // Pre-existing lines untouched by the field append: byte-identical,
+    // not reordered, not reformatted.
+    for (const line of [
+      'name: fidelity check',
+      '# a frontmatter comment about this memory',
+      'type: reference',
+      'topics:',
+      '  - workflow',
+      'literal: |',
+      '  line one of a literal block',
+      '  line two of a literal block',
+      'severity: medium',
+      'verify:',
+      '  - kind: path',
+      '    value: some/path/here.ts',
+      '  originSessionId: xyz789',
+    ]) {
+      assert.ok(
+        after.includes(`${line}\n`),
+        `pre-existing line must survive byte-identical: ${JSON.stringify(line)}`,
+      );
+    }
+
+    // Known, documented yaml round-trip normalization, NOT something
+    // lineWidth controls or migrate can preserve: a trailing space right
+    // after a key's colon is stripped on re-serialize.
+    assert.ok(
+      after.includes('metadata:\n'),
+      'trailing whitespace after "metadata:" is normalized away on round-trip',
+    );
+    assert.ok(
+      !after.includes('metadata: \n'),
+      'the trailing-space form must not survive (documents the known normalization, not a preservation claim)',
+    );
+
+    // New field appended, not reordered, body untouched.
+    assert.match(after, /created: \d{4}-\d{2}-\d{2} # approx \(mtime\)/);
+    assert.match(after, /Body text untouched by migrate\.\n$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

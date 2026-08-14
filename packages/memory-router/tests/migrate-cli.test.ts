@@ -177,6 +177,17 @@ test('migrate --mapping: an invalid mapping file is a setup error (exit 1), not 
   }
 });
 
+test('migrate --mapping: a value starting with `--` (the next flag swallowed) is rejected with a clear "expects a file path" error', () => {
+  const dir = copyStaticCorpus();
+  try {
+    const { status, stderr, stdout } = run(['migrate', '--dir', dir, '--mapping', '--json']);
+    assert.equal(status, 1, stdout);
+    assert.match(stderr, /--mapping expects a file path/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('migrate: $MEMORY_ROUTER_DIR env resolves the corpus when --dir is omitted', () => {
   const dir = copyStaticCorpus();
   try {
@@ -203,6 +214,94 @@ test('migrate: nonexistent corpus dir exits 1 with a clear message', () => {
   ]);
   assert.equal(status, 1);
   assert.match(stderr, /error: cannot read/);
+});
+
+// --- exit code: real write failures gate, dry-run/untagged never do (fix-round 2, #2) ---
+
+test('migrate --apply: a write failure (readonly target dir) exits 1, sources are left unchanged', () => {
+  const dir = copyStaticCorpus();
+  try {
+    const before = fs.readFileSync(path.join(dir, 'feedback_needs_hoist.md'), 'utf8');
+    fs.chmodSync(dir, 0o555); // read+execute only: writeFileSync for the tmp file must fail
+    try {
+      const { status, stdout } = run(['migrate', '--dir', dir, '--apply']);
+      assert.equal(status, 1, stdout);
+      assert.match(stdout, /errors \(\d+\):/);
+    } finally {
+      fs.chmodSync(dir, 0o755); // restore write perms so cleanup below can remove the dir
+    }
+    const after = fs.readFileSync(path.join(dir, 'feedback_needs_hoist.md'), 'utf8');
+    assert.equal(after, before, 'a failed write must leave every source file untouched');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: a dry run always exits 0 even when files are untagged/missing type', () => {
+  const dir = copyStaticCorpus();
+  try {
+    const { status, stdout } = run(['migrate', '--dir', dir]);
+    assert.equal(status, 0, stdout);
+    assert.match(stdout, /untagged topics/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- vocabulary disclosure (fix-round 2, #5) ---------------------------------
+
+test('migrate --json: vocabulary reports "default" with vocabularyError null when no topics.yml exists', () => {
+  const dir = copyStaticCorpus();
+  try {
+    const { status, stdout } = run(['migrate', '--dir', dir, '--json']);
+    assert.equal(status, 0, stdout);
+    const parsed = JSON.parse(stdout) as { vocabulary: string; vocabularyError: string | null };
+    assert.equal(parsed.vocabulary, 'default');
+    assert.equal(parsed.vocabularyError, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate --json: vocabulary reports "custom" for a valid topics.yml', () => {
+  const dir = copyStaticCorpus();
+  fs.writeFileSync(path.join(dir, 'topics.yml'), '- name: custom_topic\n  patterns: ["\\\\bcustom\\\\b"]\n');
+  try {
+    const { status, stdout } = run(['migrate', '--dir', dir, '--json']);
+    assert.equal(status, 0, stdout);
+    const parsed = JSON.parse(stdout) as { vocabulary: string; vocabularyError: string | null };
+    assert.equal(parsed.vocabulary, 'custom');
+    assert.equal(parsed.vocabularyError, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: a broken topics.yml is surfaced as a hint in a dry run (still exits 0)', () => {
+  const dir = copyStaticCorpus();
+  fs.writeFileSync(path.join(dir, 'topics.yml'), 'not_a_list: true\n');
+  try {
+    const { status, stdout } = run(['migrate', '--dir', dir]);
+    assert.equal(status, 0, stdout);
+    assert.match(stdout, /vocabulary: default \(topics\.yml rejected:/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate --apply: a broken topics.yml is a setup error (exit 1), same as an invalid --mapping file; nothing is written', () => {
+  const dir = copyStaticCorpus();
+  fs.writeFileSync(path.join(dir, 'topics.yml'), 'not_a_list: true\n');
+  try {
+    const before = fs.readFileSync(path.join(dir, 'feedback_needs_hoist.md'), 'utf8');
+    const { status, stderr } = run(['migrate', '--dir', dir, '--apply']);
+    assert.equal(status, 1);
+    assert.match(stderr, /topics\.yml rejected/);
+    const after = fs.readFileSync(path.join(dir, 'feedback_needs_hoist.md'), 'utf8');
+    assert.equal(after, before, 'a refused --apply must not write anything');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('--help lists the migrate verb', () => {

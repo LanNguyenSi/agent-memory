@@ -300,14 +300,16 @@ Corpus dir resolution is the same as `test`/`eval`: `--dir` flag, then `$MEMORY_
 
 - **`type`**: hoists `metadata.type` (the Claude Code auto-memory location, see [Accepted frontmatter locations](#accepted-frontmatter-locations)) to top-level `type`, only when no valid top-level `type` already exists, and only when the value is one of the four known types. A file with no valid `type` at either location is left alone and reported under `missing type`.
 - **`topics`**: derives top-level `topics` from, in order, whichever of these five states applies (visible in the report via `action`/`source`, see the `--json` schema below):
-  1. **kept**: a non-empty top-level `topics` already exists, left untouched.
-  2. **hoisted**: `metadata.topics` (the Claude Code auto-memory location) is a non-empty list of strings, hoisted to top-level `topics` **verbatim** (byte-identical values, no trim/dedupe/reorder), analogous to the `type` hoist above. The loader (see [Accepted frontmatter locations](#accepted-frontmatter-locations)) already reads `metadata.topics` liberally as a second source, and in the reference corpus roughly 230 files carry curated topics only there — this hoist canonicalizes them instead of discarding and re-deriving. An invalid shape (not a list, or a list containing a non-string entry) is **not** hoisted; it falls through to the next step rather than crashing.
+  1. **kept**: a non-empty top-level `topics` already exists, left untouched, regardless of shape. A shape other than a non-empty list of strings is still kept, never overwritten, but flagged under `invalid topics shape` in the report (`source: "invalid-shape"`) for manual review instead of being silently treated as canonical.
+  2. **hoisted**: `metadata.topics` (the Claude Code auto-memory location) is a non-empty list of strings, hoisted to top-level `topics` **verbatim** (byte-identical values, no trim/dedupe/reorder), analogous to the `type` hoist above. The loader (see [Accepted frontmatter locations](#accepted-frontmatter-locations)) already reads `metadata.topics` liberally as a second source, and a small number of real corpus files (4 at the time of writing) carry curated topics only there; this hoist canonicalizes them instead of discarding and re-deriving. An invalid shape (not a list, or a list containing a non-string entry) is **not** hoisted; it falls through to the next step rather than crashing.
   3. **mapped**: a curated `--mapping` file rule matches.
   4. **derived**: a vocabulary pattern match (the same [topic vocabulary](#topic-vocabulary-topicsyml) the Topic Gate uses) against `name` + `description` **only**, never the body.
   5. **untagged**: no match at any step; reported under `untagged topics`.
 - **`created`**: stamped from the file's mtime, marked `# approx (mtime)` so it's visibly an approximation rather than a real authored date, only when no `created` key exists yet.
 
-Frontmatter is re-serialized with `yaml`'s Document API, which preserves existing key order/formatting and only appends new fields; bodies are never touched (byte-identical before/after, comments included). A file with nothing to change is never rewritten at all, which is what makes a second `migrate --apply` run a true no-op.
+The vocabulary step (4) is disclosed up front, not just when it fails: the report's `vocabulary:` header line reads `default (no topics.yml)`, `custom (topics.yml)`, or `default (topics.yml rejected: <reason>)` when the corpus has a `topics.yml` that fails to load (same three states the `--json` output exposes via `vocabulary`/`vocabularyError`). A rejected `topics.yml` is a setup error under `--apply` (exit 1, same as an invalid `--mapping` file, before anything is written); a dry run still runs, with the rejection reason shown as the hint.
+
+Frontmatter is re-serialized with `yaml`'s Document API, serialized with `lineWidth: 0` so an existing scalar longer than 80 columns (most commonly `description:`) is never silently re-wrapped. This preserves key order and comments and only appends new fields; bodies are never touched (byte-identical before/after, comments included). It is not a byte-for-byte "preserves formatting" guarantee, though: `yaml` still normalizes trailing whitespace after a key, and a folded/literal block scalar's internal line wrapping is controlled by the format itself, not by `lineWidth`. A file with nothing to change is never rewritten at all, which is what makes a second `migrate --apply` run a true no-op.
 
 **Mapping file format** (`--mapping <file>`), a curated fallback for memories no vocabulary pattern can classify — a top-level YAML list, first-rule-wins:
 
@@ -328,6 +330,8 @@ Each entry sets exactly one of `id` (exact memory id, i.e. filename without `.md
   "dir": "/path/to/memory",
   "mapping": "mapping.yml",      // or null
   "apply": false,                // true only under --apply
+  "vocabulary": "default",       // "default" | "custom" (a topics.yml is present and valid)
+  "vocabularyError": null,       // the rejection reason string when a present topics.yml is invalid, else null
   "files": [
     {
       "id": "feedback_example",
@@ -337,21 +341,22 @@ Each entry sets exactly one of `id` (exact memory id, i.e. filename without `.md
       "changed": true,
       "type": { "action": "set", "value": "feedback", "source": "metadata.type" },
       // topics.source is one of "metadata.topics" (hoisted), "mapping" (mapped),
-      // or "vocabulary-pattern" (derived) — see the topics precedence above.
+      // "vocabulary-pattern" (derived), or "invalid-shape" (kept as-is, but not
+      // a list of strings, needs manual review) — see the topics precedence above.
       "topics": { "action": "set", "value": ["deployment"], "source": "vocabulary-pattern" },
       "created": { "action": "set", "value": "2026-08-13", "source": "mtime (approx)" }
     }
   ],
   "summary": {
     "total": 1, "changed": 1, "unchanged": 0, "skipped": 0,
-    "untaggedTopics": [], "missingType": [],
+    "untaggedTopics": [], "missingType": [], "invalidTopicsShape": [],
     "applied": null,             // null in a dry run, a write count under --apply
     "errored": []
   }
 }
 ```
 
-Each field's `action` is `"kept"` (already canonical, untouched), `"set"` (this run derived/would derive a value), or `"missing"` (nothing mechanically derivable; needs manual review) — for `topics`, `"missing"` renders as `untagged` in both the text and `--json` reports. `source` names which of the five topics states an `action: "set"`/`"kept"` result actually landed in: `metadata.topics` (hoisted), `mapping` (mapped), or `vocabulary-pattern` (derived); `type`'s only source is `metadata.type`; `created`'s only source is `mtime (approx)`. A report, not a gate, like `eval`: exits 0 on any error-free run regardless of how many files end up untagged.
+Each field's `action` is `"kept"` (already canonical or, for `topics`, an existing value of any shape, never overwritten either way), `"set"` (this run derived/would derive a value), or `"missing"` (nothing mechanically derivable; needs manual review) — for `topics`, `"missing"` renders as `untagged` in both the text and `--json` reports. `source` names which state an `action: "set"`/`"kept"` result actually landed in: for `topics`, `metadata.topics` (hoisted), `mapping` (mapped), `vocabulary-pattern` (derived), or `invalid-shape` (kept as-is, but not a list of strings, surfaced under `invalid topics shape` in the summary for manual review); `type`'s only source is `metadata.type`; `created`'s only source is `mtime (approx)`. A report, not a gate, like `eval`, for a dry run or for untagged/missing/invalid-shape findings, which always exit 0 regardless of how many files need manual review; under `--apply`, a non-empty `errored` list (a real per-file write failure) does exit 1.
 
 ### Building the embedding index
 

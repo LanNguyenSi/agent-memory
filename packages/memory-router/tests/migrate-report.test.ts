@@ -35,6 +35,8 @@ interface FilePlanLike {
 interface MigrationPlanLike {
   dir: string;
   mappingPath: string | null;
+  vocabularySource?: 'default' | 'custom';
+  vocabularyError?: string | null;
   files: FilePlanLike[];
 }
 
@@ -114,6 +116,35 @@ test('formatMigrationReportText: header reports dir, file count, and mapping pat
   assert.match(text2, /mapping: \/tmp\/mapping\.yml/);
 });
 
+// --- text: vocabulary disclosure header line ----------------------------------
+
+test('formatMigrationReportText: vocabulary header reads "default (no topics.yml)" when the plan carries no vocabulary info', () => {
+  // buildPlan() deliberately omits vocabularySource/vocabularyError to
+  // cover a plan built before this field existed: must default sanely,
+  // never print "undefined".
+  const text = formatMigrationReportText(buildPlan(), null);
+  assert.match(text, /vocabulary: default \(no topics\.yml\)/);
+});
+
+test('formatMigrationReportText: vocabulary header reads "custom (topics.yml)" when a valid topics.yml was loaded', () => {
+  const plan = buildPlan();
+  plan.vocabularySource = 'custom';
+  plan.vocabularyError = null;
+  const text = formatMigrationReportText(plan, null);
+  assert.match(text, /vocabulary: custom \(topics\.yml\)/);
+});
+
+test('formatMigrationReportText: vocabulary header reads "default (topics.yml rejected: <reason>)" when a present topics.yml is invalid', () => {
+  const plan = buildPlan();
+  plan.vocabularySource = 'default';
+  plan.vocabularyError = 'topics.yml: expected a top-level list of {name, description, patterns} entries';
+  const text = formatMigrationReportText(plan, null);
+  assert.match(
+    text,
+    /vocabulary: default \(topics\.yml rejected: topics\.yml: expected a top-level list/,
+  );
+});
+
 // --- text: dry-run vs apply wording -------------------------------------------
 
 test('formatMigrationReportText: dry-run (applyResult=null) uses "would set" / "would apply" wording', () => {
@@ -183,6 +214,26 @@ test('formatMigrationReportText: a metadata.topics hoist is visibly distinguishe
   );
 });
 
+test('formatMigrationReportText: a kept top-level topics with an invalid shape is flagged for manual review, not silently treated as canonical', () => {
+  const plan: MigrationPlanLike = {
+    dir: '/tmp/corpus',
+    mappingPath: null,
+    files: [
+      {
+        id: 'invalid_shape_case',
+        path: '/tmp/corpus/invalid_shape_case.md',
+        skipped: false,
+        changed: true,
+        type: kept('feedback'),
+        topics: { action: 'kept', value: 'scalar-value', source: 'invalid-shape' },
+        created: set('2026-01-01', 'mtime (approx)'),
+      },
+    ],
+  };
+  const text = formatMigrationReportText(plan, null);
+  assert.match(text, /topics: kept \(invalid shape, needs manual review\)/);
+});
+
 // --- text: skipped section ------------------------------------------------------
 
 test('formatMigrationReportText: skipped files are listed separately with their reason, not in the main per-file list', () => {
@@ -202,6 +253,26 @@ test('formatMigrationReportText: write errors under --apply are surfaced in the 
   const applyResult = { applied: 2, unchanged: 1, skipped: 1, errored: ['/tmp/corpus/x.md: EACCES'] };
   const text = formatMigrationReportText(buildPlan(), applyResult);
   assert.match(text, /errors \(1\):\n\s+\/tmp\/corpus\/x\.md: EACCES/);
+});
+
+test('formatMigrationReportText: summary lists invalid-shape topics ids under "invalid topics shape"', () => {
+  const plan: MigrationPlanLike = {
+    dir: '/tmp/corpus',
+    mappingPath: null,
+    files: [
+      {
+        id: 'invalid_shape_case',
+        path: '/tmp/corpus/invalid_shape_case.md',
+        skipped: false,
+        changed: true,
+        type: kept('feedback'),
+        topics: { action: 'kept', value: 'scalar-value', source: 'invalid-shape' },
+        created: set('2026-01-01', 'mtime (approx)'),
+      },
+    ],
+  };
+  const text = formatMigrationReportText(plan, null);
+  assert.match(text, /invalid topics shape \(1\): invalid_shape_case/);
 });
 
 test('formatMigrationReportText: no untagged/missing/errors: none of those summary lines appear', () => {
@@ -235,6 +306,8 @@ test('formatMigrationReportJson: emits the documented stable schema, newline-ter
   assert.equal(parsed.dir, '/tmp/corpus');
   assert.equal(parsed.mapping, null);
   assert.equal(parsed.apply, false);
+  assert.equal(parsed.vocabulary, 'default', 'a plan with no vocabulary info defaults to "default"');
+  assert.equal(parsed.vocabularyError, null);
   assert.equal(parsed.files.length, 5);
   assert.deepEqual(parsed.files[0].type, { action: 'set', value: 'feedback', source: 'metadata.type' });
   assert.equal(parsed.files[4].skipped, true);
@@ -246,9 +319,48 @@ test('formatMigrationReportJson: emits the documented stable schema, newline-ter
     skipped: 1,
     untaggedTopics: ['untagged_case', 'no_type_case'],
     missingType: ['no_type_case'],
+    invalidTopicsShape: [],
     applied: null,
     errored: [],
   });
+});
+
+test('formatMigrationReportJson: vocabulary/vocabularyError reflect a custom, valid topics.yml', () => {
+  const plan = buildPlan();
+  plan.vocabularySource = 'custom';
+  plan.vocabularyError = null;
+  const parsed = JSON.parse(formatMigrationReportJson(plan, null));
+  assert.equal(parsed.vocabulary, 'custom');
+  assert.equal(parsed.vocabularyError, null);
+});
+
+test('formatMigrationReportJson: vocabularyError carries the rejection reason for a present-but-invalid topics.yml (vocabulary still "default")', () => {
+  const plan = buildPlan();
+  plan.vocabularySource = 'default';
+  plan.vocabularyError = 'topics.yml: YAML parse error: bad indentation';
+  const parsed = JSON.parse(formatMigrationReportJson(plan, null));
+  assert.equal(parsed.vocabulary, 'default');
+  assert.equal(parsed.vocabularyError, 'topics.yml: YAML parse error: bad indentation');
+});
+
+test('formatMigrationReportJson: summary.invalidTopicsShape lists ids with a kept invalid-shape topics field', () => {
+  const plan: MigrationPlanLike = {
+    dir: '/tmp/corpus',
+    mappingPath: null,
+    files: [
+      {
+        id: 'invalid_shape_case',
+        path: '/tmp/corpus/invalid_shape_case.md',
+        skipped: false,
+        changed: false,
+        type: kept('feedback'),
+        topics: { action: 'kept', value: 'scalar-value', source: 'invalid-shape' },
+        created: kept('2026-01-01'),
+      },
+    ],
+  };
+  const parsed = JSON.parse(formatMigrationReportJson(plan, null));
+  assert.deepEqual(parsed.summary.invalidTopicsShape, ['invalid_shape_case']);
 });
 
 test('formatMigrationReportJson: apply=true and summary.applied reflect a real ApplyResult', () => {
