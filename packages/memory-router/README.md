@@ -131,6 +131,8 @@ body markdown here
 
 All new fields are optional. Legacy memories still load and can fire via the Confidence Gate (once wired) or via semantic match.
 
+The loader reads the memory directory in deterministic lexicographic order (plain code-unit `Array#sort` over the directory listing, locale-independent), not in the filesystem's `readdir` order, so hook injection and `eval` see the same corpus order on every machine and filesystem.
+
 ### Accepted frontmatter locations
 
 Canonically, `type` and `topics` live top-level (as in the example above). Most real Claude Code auto-memories instead nest them under `metadata.` (in the reference corpus as of 2026-08, roughly 230 of 285 files carry only `metadata.type`). The loader accepts both locations; on conflict the top-level value wins. New tooling should write top-level. `type` must be one of `user`, `feedback`, `project`, `reference`: a file with an unknown or non-string type is skipped entirely (visible only with `MEMORY_ROUTER_DEBUG=1`), so a typo'd `type` removes that memory from all gates until `memory-router lint --drift` surfaces it.
@@ -681,7 +683,7 @@ The report also states, via `semanticContributedCount`, how many of the golden s
 - **Reciprocal rank** = `1 / rank` of the first `got` id that's also in `expect` (1-indexed), or `0` if none of `expect` ever appears in `got`.
 - **Negative control** (`expect: []`): precision = recall = `1.0` when `got` is empty, else `0.0`. Reciprocal rank is undefined (`null`) for negative controls (they carry no ranking signal), and negative controls are **never** blended into the aggregate precision/recall/MRR below; they're reported as their own pass/fail count.
 
-Caveat: when two or more memories tie on score for the same prompt, the tie is broken by corpus load order, which comes from an unsorted `readdirSync` (`src/memory/loader.ts`), i.e. filesystem-dependent. A tied prompt's reciprocal rank (and therefore MRR) can differ between machines or after an unrelated file-touch that changes directory-entry order, even though the underlying gate logic didn't change. Sorting the loader's directory listing would remove this, but that's a separate follow-up (out of scope for `eval` itself).
+Caveat: when two or more memories tie on score for the same prompt, the tie is broken by corpus load order. That order is deterministic: the loader sorts its directory listing lexicographically (code-unit order, `src/memory/loader.ts`), so a tied prompt's reciprocal rank (and therefore MRR) reproduces across machines and filesystems. Renaming a memory file can still move it within its tie group and shift MRR without any gate-logic change.
 
 **Aggregate**, over the golden set:
 

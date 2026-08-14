@@ -134,6 +134,39 @@ test('MEMORY.md is skipped by the loader', () => {
   }
 });
 
+test('corpus load order is lexicographic code-unit order, independent of readdir order', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
+  const names = ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md'];
+  for (const name of names) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\ndescription: x\ntype: reference\n---\nbody\n`,
+    );
+  }
+  // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
+  // scrambled readdir result, so this test pins the loader's own sort on
+  // every platform instead of the host filesystem's incidental ordering.
+  // The loader destructures readdirSync at module load, so patch fs first
+  // and require a fresh module instance.
+  const realReaddirSync = fs.readdirSync;
+  (fs as unknown as { readdirSync: (dir: string) => string[] }).readdirSync =
+    () => ['bravo.md', 'Zulu.md', 'delta.md', 'alpha.md'];
+  const loaderPath = require.resolve('../src/memory/loader');
+  delete require.cache[loaderPath];
+  try {
+    const { loadMemoriesFromDir: freshLoad } = require(loaderPath);
+    const ids = freshLoad(tmp).map((m: Memory) => m.id);
+    // 'Zulu' before 'alpha': uppercase code units sort first. This pins the
+    // comparator choice (code-unit order, not locale-aware collation).
+    assert.deepEqual(ids, ['Zulu', 'alpha', 'bravo', 'delta']);
+  } finally {
+    (fs as unknown as { readdirSync: typeof realReaddirSync }).readdirSync =
+      realReaddirSync;
+    delete require.cache[loaderPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('file without frontmatter is rejected', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
   fs.writeFileSync(path.join(tmp, 'plain.md'), '# just a heading\n');
