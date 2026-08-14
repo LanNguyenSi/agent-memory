@@ -280,7 +280,7 @@ Idempotent, re-running is a no-op on files already tagged. Existing frontmatter 
 
 ### Migrating to schema v1 (`memory-router migrate`)
 
-`tag` above proposes `topics`/`severity` from a scored keyword match. `migrate` is narrower and more mechanical: it backfills a memory's frontmatter to schema v1 shape (`name`, `description`, top-level `type`, `topics: [...]` with at least one entry, `created`) from what's already on disk or in the filesystem, with **no LLM and no guessing** — whatever can't be derived mechanically stays untouched and is surfaced in the report instead of invented.
+`tag` above proposes `topics`/`severity` from a scored keyword match. `migrate` is narrower and more mechanical: it backfills a memory's frontmatter to schema v1 shape (`name`, `description`, top-level `type`, `topics: [...]` with at least one entry, `created`) from what's already on disk or in the filesystem, with **no LLM and no guessing**; whatever can't be derived mechanically stays untouched and is surfaced in the report instead of invented.
 
 ```bash
 # Dry-run (default): prints what would change, per file, and a summary.
@@ -311,7 +311,7 @@ The vocabulary step (4) is disclosed up front, not just when it fails: the repor
 
 Frontmatter is re-serialized with `yaml`'s Document API, serialized with `lineWidth: 0` so an existing scalar longer than 80 columns (most commonly `description:`) is never silently re-wrapped. This preserves key order and comments and only appends new fields; bodies are never touched (byte-identical before/after, comments included). It is not a byte-for-byte "preserves formatting" guarantee, though: `yaml` still normalizes trailing whitespace after a key, and a folded/literal block scalar's internal line wrapping is controlled by the format itself, not by `lineWidth`. A file with nothing to change is never rewritten at all, which is what makes a second `migrate --apply` run a true no-op.
 
-**Mapping file format** (`--mapping <file>`), a curated fallback for memories no vocabulary pattern can classify — a top-level YAML list, first-rule-wins:
+**Mapping file format** (`--mapping <file>`), a curated fallback for memories no vocabulary pattern can classify; a top-level YAML list, first-rule-wins:
 
 ```yaml
 # mapping.yml
@@ -342,7 +342,7 @@ Each entry sets exactly one of `id` (exact memory id, i.e. filename without `.md
       "type": { "action": "set", "value": "feedback", "source": "metadata.type" },
       // topics.source is one of "metadata.topics" (hoisted), "mapping" (mapped),
       // "vocabulary-pattern" (derived), or "invalid-shape" (kept as-is, but not
-      // a list of strings, needs manual review) — see the topics precedence above.
+      // a list of strings, needs manual review); see the topics precedence above.
       "topics": { "action": "set", "value": ["deployment"], "source": "vocabulary-pattern" },
       "created": { "action": "set", "value": "2026-08-13", "source": "mtime (approx)" }
     }
@@ -356,7 +356,7 @@ Each entry sets exactly one of `id` (exact memory id, i.e. filename without `.md
 }
 ```
 
-Each field's `action` is `"kept"` (already canonical or, for `topics`, an existing value of any shape, never overwritten either way), `"set"` (this run derived/would derive a value), or `"missing"` (nothing mechanically derivable; needs manual review) — for `topics`, `"missing"` renders as `untagged` in both the text and `--json` reports. `source` names which state an `action: "set"`/`"kept"` result actually landed in: for `topics`, `metadata.topics` (hoisted), `mapping` (mapped), `vocabulary-pattern` (derived), or `invalid-shape` (kept as-is, but not a list of strings, surfaced under `invalid topics shape` in the summary for manual review); `type`'s only source is `metadata.type`; `created`'s only source is `mtime (approx)`. A report, not a gate, like `eval`, for a dry run or for untagged/missing/invalid-shape findings, which always exit 0 regardless of how many files need manual review; under `--apply`, a non-empty `errored` list (a real per-file write failure) does exit 1.
+Each field's `action` is `"kept"` (already canonical or, for `topics`, an existing value of any shape, never overwritten either way), `"set"` (this run derived/would derive a value), or `"missing"` (nothing mechanically derivable; needs manual review); for `topics`, `"missing"` renders as `untagged` in both the text and `--json` reports. `source` names which state an `action: "set"`/`"kept"` result actually landed in: for `topics`, `metadata.topics` (hoisted), `mapping` (mapped), `vocabulary-pattern` (derived), or `invalid-shape` (kept as-is, but not a list of strings, surfaced under `invalid topics shape` in the summary for manual review); `type`'s only source is `metadata.type`; `created`'s only source is `mtime (approx)`. A report, not a gate, like `eval`, for a dry run or for untagged/missing/invalid-shape findings, which always exit 0 regardless of how many files need manual review; under `--apply`, a non-empty `errored` list (a real per-file write failure) does exit 1.
 
 ### Building the embedding index
 
