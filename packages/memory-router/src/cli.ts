@@ -35,6 +35,11 @@ const {
   formatMigrationReportJson,
 } = require('./migrate/report');
 const { loadVocabularyResult } = require('./vocab/loader');
+const { runConsolidate, DEFAULT_NEAR_THRESHOLD } = require('./consolidate/analyze');
+const {
+  formatConsolidateReportText,
+  formatConsolidateReportJson,
+} = require('./consolidate/report');
 
 interface ParsedArgs {
   cmd: string;
@@ -75,6 +80,27 @@ interface ParsedArgs {
    * `topics:` from the vocabulary pattern match alone.
    */
   mappingPath?: string;
+  /**
+   * `consolidate --near-threshold <n>`: cosine-similarity floor for the
+   * near-dupe pass. Default 0.95 (DEFAULT_NEAR_THRESHOLD).
+   */
+  nearThreshold: number;
+}
+
+// Full-string numeric match (mm-v1-T007 fix round LOW #8): `Number.
+// parseFloat` alone silently accepts trailing garbage ("0.5abc" -> 0.5),
+// so a typo'd --near-threshold value used to pass validation with a
+// truncated, unintended number instead of being rejected. Anchored ^...$
+// so the ENTIRE token must be numeric; parseFloat only runs after this
+// passes. Accepts an optional sign, a required integer or decimal part,
+// and an optional exponent -- the same shapes `--near-threshold=<n>`'s
+// inline form is documented to accept.
+const STRICT_NUMBER_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function parseStrictNumber(raw: string): number | null {
+  if (!STRICT_NUMBER_RE.test(raw)) return null;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -95,6 +121,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let testMaxHits = 5;
   let maxHitsFlag = false;
   let mappingPath: string | undefined;
+  let nearThreshold = DEFAULT_NEAR_THRESHOLD;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true;
@@ -136,6 +163,31 @@ function parseArgs(argv: string[]): ParsedArgs {
       i++;
     }
     else if (a.startsWith('--mapping=')) mappingPath = a.slice('--mapping='.length);
+    else if (a === '--near-threshold') {
+      // Same swallow-guard idiom as --mapping/--max-hits: refuse to treat
+      // the next flag as this one's value.
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        process.stderr.write('error: --near-threshold requires a number in (0, 1]\n');
+        process.exit(1);
+      }
+      const n = parseStrictNumber(next);
+      if (n === null || n <= 0 || n > 1) {
+        process.stderr.write(`error: --near-threshold expects a number in (0, 1], got "${next}"\n`);
+        process.exit(1);
+      }
+      i++;
+      nearThreshold = n;
+    }
+    else if (a.startsWith('--near-threshold=')) {
+      const raw = a.slice('--near-threshold='.length);
+      const n = parseStrictNumber(raw);
+      if (n === null || n <= 0 || n > 1) {
+        process.stderr.write(`error: --near-threshold expects a number in (0, 1], got "${raw}"\n`);
+        process.exit(1);
+      }
+      nearThreshold = n;
+    }
     else if (a === '--max-hits') {
       // Refuse to swallow the next flag as a value: `--max-hits --json`
       // should error rather than silently default and consume --json.
@@ -249,6 +301,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     testSemantic: semanticFlag,
     testMaxHits,
     mappingPath,
+    nearThreshold,
   };
 }
 
@@ -388,6 +441,54 @@ Commands:
           topics: [testing, workflow]
     First rule to match (in file order) wins.
 
+  consolidate [--dir <path>] [--near-threshold <n>] [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--json]
+    Report-only corpus health check. No LLM, no automatic merges, NEVER
+    writes (not even a temp file inside the corpus dir); every finding is
+    for the operator to act on by hand. Four independent passes:
+      exact dupes   Groups memories whose BODY, after normalization (trim,
+                    collapse whitespace runs to a single space, lowercase),
+                    hashes identically. Frontmatter is not compared. An
+                    empty or whitespace-only body never forms a group (two
+                    memories with no content share nothing meaningful);
+                    such memories are listed separately under "empty
+                    bodies".
+      near dupes    Pairwise cosine similarity over EXISTING embedding-
+                    index vectors only (<dir>/.memory-router/index.sqlite,
+                    built separately by 'memory-router index'); no live
+                    embedding API calls are made, and the index is opened
+                    read-only. Runs only when the index exists AND is
+                    compatible with the currently configured embedding
+                    provider (same provenance contract 'memory-router
+                    index' enforces, mm-v1-T003); missing, incompatible, or
+                    unreadable (a corrupted index file) is SKIPPED with an
+                    explicit reason in the report, never a silent gap or a
+                    crash. --near-threshold sets the cosine floor (default
+                    0.95, strictly validated: a value with trailing
+                    non-numeric characters is rejected, not truncated).
+                    When some memories have no usable index vector, the
+                    report also states whether that's because they were
+                    never indexed at all, or because they ARE indexed but
+                    under a different embedding model than the one
+                    currently active (a rebuild, not a re-index, fixes
+                    that case).
+      stale refs    Delegates to 'memory-router stale' unchanged (default
+                    repo root: process.cwd(), override via --repo-root /
+                    --repo-roots, same flag forms as the 'stale' verb
+                    below), same verify:-frontmatter contract, same output.
+      schema        untagged (the resolved topics value, top-level topics:
+                    when present and non-null else metadata.topics, is an
+                    empty array), invalid topics shape (that resolved value
+                    is present but isn't a list at all, e.g. a string or a
+                    map), legacy format (metadata.type present without a
+                    top-level type, the pre-schema-v1 shape 'migrate'
+                    backfills), and loader rejects (files
+                    src/memory/loader.ts silently drops, with the reject
+                    reason, since the loader itself only debugWarns them).
+    Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR (same as
+    'test'/'eval'/'migrate'). Always a report, never a gate: exits 0 on any
+    error-free run regardless of how many findings it surfaces.
+    --json emits a stable, documented report on stdout.
+
   stale <dir> [--repo-root <path>] [--repo-roots <p1> <p2> ...] [--scan-body] [--check-urls] [--json]
     Scan every memory in <dir> for stale references against one or more
     repo roots. Default root list: [process.cwd()]. A ref is STALE only
@@ -436,6 +537,8 @@ Examples:
     memory-router eval golden.yml --json
   memory-router migrate --dir ~/.claude/projects/PROJECT/memory
   memory-router migrate --dir ~/.claude/projects/PROJECT/memory --mapping mapping.yml --apply
+  memory-router consolidate --dir ~/.claude/projects/PROJECT/memory
+  memory-router consolidate --dir ~/.claude/projects/PROJECT/memory --near-threshold 0.9 --json
 `);
 }
 
@@ -815,6 +918,42 @@ async function runMigrate(
   }
 }
 
+async function runConsolidateCli(
+  dir: string,
+  nearThreshold: number,
+  repoRoots: string[],
+  json: boolean,
+): Promise<void> {
+  const fs = require('node:fs');
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch (err: unknown) {
+    process.stderr.write(`error: cannot read ${dir}: ${String(err)}\n`);
+    process.exit(1);
+  }
+  if (!stat.isDirectory()) {
+    process.stderr.write(`error: ${dir} is not a directory\n`);
+    process.exit(1);
+  }
+
+  let report;
+  try {
+    report = runConsolidate(dir, { nearThreshold, repoRoots });
+  } catch (err: unknown) {
+    process.stderr.write(`error: ${String(err)}\n`);
+    process.exit(1);
+  }
+
+  if (json) {
+    process.stdout.write(formatConsolidateReportJson(report));
+  } else {
+    process.stdout.write(formatConsolidateReportText(report));
+  }
+  // Report, not a gate: same contract as `eval`/`migrate`'s dry-run path,
+  // exit 0 on any error-free run regardless of how many findings surfaced.
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -825,7 +964,8 @@ async function main(): Promise<void> {
     args.cmd !== 'stale' &&
     args.cmd !== 'test' &&
     args.cmd !== 'eval' &&
-    args.cmd !== 'migrate'
+    args.cmd !== 'migrate' &&
+    args.cmd !== 'consolidate'
   ) {
     printHelp();
     process.exit(args.cmd === '' ? 0 : 1);
@@ -874,6 +1014,18 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await runMigrate(dir, args.mappingPath, args.apply, args.json);
+    return;
+  }
+
+  if (args.cmd === 'consolidate') {
+    const dir = args.testDir ?? process.env.MEMORY_ROUTER_DIR;
+    if (!dir) {
+      process.stderr.write(
+        'error: --dir <path> or $MEMORY_ROUTER_DIR is required\n',
+      );
+      process.exit(1);
+    }
+    await runConsolidateCli(dir, args.nearThreshold, args.repoRoots, args.json);
     return;
   }
 

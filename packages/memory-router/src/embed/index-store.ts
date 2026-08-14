@@ -230,6 +230,25 @@ interface IndexStoreOptions {
     model: string;
     capacity: number;
   };
+  // Open the connection strictly read-only (added for
+  // src/consolidate/near-dupes.ts, mm-v1-T007 fix round HIGH #1): the
+  // underlying `better-sqlite3` connection is opened with
+  // `{ readonly: true, fileMustExist: true }`, and every write path this
+  // module would otherwise take at open time is skipped: the
+  // `journal_mode = WAL` pragma, every `CREATE TABLE`/`CREATE VIRTUAL
+  // TABLE` DDL statement (entries, vec, query_cache), `applyMigrations`,
+  // and `recordProvenance`. This is a pure read-only VIEW onto an index
+  // that was already built by a normal (non-readonly) `openIndex` call
+  // (e.g. `memory-router index`): every table it needs already exists on
+  // disk. The provider-mismatch and legacy-index-provenance guards below
+  // still run (they only ever READ the `meta` table) and still throw
+  // their existing errors when the on-disk provenance disagrees with
+  // `opts.meta`: readonly only removes the ability to WRITE, never the
+  // ability to detect and report an incompatibility. Omit (default false)
+  // for every other caller; existing callsites (indexer.ts,
+  // lint/conflicts.ts) are unaffected and keep their full read-write
+  // behavior unchanged.
+  readonly?: boolean;
 }
 
 interface IndexEntry {
@@ -278,21 +297,31 @@ function openIndex(opts: IndexStoreOptions): {
   cacheSize: () => number;
   close: () => void;
 } {
-  const db = new Database(opts.path);
+  const db = opts.readonly
+    ? new Database(opts.path, { readonly: true, fileMustExist: true })
+    : new Database(opts.path);
   sqliteVec.load(db);
   // WAL lets a hook reader coexist with a CLI writer rebuilding the index.
   // busy_timeout gives SQLite 2 seconds to clear a write lock instead of
-  // failing the hook immediately on SQLITE_BUSY.
-  db.pragma('journal_mode = WAL');
+  // failing the hook immediately on SQLITE_BUSY. Skipped on a readonly
+  // connection: switching journal_mode is itself a write, and a readonly
+  // caller is only ever pointed at an index some earlier writable open
+  // already put in WAL mode (see IndexStoreOptions.readonly above).
+  if (!opts.readonly) db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 2000');
 
-  // Metadata table: what we have indexed + the mtime at index time.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS entries (
-      id TEXT PRIMARY KEY,
-      mtime INTEGER NOT NULL
-    );
-  `);
+  // Metadata table: what we have indexed + the mtime at index time. Skipped
+  // on a readonly connection (see IndexStoreOptions.readonly): the table is
+  // assumed to already exist, and CREATE TABLE would throw against a
+  // readonly connection anyway.
+  if (!opts.readonly) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS entries (
+        id TEXT PRIMARY KEY,
+        mtime INTEGER NOT NULL
+      );
+    `);
+  }
 
   // Recover the physical width of an already-existing `vec` virtual table,
   // if any, from its stored CREATE TABLE text — sqlite-vec's vec0 columns
@@ -319,8 +348,12 @@ function openIndex(opts: IndexStoreOptions): {
   // Run migrations BEFORE preparing statements that reference v2 columns
   // (or the embed-provenance meta rows below). The query_cache table is
   // created later but applyMigrations only operates on entries/meta here;
-  // it's safe to apply now.
-  applyMigrations(db);
+  // it's safe to apply now. Skipped on a readonly connection (see
+  // IndexStoreOptions.readonly): applyMigrations both creates the `meta`
+  // table and writes the schema_version row, both writes; a readonly
+  // caller is only ever pointed at an index a prior writable open already
+  // migrated to CURRENT_SCHEMA_VERSION.
+  if (!opts.readonly) applyMigrations(db);
 
   // --- Embed provenance: which provider/model/dimensions this index was
   // built under (see the module-level comment above). ---
@@ -439,6 +472,13 @@ function openIndex(opts: IndexStoreOptions): {
   // from a real embedding response.
   function ensureVecTable(dim: number): void {
     if (vecTableExists) return;
+    // Readonly connections never create tables (see IndexStoreOptions.
+    // readonly). In practice this is unreachable for a real readonly
+    // caller, since an already-built index this option is meant for
+    // always has its vec table already, and `vecTableExists` would
+    // already be true above; kept as a defensive no-op rather than an
+    // attempted write that would throw.
+    if (opts.readonly) return;
     db.exec(
       `CREATE VIRTUAL TABLE IF NOT EXISTS vec USING vec0(embedding FLOAT[${dim}] distance_metric=cosine);`,
     );
@@ -451,6 +491,11 @@ function openIndex(opts: IndexStoreOptions): {
   // or later from upsert(). ON CONFLICT DO NOTHING means this is a no-op
   // once a baseline is recorded.
   function recordProvenance(dim: number): void {
+    // Readonly connections never write provenance (see IndexStoreOptions.
+    // readonly). The call sites below only reach here when
+    // storedDimensions === null, which a real already-built index (the
+    // only thing a readonly caller is meant to point at) never hits.
+    if (opts.readonly) return;
     if (opts.meta) {
       metaSetIfAbsentStmt.run('embed_provider', opts.meta.provider);
       metaSetIfAbsentStmt.run('embed_model', opts.meta.model);
@@ -603,17 +648,23 @@ function openIndex(opts: IndexStoreOptions): {
   // this table memoizes the prompt→vector mapping so repeats become a single
   // sqlite SELECT. Lives in the same file as the index because both already
   // share an open connection and a `memory-router index --rebuild` is
-  // expected to leave the cache intact.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS query_cache (
-      prompt_sha TEXT PRIMARY KEY,
-      model TEXT NOT NULL,
-      embedding BLOB NOT NULL,
-      accessed_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS query_cache_accessed_at_idx
-      ON query_cache(accessed_at);
-  `);
+  // expected to leave the cache intact. Skipped on a readonly connection
+  // (see IndexStoreOptions.readonly): a readonly caller never passes
+  // `opts.cache` either (near-dupes.ts only reads embeddings), so the
+  // table is never actually needed there; a real already-built index
+  // already has it from its original writable open regardless.
+  if (!opts.readonly) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS query_cache (
+        prompt_sha TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        accessed_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS query_cache_accessed_at_idx
+        ON query_cache(accessed_at);
+    `);
+  }
 
   const cacheModel = opts.cache?.model;
   const cacheCapacity = opts.cache?.capacity ?? 0;
