@@ -84,6 +84,14 @@ function loadMemoriesFromDir(dir: string): Memory[] {
     return memories;
   }
 
+  // readdir order is filesystem-dependent (ext4 dir_index returns hash
+  // order), and on score ties the final hit order falls back to load order,
+  // so hook injection and eval MRR must not inherit the filesystem's order.
+  // Plain Array#sort (UTF-16 code-unit order) rather than localeCompare:
+  // localeCompare depends on the host locale and would reintroduce
+  // machine-dependent ordering.
+  entries.sort();
+
   for (const entry of entries) {
     if (!entry.endsWith('.md')) continue;
     if (entry === 'MEMORY.md') continue;

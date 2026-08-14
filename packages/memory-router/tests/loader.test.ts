@@ -134,6 +134,78 @@ test('MEMORY.md is skipped by the loader', () => {
   }
 });
 
+test('corpus load order is lexicographic code-unit order, independent of readdir order', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
+  const names = ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md'];
+  for (const name of names) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\ndescription: x\ntype: reference\n---\nbody\n`,
+    );
+  }
+  // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
+  // scrambled readdir result, so this test pins the loader's own sort on
+  // every platform instead of the host filesystem's incidental ordering.
+  // The loader destructures readdirSync at module load, so patch fs first
+  // and require a fresh module instance. The stub is scoped to the fixture
+  // dir (everything else passes through) so the cache-miss require below,
+  // and any other dynamic fs use in the patched window, stays unaffected.
+  const loaderPath = require.resolve('../src/memory/loader');
+  const realReaddirSync = fs.readdirSync;
+  (fs as unknown as { readdirSync: (dir: string) => string[] }).readdirSync = (
+    dir: string,
+  ) =>
+    dir === tmp
+      ? ['bravo.md', 'Zulu.md', 'delta.md', 'alpha.md']
+      : (realReaddirSync as unknown as (dir: string) => string[])(dir);
+  try {
+    delete require.cache[loaderPath];
+    const { loadMemoriesFromDir: freshLoad } = require(loaderPath);
+    const ids = freshLoad(tmp).map((m: Memory) => m.id);
+    // 'Zulu' before 'alpha': uppercase code units sort first. This pins the
+    // comparator choice (code-unit order, not locale-aware collation).
+    assert.deepEqual(ids, ['Zulu', 'alpha', 'bravo', 'delta']);
+  } finally {
+    (fs as unknown as { readdirSync: typeof realReaddirSync }).readdirSync =
+      realReaddirSync;
+    delete require.cache[loaderPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('flat-score ties preserve corpus load order through resolve() (hook injection order)', () => {
+  // Companion pin to the loader-sort test above: the loader guarantees
+  // lexicographic load order, and this asserts the resolver does not
+  // re-order flat-score ties on its own (stable sort over insertion-ordered
+  // dedupe). Input order is deliberately non-lexicographic so the test
+  // catches any resolver-side re-keying, not just an unstable sort.
+  const { resolve } = require('../src/router');
+  const mk = (id: string): Memory => ({
+    id,
+    path: `/corpus/${id}.md`,
+    frontmatter: {
+      name: id,
+      description: 'x',
+      type: 'reference',
+      topics: ['testing'],
+    },
+    body: 'body',
+  });
+  const memories = [mk('zeta'), mk('alpha'), mk('mid')];
+  const prevDir = process.env.MEMORY_ROUTER_DIR;
+  delete process.env.MEMORY_ROUTER_DIR;
+  try {
+    const hits = resolve({ prompt: 'please run the tests' }, memories);
+    assert.deepEqual(
+      hits.map((h: GateHit) => h.memory.id),
+      ['zeta', 'alpha', 'mid'],
+      'tied hits must come out in the memories-array (load) order',
+    );
+  } finally {
+    if (prevDir !== undefined) process.env.MEMORY_ROUTER_DIR = prevDir;
+  }
+});
+
 test('file without frontmatter is rejected', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
   fs.writeFileSync(path.join(tmp, 'plain.md'), '# just a heading\n');
