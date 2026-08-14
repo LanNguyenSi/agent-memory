@@ -97,6 +97,30 @@ function fakeSemanticSearch(
       .map((m) => ({ memory: m, score: scoresById[m.id] }));
 }
 
+// Like fakeSemanticSearch, but honors the k argument the way the real
+// semanticSearch does (top-k by score). The candidate-pool tests MUST use
+// this variant: a stub that ignores k makes the pool effectively infinite
+// and would keep a pool-width assertion green no matter what candidateK
+// resolves to.
+function fakeSemanticSearchHonoringK(
+  scoresById: Record<string, number>,
+  capturedK?: { value?: number },
+): (
+  prompt: string,
+  memories: Memory[],
+  memoryDir: string,
+  k: number,
+) => Promise<{ memory: Memory; score: number }[]> {
+  return async (_prompt: string, memories: Memory[], _dir: string, k: number) => {
+    if (capturedK) capturedK.value = k;
+    return memories
+      .filter((m) => scoresById[m.id] !== undefined)
+      .map((m) => ({ memory: m, score: scoresById[m.id] }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, k);
+  };
+}
+
 const NO_TOPIC_PROMPT = 'an unrelated prompt with no topic keywords at all';
 
 // --- Ranking: semantic dominates, topic boosts, recency breaks ties -------
@@ -252,15 +276,15 @@ test('resolveBlended: two prompts sharing the same topic but different semantic 
   );
 });
 
-test('resolveBlended: a memory ranked below maxHits on raw semantic score alone still wins a slot once a topic boost lifts its blended score (candidate pool wider than maxHits, mm-v1-T004 fix-round 2 MEDIUM #3e / LOW #5)', async () => {
+test('resolveBlended: with a widened candidate pool (MEMORY_ROUTER_BLEND_CANDIDATE_K > maxHits, opt-in since mm-v1-T008) a memory ranked below maxHits on raw semantic score still wins a slot via topic boost', async () => {
   // 6 semantic candidates, strictly decreasing raw score, all above the
   // default floor (0.5). m5 ranks 6th by raw semantic score alone (outside
-  // the raw top-maxHits=5) but carries a topic match: its blended score
-  // (semantic + topicBoost + modifiers) outranks m3's and m4's un-boosted
-  // scores. m5 winning a slot is provably impossible unless resolveBlended
-  // blends the WHOLE semantic-search result set (wider than maxHits, see
-  // semanticK in src/router.ts / MEMORY_ROUTER_BLEND_CANDIDATE_K), not just
-  // a pre-truncated raw top-maxHits.
+  // the raw top-maxHits=5) but carries a topic match: with the pool widened
+  // to 10 its blended score (semantic + topicBoost + modifiers) outranks
+  // m4's un-boosted score. Uses the k-HONORING stub: with the pool at the
+  // calibrated default (5 == cap) m5 would never even enter the blend, so
+  // this rescue is exercised as the env opt-in it now is (see the
+  // defaults-pin test below for the default behavior).
   const maxHits = 5;
   const m0 = fakeMemory('m0');
   const m1 = fakeMemory('m1');
@@ -272,30 +296,98 @@ test('resolveBlended: a memory ranked below maxHits on raw semantic score alone 
     prompt: 'please review and merge this PR',
     memoryDir: NOVOCAB_DIR,
   };
+  const prevK = process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K;
+  process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K = '10';
+  try {
+    const hits = await resolveBlended(
+      ctx,
+      [m0, m1, m2, m3, m4, m5],
+      '/fake/dir',
+      { maxHits },
+      {
+        semanticSearch: fakeSemanticSearchHonoringK({
+          m0: 0.9,
+          m1: 0.8,
+          m2: 0.7,
+          m3: 0.6,
+          m4: 0.55,
+          m5: 0.52,
+        }),
+      },
+    );
+    assert.equal(hits.length, maxHits);
+    assert.ok(
+      hits.some((h: GateHit) => h.memory.id === 'm5'),
+      `expected the raw-rank-6 memory (m5) to win a slot via its topic boost with the widened pool, got ids ${hits.map((h: GateHit) => h.memory.id).join(', ')}`,
+    );
+    assert.ok(
+      !hits.some((h: GateHit) => h.memory.id === 'm4'),
+      `m5's boosted score must displace the weakest un-boosted candidate (m4) out of the maxHits cap, got ids ${hits.map((h: GateHit) => h.memory.id).join(', ')}`,
+    );
+  } finally {
+    if (prevK === undefined) delete process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K;
+    else process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K = prevK;
+  }
+});
+
+test('resolveBlended: at calibrated defaults the candidate pool equals the cap — no topic-boost rescue from outside the raw semantic top-maxHits (mm-v1-T008)', async () => {
+  // Same 6-candidate setup as above, but NO env override and a k-honoring
+  // stub: the pool is max(maxHits=5, candidateK default 5) = 5, so m5
+  // (raw rank 6) never enters the blend and its topic match cannot rescue
+  // it. Pins the deliberate mm-v1-T008 behavior change (candidateK 10 -> 5).
+  const maxHits = 5;
+  const m0 = fakeMemory('m0');
+  const m1 = fakeMemory('m1');
+  const m2 = fakeMemory('m2');
+  const m3 = fakeMemory('m3');
+  const m4 = fakeMemory('m4');
+  const m5 = fakeMemory('m5', { topics: ['workflow'] });
+  const ctx: RouterContext = {
+    prompt: 'please review and merge this PR',
+    memoryDir: NOVOCAB_DIR,
+  };
+  const capturedK: { value?: number } = {};
   const hits = await resolveBlended(
     ctx,
     [m0, m1, m2, m3, m4, m5],
     '/fake/dir',
     { maxHits },
     {
-      semanticSearch: fakeSemanticSearch({
-        m0: 0.9,
-        m1: 0.8,
-        m2: 0.7,
-        m3: 0.6,
-        m4: 0.55,
-        m5: 0.52,
-      }),
+      semanticSearch: fakeSemanticSearchHonoringK(
+        {
+          m0: 0.9,
+          m1: 0.8,
+          m2: 0.7,
+          m3: 0.6,
+          m4: 0.55,
+          m5: 0.52,
+        },
+        capturedK,
+      ),
     },
   );
-  assert.equal(hits.length, maxHits);
-  assert.ok(
-    hits.some((h: GateHit) => h.memory.id === 'm5'),
-    `expected the raw-rank-6 memory (m5) to still win a slot via its topic boost, got ids ${hits.map((h: GateHit) => h.memory.id).join(', ')}`,
+  assert.equal(capturedK.value, 5, 'default pool = max(maxHits 5, candidateK 5)');
+  assert.deepEqual(
+    hits.map((h: GateHit) => h.memory.id),
+    ['m0', 'm1', 'm2', 'm3', 'm4'],
+    'at defaults the raw semantic top-5 IS the result; m5 is not rescued',
   );
-  assert.ok(
-    !hits.some((h: GateHit) => h.memory.id === 'm4'),
-    `m5's boosted score must displace the weakest un-boosted candidate (m4) out of the maxHits cap, got ids ${hits.map((h: GateHit) => h.memory.id).join(', ')}`,
+});
+
+test('resolveBlended: default-path semanticK consults BLEND_DEFAULTS.candidateK, not just maxHits (no env override)', async () => {
+  // maxHits 3 < the default candidateK 5: a captured k of 5 proves the
+  // default path reads BLEND_DEFAULTS.candidateK (the only k assertions
+  // before this ran with the env var set).
+  const mem = fakeMemory('mem');
+  const ctx: RouterContext = { prompt: NO_TOPIC_PROMPT, memoryDir: NOVOCAB_DIR };
+  const capturedK: { value?: number } = {};
+  await resolveBlended(ctx, [mem], '/fake/dir', { maxHits: 3 }, {
+    semanticSearch: fakeSemanticSearchHonoringK({ mem: 0.9 }, capturedK),
+  });
+  assert.equal(
+    capturedK.value,
+    5,
+    `expected default semanticK max(3, 5) = 5, got ${capturedK.value}`,
   );
 });
 
@@ -588,7 +680,8 @@ test('resolveBlended: a non-numeric MEMORY_ROUTER_BLEND_TOPIC_BOOST override fal
   // semantic score above the fix-round-2 relevance floor (default 0.5)
   // keeps the blend active, and the exact expected score (computed from
   // hardcoded, independent constants — see top of file) proves the
-  // fallback landed on exactly the built-in default (0.15), not merely
+  // fallback landed on exactly the built-in default (DEFAULT_TOPIC_BOOST),
+  // not merely
   // "some finite positive number".
   const withTopic = fakeMemory('with-topic', { topics: ['workflow'] });
   const ctx: RouterContext = {

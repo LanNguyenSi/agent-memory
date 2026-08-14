@@ -44,12 +44,19 @@ function confidenceThreshold(ambiguity: number): number {
 // ranges are provider- and model-specific (bge-m3 relevance sits ~0.75-0.85
 // where OpenAI embeddings score far lower), so the floor keeps a permissive
 // default and MUST be tuned per corpus via MEMORY_ROUTER_BLEND_MIN_SEMANTIC
-// (0.78 measured for Ollama bge-m3 on the reference corpus). The shape
-// intent is unchanged: topicBoost is a nudge, not a standalone signal (the
-// old gates/topic.ts flat 1.0 score is exactly the bug this replaces), and
-// recency/type are a further order of magnitude below that (tie-breakers
-// only; no measurable golden-set effect in T008, left as shaped). Every
-// weight stays overridable via the MEMORY_ROUTER_BLEND_* env namespace.
+// (0.78 measured for Ollama bge-m3 on the reference corpus). Shape after
+// calibration: topicBoost is a nudge, not a standalone signal (the old
+// gates/topic.ts flat 1.0 score is exactly the bug this replaces) — but at
+// 0.05 it is now ON PAR with the recency tie-breaker (0.05) and BELOW the
+// combined max tie-breaker contribution (0.05 recency + 0.03 type), so at
+// equal semantic score a topic match can be outranked by a fresh
+// feedback-type memory. That relation is a measured outcome, not an
+// accident: the golden set rewarded semantic dominance. recency/type kept
+// their values; their golden-set insensitivity was re-confirmed AT the
+// calibrated boost (recencyWeight swept 0.01-0.15 and typeWeight 0.09:
+// metrics identical; typeWeight 0.001 moved MRR by +0.014 = a single tie
+// flip on n=16, treated as noise). Every weight stays overridable via the
+// MEMORY_ROUTER_BLEND_* env namespace.
 interface BlendWeights {
   /** Additive score when the Topic Gate matches, on top of any semantic score. */
   topicBoost: number;
@@ -67,19 +74,24 @@ interface BlendWeights {
    * Default 0.5 is the lower edge of the old confidenceThreshold() band
    * (confidenceThreshold(ambiguity=1) === 0.5, see above): the most
    * ambiguous prompt's old bar becomes the new blend's baseline bar.
-   * UNCALIBRATED pending mm-v1-T008, same caveat as every other weight in
-   * this table.
+   * mm-v1-T008 deliberately did NOT hard-calibrate this one: raw cosine
+   * ranges are provider/model-specific, so the permissive default stays and
+   * the floor is tuned per corpus via MEMORY_ROUTER_BLEND_MIN_SEMANTIC
+   * (0.78 measured for Ollama bge-m3 on the reference corpus; see README
+   * "Calibration").
    */
   minSemanticScore: number;
   /**
    * How many raw semantic-search candidates resolveBlended asks for before
    * capping the final result at maxHits (see semanticK in src/router.ts,
    * which takes Math.max(maxHits, this) — never narrower than the final
-   * cap). Wider than maxHits on purpose: a memory that ranks outside the
-   * raw top-maxHits can still win a slot once topic/recency/type are folded
-   * in. Default 10 preserves the pre-fix-round-2 hardcoded value.
-   * UNCALIBRATED pending mm-v1-T008, same caveat as every other weight in
-   * this table.
+   * cap). The calibrated default (5, mm-v1-T008) deliberately sets the
+   * candidate pool EQUAL to the default cap: on the golden set, a wider
+   * pool only let weak semantic candidates flood the final cap (P 0.238 ->
+   * 0.288, R 0.453 -> 0.547 going 10 -> 5 at floor 0.77). Consequence: a
+   * memory outside the raw semantic top-maxHits can no longer be lifted
+   * into the result by topic/recency/type at defaults — a pool wider than
+   * the cap is now opt-in via MEMORY_ROUTER_BLEND_CANDIDATE_K.
    */
   candidateK: number;
 }
@@ -131,7 +143,8 @@ function loadBlendWeights(): BlendWeights {
 }
 
 // Relative per-type units, unitless, scaled by weights.typeWeight below.
-// UNCALIBRATED (T008), same caveat as BLEND_DEFAULTS above: `feedback`
+// Left as shaped after mm-v1-T008 (typeWeight sweeps showed no golden-set
+// effect beyond single-tie noise, see BLEND_DEFAULTS above): `feedback`
 // memories (corrective "always/never" rules) are the most consistently
 // actionable type in the corpus today, so they get the largest nudge;
 // `project`/`reference` trail behind; `user` gets none. A type missing from

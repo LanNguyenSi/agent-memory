@@ -100,7 +100,9 @@ interface ResolveBlendedDeps {
 //   flood it to 1.0 and shadow everything else.
 // - typeModifier / recencyModifier: small tie-breaking modifiers (memory
 //   `type`, file mtime decay). See src/gates/confidence.ts for the weight
-//   defaults (env-overridable, explicitly UNCALIBRATED until mm-v1-T008).
+//   defaults (env-overridable; topicBoost/candidateK calibrated in
+//   mm-v1-T008, the relevance floor stays per-corpus — see
+//   src/gates/confidence.ts and README "Calibration").
 // A memory with neither a semantic score nor a topic match contributes
 // nothing and is excluded — the modifiers alone can never surface an
 // otherwise-silent memory, only shape the ranking of one some other signal
@@ -138,14 +140,16 @@ async function resolveBlended(
   const maxHits = opts.maxHits ?? 5;
   const weights = loadBlendWeights();
 
-  // Wider than maxHits on purpose: a memory that ranks outside the raw
-  // semantic top-k can still win a slot once topic/recency/type are folded
-  // in, so the candidate pool going into the blend is deliberately more
-  // generous than the final cap. Width is env-overridable via
-  // MEMORY_ROUTER_BLEND_CANDIDATE_K (default 5, see BLEND_DEFAULTS.candidateK
-  // in src/gates/confidence.ts); rounded defensively since an env override
-  // is free-form text and the value below flows straight into a search
-  // "how many rows" argument.
+  // Candidate pool width. At the calibrated default (5, mm-v1-T008) the
+  // pool EQUALS the default cap: a memory outside the raw semantic
+  // top-maxHits is not lifted into the result by topic/recency/type unless
+  // the operator widens the pool via MEMORY_ROUTER_BLEND_CANDIDATE_K (then
+  // Math.max keeps it never narrower than the cap). The wider-pool rescue
+  // was measured to hurt on the golden set (weak semantic candidates
+  // flooding the cap, see BLEND_DEFAULTS.candidateK in
+  // src/gates/confidence.ts). Rounded defensively since an env override is
+  // free-form text and the value below flows straight into a search "how
+  // many rows" argument.
   const semanticK = Math.max(maxHits, Math.round(weights.candidateK));
   let semanticHits: { memory: Memory; score: number }[] = [];
   try {
