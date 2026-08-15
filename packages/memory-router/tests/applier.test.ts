@@ -101,6 +101,48 @@ test('apply preserves CRLF line endings', () => {
   }
 });
 
+test('listMemoryFiles order is lexicographic code-unit order, independent of readdir order', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-applier-'));
+  for (const name of ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md']) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\ndescription: x\ntype: reference\n---\nbody\n`,
+    );
+  }
+  // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
+  // scrambled readdir result, so this test pins the applier's own sort on
+  // every platform instead of the host filesystem's incidental ordering.
+  // The applier destructures readdirSync at module load, so patch fs first
+  // and require a fresh module instance. The stub is scoped to the fixture
+  // dir (everything else passes through) so the cache-miss require below
+  // and any other dynamic fs use in the patched window stays unaffected.
+  const applierPath = require.resolve('../src/tag/applier');
+  const realReaddirSync = fs.readdirSync;
+  (fs as unknown as { readdirSync: (dir: string) => string[] }).readdirSync = (
+    dir: string,
+  ) =>
+    dir === tmp
+      ? ['bravo.md', 'Zulu.md', 'delta.md', 'alpha.md']
+      : (realReaddirSync as unknown as (dir: string) => string[])(dir);
+  try {
+    delete require.cache[applierPath];
+    const { listMemoryFiles: freshList } = require(applierPath);
+    // 'Zulu' before 'alpha': uppercase code units sort first. This pins the
+    // comparator choice (code-unit order, not locale-aware collation).
+    assert.deepEqual(freshList(tmp), [
+      path.join(tmp, 'Zulu.md'),
+      path.join(tmp, 'alpha.md'),
+      path.join(tmp, 'bravo.md'),
+      path.join(tmp, 'delta.md'),
+    ]);
+  } finally {
+    (fs as unknown as { readdirSync: typeof realReaddirSync }).readdirSync =
+      realReaddirSync;
+    delete require.cache[applierPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('memory without a topic match keeps its frontmatter unchanged', () => {
   const dir = mkTmp();
   const file = path.join(dir, 'reference_plain.md');

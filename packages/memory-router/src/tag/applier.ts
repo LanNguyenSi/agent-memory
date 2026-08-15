@@ -25,6 +25,12 @@ interface FileChange {
 
 function listMemoryFiles(dir: string, onlyId?: string): string[] {
   const entries = readdirSync(dir) as string[];
+  // readdir order is filesystem-dependent (ext4 dir_index returns hash
+  // order), so the apply loop must not inherit the filesystem's order.
+  // Plain Array#sort (UTF-16 code-unit order) rather than localeCompare:
+  // localeCompare depends on the host locale and would reintroduce
+  // machine-dependent ordering.
+  entries.sort();
   return entries
     .filter((name: string) => name.endsWith('.md') && name !== 'MEMORY.md')
     .filter((name: string) => {
