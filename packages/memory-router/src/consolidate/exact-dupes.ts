@@ -49,8 +49,11 @@ interface EmptyBodyEntry {
 // depends on the host locale and would make report order machine-dependent
 // (same rationale as schema-metrics.ts's byId/byPath and the readdir-walk
 // sorts in loader/drift/transform/applier).
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 function byId(a: { id: string }, b: { id: string }): number {
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  return cmp(a.id, b.id);
 }
 
 // Groups only ever contain memories that were successfully loaded (see
@@ -83,7 +86,7 @@ function findExactDupes(memories: Memory[]): ExactDupeGroup[] {
   }
   // Deterministic group order: by first (already-sorted) member id
   // (code-unit).
-  groups.sort((a, b) => (a.ids[0] < b.ids[0] ? -1 : a.ids[0] > b.ids[0] ? 1 : 0));
+  groups.sort((a, b) => cmp(a.ids[0], b.ids[0]));
   return groups;
 }
 

@@ -127,10 +127,10 @@ test('findExactDupes: member order within a group is code-unit (Zulu before alph
 
 test('findExactDupes: group order is code-unit by first member id, not locale order', () => {
   const groups = findExactDupes([
-    memory('ag', 'second group body'),
-    memory('zz8', 'second group body'),
-    memory('Zg', 'first group body'),
-    memory('zz9', 'first group body'),
+    memory('ag', 'body-A'),
+    memory('zz8', 'body-A'),
+    memory('Zg', 'body-B'),
+    memory('zz9', 'body-B'),
   ]);
   assert.equal(groups.length, 2);
   // Group led by 'Zg' sorts before the group led by 'ag' in code-unit
