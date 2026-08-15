@@ -102,12 +102,11 @@ test('apply preserves CRLF line endings', () => {
 });
 
 test('listMemoryFiles order is lexicographic code-unit order, independent of readdir order', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-applier-'));
+  const tmp = mkTmp();
   for (const name of ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md']) {
-    fs.writeFileSync(
-      path.join(tmp, name),
-      `---\nname: ${path.basename(name, '.md')}\ndescription: x\ntype: reference\n---\nbody\n`,
-    );
+    // Content is irrelevant here: listMemoryFiles only stats the entries,
+    // it never reads them.
+    fs.writeFileSync(path.join(tmp, name), 'body\n');
   }
   // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
   // scrambled readdir result, so this test pins the applier's own sort on

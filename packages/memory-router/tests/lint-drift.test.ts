@@ -475,7 +475,9 @@ test('formatFixResultText: applied + remaining sections', () => {
 });
 
 test('scanMemories order is lexicographic code-unit order, independent of readdir order', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-drift-'));
+  // Valid frontmatter on purpose: scanMemories parses every file, and the
+  // order pin should not couple itself to the reject-handling path.
+  const tmp = makeTmpDir();
   for (const name of ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md']) {
     fs.writeFileSync(
       path.join(tmp, name),

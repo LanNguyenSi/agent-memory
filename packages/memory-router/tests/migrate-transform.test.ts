@@ -819,10 +819,9 @@ test('migrate --apply: lineWidth:0 avoids yaml\'s default 80-col reflow; pre-exi
 test('listMigratableFiles order is lexicographic code-unit order, independent of readdir order', () => {
   const tmp = mkTmpDir();
   for (const name of ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md']) {
-    fs.writeFileSync(
-      path.join(tmp, name),
-      `---\nname: ${path.basename(name, '.md')}\ndescription: x\ntype: reference\n---\nbody\n`,
-    );
+    // Content is irrelevant here: listMigratableFiles only stats the
+    // entries, it never reads them.
+    fs.writeFileSync(path.join(tmp, name), 'body\n');
   }
   // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
   // scrambled readdir result, so this test pins the walker's own sort on

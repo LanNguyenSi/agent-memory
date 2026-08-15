@@ -101,11 +101,8 @@ interface MigrateContext {
 // names them explicitly).
 function listMigratableFiles(dir: string): string[] {
   const entries = readdirSync(dir) as string[];
-  // readdir order is filesystem-dependent (ext4 dir_index returns hash
-  // order), so migrate-report line order must not inherit the filesystem's
-  // order. Plain Array#sort (UTF-16 code-unit order) rather than
-  // localeCompare: localeCompare depends on the host locale and would
-  // reintroduce machine-dependent ordering.
+  // Code-unit sort, same rationale as loadMemoriesFromDir in
+  // src/memory/loader.ts. Fixes migrate-report line order across machines.
   entries.sort();
   return entries
     .filter((name: string) => name.endsWith('.md') && name !== 'MEMORY.md')
