@@ -177,6 +177,11 @@ function validateFrontmatter(raw: unknown): {
 
 function scanMemories(dir: string): ScannedMemory[] {
   const entries = readdirSync(dir);
+  // Code-unit sort, same rationale as loadMemoriesFromDir in
+  // src/memory/loader.ts. Downstream this fixes drift-report line order,
+  // the MEMORY.md append order of `lint --fix`, and which file the
+  // duplicate_name finding names as canonical (group[0]).
+  entries.sort();
   const memories: ScannedMemory[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.md')) continue;

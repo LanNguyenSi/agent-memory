@@ -25,6 +25,10 @@ interface FileChange {
 
 function listMemoryFiles(dir: string, onlyId?: string): string[] {
   const entries = readdirSync(dir) as string[];
+  // Code-unit sort, same rationale as loadMemoriesFromDir in
+  // src/memory/loader.ts. Fixes tag-apply processing and report order
+  // across machines.
+  entries.sort();
   return entries
     .filter((name: string) => name.endsWith('.md') && name !== 'MEMORY.md')
     .filter((name: string) => {

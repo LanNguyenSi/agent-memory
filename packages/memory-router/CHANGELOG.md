@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The three remaining `readdirSync` walks now sort their directory listing lexicographically (plain code-unit `Array#sort`, locale-independent), completing for the report verbs what 0.6.0's loader sort (mm-v1-T005 follow-up) did for the hook/eval path: `scanMemories` in `src/lint/drift.ts`, `listMigratableFiles` in `src/migrate/transform.ts`, and `listMemoryFiles` in `src/tag/applier.ts`. `lint`, `migrate`, and `tag apply` output is now line-stable across machines and filesystems (APFS vs ext4 hash order); on hash-ordered filesystems the line order can change once after this update, deliberately. Two effects beyond display order, both deliberate: `lint --fix` now appends `missing_pointer` lines to MEMORY.md in sorted scan order, and the `duplicate_name` finding names the lexicographically first file as the canonical collision target instead of the filesystem-first one. One order-pinning test per walk (the fixed-scrambled-readdir + fresh-require pattern from `tests/loader.test.ts`) fails if its sort is removed or swapped for `localeCompare` (both mutation-verified per walk). Same residual caveat as the loader: filenames whose Unicode normalization differs between machines (NFD vs NFC) can still sort differently. A fourth walk, `scanRawFrontmatter` in `src/consolidate/schema-metrics.ts`, stays unsorted here on purpose (it sorts its own outputs downstream, today with `localeCompare`); aligning it with the code-unit idiom is a filed follow-up.
+
 ## [0.6.0] - 2026-08-14
 
 **Memory-Management v1: schema v1, topic vocabulary as corpus data, multi-provider embeddings, score-blend resolver, eval/migrate/consolidate verbs, deterministic load order, calibrated defaults (mm-v1-T002 through T008).**

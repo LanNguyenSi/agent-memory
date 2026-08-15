@@ -815,3 +815,44 @@ test('migrate --apply: lineWidth:0 avoids yaml\'s default 80-col reflow; pre-exi
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('listMigratableFiles order is lexicographic code-unit order, independent of readdir order', () => {
+  const tmp = mkTmpDir();
+  for (const name of ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md']) {
+    // Content is irrelevant here: listMigratableFiles only stats the
+    // entries, it never reads them.
+    fs.writeFileSync(path.join(tmp, name), 'body\n');
+  }
+  // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
+  // scrambled readdir result, so this test pins the walker's own sort on
+  // every platform instead of the host filesystem's incidental ordering.
+  // transform.ts destructures readdirSync at module load, so patch fs first
+  // and require a fresh module instance. The stub is scoped to the fixture
+  // dir (everything else passes through) so the cache-miss require below
+  // and any other dynamic fs use in the patched window stays unaffected.
+  const transformPath = require.resolve('../src/migrate/transform');
+  const realReaddirSync = fs.readdirSync;
+  (fs as unknown as { readdirSync: (dir: string) => string[] }).readdirSync = (
+    dir: string,
+  ) =>
+    dir === tmp
+      ? ['bravo.md', 'Zulu.md', 'delta.md', 'alpha.md']
+      : (realReaddirSync as unknown as (dir: string) => string[])(dir);
+  try {
+    delete require.cache[transformPath];
+    const { listMigratableFiles: freshList } = require(transformPath);
+    // 'Zulu' before 'alpha': uppercase code units sort first. This pins the
+    // comparator choice (code-unit order, not locale-aware collation).
+    assert.deepEqual(freshList(tmp), [
+      path.join(tmp, 'Zulu.md'),
+      path.join(tmp, 'alpha.md'),
+      path.join(tmp, 'bravo.md'),
+      path.join(tmp, 'delta.md'),
+    ]);
+  } finally {
+    (fs as unknown as { readdirSync: typeof realReaddirSync }).readdirSync =
+      realReaddirSync;
+    delete require.cache[transformPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

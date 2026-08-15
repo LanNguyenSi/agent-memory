@@ -473,3 +473,45 @@ test('formatFixResultText: applied + remaining sections', () => {
   assert.match(text, /1 finding\(s\) need manual/);
   assert.match(text, /MEMORY\.md updated/);
 });
+
+test('scanMemories order is lexicographic code-unit order, independent of readdir order', () => {
+  // Valid frontmatter on purpose: scanMemories parses every file, and the
+  // order pin should not couple itself to the reject-handling path.
+  const tmp = makeTmpDir();
+  for (const name of ['alpha.md', 'bravo.md', 'delta.md', 'Zulu.md']) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\ndescription: x\ntype: reference\n---\nbody\n`,
+    );
+  }
+  // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
+  // scrambled readdir result, so this test pins the scanner's own sort on
+  // every platform instead of the host filesystem's incidental ordering.
+  // drift.ts destructures readdirSync at module load, so patch fs first
+  // and require a fresh module instance. The stub is scoped to the fixture
+  // dir (everything else passes through) so the cache-miss require below
+  // and any other dynamic fs use in the patched window stays unaffected.
+  const driftPath = require.resolve('../src/lint/drift');
+  const realReaddirSync = fs.readdirSync;
+  (fs as unknown as { readdirSync: (dir: string) => string[] }).readdirSync = (
+    dir: string,
+  ) =>
+    dir === tmp
+      ? ['bravo.md', 'Zulu.md', 'delta.md', 'alpha.md']
+      : (realReaddirSync as unknown as (dir: string) => string[])(dir);
+  try {
+    delete require.cache[driftPath];
+    const { __scanMemories: freshScan } = require(driftPath);
+    // 'Zulu' before 'alpha': uppercase code units sort first. This pins the
+    // comparator choice (code-unit order, not locale-aware collation).
+    assert.deepEqual(
+      freshScan(tmp).map((m: { id: string }) => m.id),
+      ['Zulu', 'alpha', 'bravo', 'delta'],
+    );
+  } finally {
+    (fs as unknown as { readdirSync: typeof realReaddirSync }).readdirSync =
+      realReaddirSync;
+    delete require.cache[driftPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
