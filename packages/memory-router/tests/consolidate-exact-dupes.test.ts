@@ -113,3 +113,37 @@ test('findEmptyBodies: a corpus with no empty bodies returns an empty list', () 
 test('findEmptyBodies: empty corpus returns an empty list', () => {
   assert.deepEqual(findEmptyBodies([]), []);
 });
+
+test('findExactDupes: member order within a group is code-unit (Zulu before alpha), not locale order', () => {
+  const groups = findExactDupes([
+    memory('alpha', 'shared body'),
+    memory('Zulu', 'shared body'),
+  ]);
+  assert.equal(groups.length, 1);
+  // Uppercase 'Z' (code unit 90) before lowercase 'a' (97); an en-US
+  // localeCompare would order alpha first. Pins the byId comparator.
+  assert.deepEqual(groups[0].ids, ['Zulu', 'alpha']);
+});
+
+test('findExactDupes: group order is code-unit by first member id, not locale order', () => {
+  const groups = findExactDupes([
+    memory('ag', 'body-A'),
+    memory('zz8', 'body-A'),
+    memory('Zg', 'body-B'),
+    memory('zz9', 'body-B'),
+  ]);
+  assert.equal(groups.length, 2);
+  // Group led by 'Zg' sorts before the group led by 'ag' in code-unit
+  // order; locale collation would invert them. Pins the group comparator.
+  assert.deepEqual(groups.map((g: { ids: string[] }) => g.ids[0]), ['Zg', 'ag']);
+});
+
+test('findEmptyBodies: order is code-unit (Zempty before aempty), not locale order', () => {
+  const entries = findEmptyBodies([
+    memory('aempty', '   '),
+    memory('Zempty', ''),
+    memory('kept', 'real body'),
+  ]);
+  // Pins the byId comparator on the empty-body list.
+  assert.deepEqual(entries.map((e: { id: string }) => e.id), ['Zempty', 'aempty']);
+});

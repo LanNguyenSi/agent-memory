@@ -37,6 +37,14 @@ const { resolveProviderConfig } = require('../embed/provider');
 
 const DEFAULT_NEAR_THRESHOLD = 0.95;
 
+// Code-unit (UTF-16) order via `<`/`>`, not localeCompare: localeCompare
+// depends on the host locale and would make report order machine-dependent
+// (same rationale as schema-metrics.ts's byId/byPath and the readdir-walk
+// sorts in loader/drift/transform/applier).
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 interface NearDupePair {
   aId: string;
   aPath: string;
@@ -173,9 +181,11 @@ function findNearDupes(
           }
         }
       }
-      // Highest similarity first; ties broken by id pair for determinism.
+      // Highest similarity first; ties broken by id pair (code-unit order)
+      // for determinism. The id tiebreaks go through the three-way cmp
+      // helper (not a boolean) so the OR-chain composes a total order.
       pairs.sort(
-        (a, b) => b.similarity - a.similarity || a.aId.localeCompare(b.aId) || a.bId.localeCompare(b.bId),
+        (a, b) => b.similarity - a.similarity || cmp(a.aId, b.aId) || cmp(a.bId, b.bId),
       );
 
       // Coverage gap disclosure, part 2: indexedCount < totalCount alone

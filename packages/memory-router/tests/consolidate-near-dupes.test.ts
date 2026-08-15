@@ -435,3 +435,35 @@ test('findNearDupes: staleModelRows is omitted (not 0) when the coverage gap is 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('findNearDupes: equal-similarity ties order by id pair in code-unit order (both tiebreak levels), not locale order', () => {
+  const dir = tmpMemoryDir();
+  // Three IDENTICAL vectors: every pair has similarity exactly 1.0, so the
+  // sort reaches the id tiebreakers for all three pairs.
+  buildFixtureIndex(dir, [
+    { id: 'aa', vector: [1, 0, 0] },
+    { id: 'Zx', vector: [1, 0, 0] },
+    { id: 'ax', vector: [1, 0, 0] },
+  ]);
+  try {
+    withEnv({ OPENAI_API_KEY: 'sk-test' }, () => {
+      const result = findNearDupes(
+        dir,
+        [memory('aa'), memory('Zx'), memory('ax')],
+        0.95,
+      );
+      assert.equal(result.status, 'ok');
+      assert.equal(result.pairs.length, 3);
+      // Code-unit order: 'Zx' (Z = 90) sorts before 'aa'/'ax' (a = 97) on
+      // the aId level, and 'Zx' before 'ax' on the bId level within the
+      // aa-led pairs. An en-US localeCompare would order the lowercase ids
+      // first on BOTH levels, so a revert of either cmp() call goes red.
+      assert.deepEqual(
+        result.pairs.map((p: { aId: string; bId: string }) => `${p.aId}/${p.bId}`),
+        ['Zx/ax', 'aa/Zx', 'aa/ax'],
+      );
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -45,6 +45,17 @@ interface EmptyBodyEntry {
   path: string;
 }
 
+// Code-unit (UTF-16) order via `<`/`>`, not localeCompare: localeCompare
+// depends on the host locale and would make report order machine-dependent
+// (same rationale as schema-metrics.ts's byId/byPath and the readdir-walk
+// sorts in loader/drift/transform/applier).
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+function byId(a: { id: string }, b: { id: string }): number {
+  return cmp(a.id, b.id);
+}
+
 // Groups only ever contain memories that were successfully loaded (see
 // src/memory/loader.ts's loadMemoriesFromDir); a file the loader rejects
 // has no usable body to hash and is instead reported under
@@ -64,17 +75,18 @@ function findExactDupes(memories: Memory[]): ExactDupeGroup[] {
   const groups: ExactDupeGroup[] = [];
   for (const [hash, group] of byHash) {
     if (group.length < 2) continue;
-    // Deterministic member order within a group: by id, not insertion/dir
-    // order (which is filesystem-dependent).
-    const sorted = group.slice().sort((a, b) => a.id.localeCompare(b.id));
+    // Deterministic member order within a group: by id (code-unit), not
+    // insertion/dir order (which is filesystem-dependent).
+    const sorted = group.slice().sort(byId);
     groups.push({
       hash,
       ids: sorted.map((m) => m.id),
       paths: sorted.map((m) => m.path),
     });
   }
-  // Deterministic group order: by first (already-sorted) member id.
-  groups.sort((a, b) => a.ids[0].localeCompare(b.ids[0]));
+  // Deterministic group order: by first (already-sorted) member id
+  // (code-unit).
+  groups.sort((a, b) => cmp(a.ids[0], b.ids[0]));
   return groups;
 }
 
@@ -85,7 +97,7 @@ function findEmptyBodies(memories: Memory[]): EmptyBodyEntry[] {
   return memories
     .filter((m) => normalizeBody(m.body).length === 0)
     .map((m) => ({ id: m.id, path: m.path }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort(byId);
 }
 
 module.exports = {
