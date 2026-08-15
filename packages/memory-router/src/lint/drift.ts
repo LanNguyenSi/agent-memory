@@ -177,6 +177,12 @@ function validateFrontmatter(raw: unknown): {
 
 function scanMemories(dir: string): ScannedMemory[] {
   const entries = readdirSync(dir);
+  // readdir order is filesystem-dependent (ext4 dir_index returns hash
+  // order), so drift-report line order must not inherit the filesystem's
+  // order. Plain Array#sort (UTF-16 code-unit order) rather than
+  // localeCompare: localeCompare depends on the host locale and would
+  // reintroduce machine-dependent ordering.
+  entries.sort();
   const memories: ScannedMemory[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.md')) continue;
