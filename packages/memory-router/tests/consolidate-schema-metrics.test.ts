@@ -240,7 +240,13 @@ test('buildSchemaMetrics: all four output buckets are code-unit sorted (Zulu bef
     dir: string,
   ) =>
     dir === tmp
-      ? ['arej.md', 'alpha.md', 'ainv.md', 'aleg.md', 'Zrej.md', 'Zulu.md', 'Zinv.md', 'Zleg.md']
+      ? // Descending code-unit order (lowercase entries first): the exact
+        // inverse of what the comparators must produce, and self-syncing
+        // when fixtures are added to this tmp dir later.
+        (realReaddirSync as unknown as (dir: string) => string[])(dir)
+          .slice()
+          .sort()
+          .reverse()
       : (realReaddirSync as unknown as (dir: string) => string[])(dir);
   try {
     delete require.cache[metricsPath];
