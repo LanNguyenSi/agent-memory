@@ -196,3 +196,77 @@ test('buildSchemaMetrics: MEMORY.md and non-.md files are never scanned', () => 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('buildSchemaMetrics: all four output buckets are code-unit sorted (Zulu before alpha), independent of readdir order', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-schema-metrics-'));
+  // One uppercase/lowercase pair per output bucket, kept disjoint so each
+  // pair exercises exactly one comparator: untagged (`topics: []`), legacy
+  // format (metadata.type without top-level type; non-empty metadata.topics
+  // keeps the pair out of untagged), invalid topics shape (string topics),
+  // and loader rejects (missing type, sorted by path).
+  for (const name of ['Zulu.md', 'alpha.md']) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\ntype: feedback\ntopics: []\n---\nbody\n`,
+    );
+  }
+  for (const name of ['Zleg.md', 'aleg.md']) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\nmetadata:\n  type: feedback\n  topics:\n    - git\n---\nbody\n`,
+    );
+  }
+  for (const name of ['Zinv.md', 'ainv.md']) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\ntype: feedback\ntopics: notalist\n---\nbody\n`,
+    );
+  }
+  for (const name of ['Zrej.md', 'arej.md']) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\n---\nbody\n`,
+    );
+  }
+  // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
+  // scrambled readdir result, so this pins the comparator on every platform
+  // instead of the host filesystem's incidental ordering. schema-metrics
+  // destructures readdirSync at module load, so patch fs first and require a
+  // fresh instance. The stub is scoped to the fixture dir (everything else
+  // passes through).
+  const metricsPath = require.resolve('../src/consolidate/schema-metrics');
+  const realReaddirSync = fs.readdirSync;
+  (fs as unknown as { readdirSync: (dir: string) => string[] }).readdirSync = (
+    dir: string,
+  ) =>
+    dir === tmp
+      ? // Descending code-unit order (lowercase entries first): the exact
+        // inverse of what the comparators must produce, and self-syncing
+        // when fixtures are added to this tmp dir later.
+        (realReaddirSync as unknown as (dir: string) => string[])(dir)
+          .slice()
+          .sort()
+          .reverse()
+      : (realReaddirSync as unknown as (dir: string) => string[])(dir);
+  try {
+    delete require.cache[metricsPath];
+    const { buildSchemaMetrics: freshBuild } = require(metricsPath);
+    const metrics = freshBuild(tmp);
+    // Uppercase 'Z' (code unit 90) before lowercase 'a' (97) in every
+    // bucket: code-unit order. An en-US localeCompare would order the
+    // lowercase entry first, so each assertion pins its own comparator
+    // (code-unit, not locale-aware collation).
+    assert.deepEqual(metrics.untaggedIds, ['Zulu', 'alpha']);
+    assert.deepEqual(metrics.legacyFormatIds, ['Zleg', 'aleg']);
+    assert.deepEqual(metrics.invalidTopicsShapeIds, ['Zinv', 'ainv']);
+    assert.deepEqual(
+      metrics.loaderRejects.map((r: { path: string }) => r.path),
+      [path.join(tmp, 'Zrej.md'), path.join(tmp, 'arej.md')],
+    );
+  } finally {
+    (fs as unknown as { readdirSync: typeof realReaddirSync }).readdirSync =
+      realReaddirSync;
+    delete require.cache[metricsPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
