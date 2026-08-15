@@ -210,27 +210,30 @@ function buildSchemaMetrics(dir: string): SchemaMetrics {
   const loaderRejects = rawEntries
     .filter((e) => !e.ok)
     .map((e) => ({ path: e.path, reason: e.reason as string }))
-    // Deterministic order independent of readdirSync's platform-dependent
-    // listing order.
-    .sort((a, b) => a.path.localeCompare(b.path));
+    // Code-unit (UTF-16) order, not localeCompare: localeCompare depends
+    // on the host locale and would make this machine-dependent.
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   // "untagged": the loader-mirrored resolved topics value is an empty
   // array (see scanRawFrontmatter's topicsShape comment for the exact
   // precedence this mirrors).
   const untagged = ok
     .filter((e) => e.topicsShape === 'untagged')
-    .sort((a, b) => a.id.localeCompare(b.id));
+    // Code-unit (UTF-16) order, not localeCompare (host-locale dependent).
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // "legacy format": metadata.type carries the type, but top-level `type`
   // does not: the pre-schema-v1 Claude Code auto-memory shape (see
   // src/migrate/transform.ts's `type` hoist, which fixes exactly this).
   const legacyFormat = ok
     .filter((e) => !e.hasTopLevelType && e.hasMetadataType)
-    .sort((a, b) => a.id.localeCompare(b.id));
+    // Code-unit (UTF-16) order, not localeCompare (host-locale dependent).
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // "invalid topics shape": the resolved topics value exists but isn't a
   // list at all.
   const invalidTopicsShape = ok
     .filter((e) => e.topicsShape === 'invalid-shape')
-    .sort((a, b) => a.id.localeCompare(b.id));
+    // Code-unit (UTF-16) order, not localeCompare (host-locale dependent).
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   return {
     scannedCount: ok.length,

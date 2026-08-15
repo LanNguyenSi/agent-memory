@@ -196,3 +196,43 @@ test('buildSchemaMetrics: MEMORY.md and non-.md files are never scanned', () => 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('buildSchemaMetrics: untaggedIds are code-unit sorted (Zulu before alpha), independent of readdir order', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-schema-metrics-'));
+  // Both land in untaggedIds (empty `topics: []`), so their relative order
+  // exercises the output comparator directly.
+  for (const name of ['Zulu.md', 'alpha.md']) {
+    fs.writeFileSync(
+      path.join(tmp, name),
+      `---\nname: ${path.basename(name, '.md')}\ntype: feedback\ntopics: []\n---\nbody\n`,
+    );
+  }
+  // Simulate a hash-ordered filesystem (e.g. ext4 dir_index) with a fixed
+  // scrambled readdir result, so this pins the comparator on every platform
+  // instead of the host filesystem's incidental ordering. schema-metrics
+  // destructures readdirSync at module load, so patch fs first and require a
+  // fresh instance. The stub is scoped to the fixture dir (everything else
+  // passes through).
+  const metricsPath = require.resolve('../src/consolidate/schema-metrics');
+  const realReaddirSync = fs.readdirSync;
+  (fs as unknown as { readdirSync: (dir: string) => string[] }).readdirSync = (
+    dir: string,
+  ) =>
+    dir === tmp
+      ? ['alpha.md', 'Zulu.md']
+      : (realReaddirSync as unknown as (dir: string) => string[])(dir);
+  try {
+    delete require.cache[metricsPath];
+    const { buildSchemaMetrics: freshBuild } = require(metricsPath);
+    const metrics = freshBuild(tmp);
+    // 'Zulu' (leading 'Z', code unit 90) before 'alpha' (97): code-unit
+    // order. An en-US localeCompare would order alpha first. This pins the
+    // comparator choice (code-unit, not locale-aware collation).
+    assert.deepEqual(metrics.untaggedIds, ['Zulu', 'alpha']);
+  } finally {
+    (fs as unknown as { readdirSync: typeof realReaddirSync }).readdirSync =
+      realReaddirSync;
+    delete require.cache[metricsPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
