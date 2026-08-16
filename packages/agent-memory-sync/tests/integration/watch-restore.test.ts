@@ -7,8 +7,10 @@
 // inotify/Linux, worse under CI load), it only narrows the window; see that
 // file's header comment for the full explanation. --verbose is required for
 // the ready line to print at all (writeInfo, src/output.ts, is a no-op
-// otherwise) — none of the assertions below match on exact/full stderr
-// content, so the extra --verbose log lines this enables are harmless here.
+// otherwise); the single-file-commit-message test below additionally
+// asserts on the "watch tick pushing snapshot" push-start line this task
+// added (src/commands/watch.ts), so it is no longer true that nothing here
+// matches on stderr content — every other assertion below still does not.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -24,7 +26,7 @@ const {
   writeProjectConfig,
   writeText
 } = require("../helpers/cli.ts");
-const { runWatchTick } = require("../helpers/watch-process.ts");
+const { runWatchTick, spawnWatch, stopWatchProcessGroup, withTickDeadline } = require("../helpers/watch-process.ts");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
   return {
@@ -90,14 +92,102 @@ test("watch produces a single-file commit message when only one path changed", a
 
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const { exitCode } = await runWatchTick(configPath, () => {
+  const { exitCode, stderr } = await runWatchTick(configPath, () => {
     writeText(path.join(workspaceRoot, "MEMORY.md"), "updated\n");
   });
   assert.equal(exitCode, 0);
 
+  // Pins src/commands/watch.ts's pushSnapshot() actually writing the
+  // push-start progress line (not just the test helper's own machinery
+  // being able to poll for it) — deleting the production writeInfo("watch
+  // tick pushing snapshot", ...) call turns this assertion red while the
+  // rest of the suite stays green, which is exactly the gap this test
+  // closes.
+  assert.match(stderr, /watch tick pushing snapshot/);
+
+  // The push-start line must land mid-tick, before the result line, not
+  // merely appear somewhere in the log — otherwise a build that moved the
+  // writeInfo call to just before the (already-passing) result line would
+  // still satisfy the assertion above without actually giving
+  // withTickDeadline's inactivity mode a mid-tick signal to poll.
+  const pushStartIndex = stderr.indexOf("watch tick pushing snapshot");
+  const resultIndex = stderr.search(/pushed snapshot|watch tick queued locally|watch tick produced no remote changes/);
+  assert.ok(pushStartIndex >= 0, `push-start line missing from stderr: ${stderr}`);
+  assert.ok(resultIndex >= 0, `result line missing from stderr: ${stderr}`);
+  assert.ok(
+    pushStartIndex < resultIndex,
+    `expected the push-start line before the result line, got push-start@${pushStartIndex} result@${resultIndex}: ${stderr}`
+  );
+
   const inspection = cloneRemote(remoteDir, root, "msg-single");
   const subject = git(["log", "-1", "--format=%s"], inspection).trim();
   assert.equal(subject, "update MEMORY.md");
+});
+
+test("watch does not print the push-start progress line without --verbose", async () => {
+  const root = createSandbox("watch-msg-no-verbose");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // Deliberately does not go through runWatchTick: that helper always passes
+  // --verbose (needed for waitForWatcherReady's own ready-line signal), but
+  // this test exists specifically to pin writeInfo's verbose gate
+  // (src/output.ts) for the new push-start line, so it needs a real
+  // non-verbose run. That also means there is no in-band ready signal to
+  // wait on here — the ready line is verbose-gated too — so this falls back
+  // to a generous fixed delay plus a few repeated writes before the trigger
+  // edit lands for good, the same class of mitigation this file's header
+  // comment says the pre-fix code used ("not a structural fix, only a
+  // smaller window"), acceptable here specifically because this suite runs
+  // on fsevents (macOS dev), which that same comment notes does not
+  // reproduce the inotify arming race reliably. If the edit is still lost,
+  // the tick never completes and the bounded wait below fails loudly
+  // instead of silently passing on an empty stderr — and the commit
+  // assertion at the end independently proves the tick actually ran.
+  const child = spawnWatch(
+    ["watch", "default", "--config", configPath, "--debounce-ms", "200", "--max-runs", "1", "--output", "json"],
+    process.env
+  );
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+
+  try {
+    const exitCode = await withTickDeadline(
+      child,
+      async () => {
+        await sleep(300);
+        for (let i = 0; i < 5; i += 1) {
+          writeText(path.join(workspaceRoot, "MEMORY.md"), `updated ${i}\n`);
+          await sleep(150);
+        }
+        return new Promise<number>((resolve) => {
+          child.on("exit", (code: number | null) => resolve(code ?? -1));
+        });
+      },
+      15000
+    );
+    assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+
+  assert.doesNotMatch(stderr, /watch tick pushing snapshot/);
+
+  const inspection = cloneRemote(remoteDir, root, "msg-no-verbose");
+  const subject = git(["log", "-1", "--format=%s"], inspection).trim();
+  assert.equal(
+    subject,
+    "update MEMORY.md",
+    "the tick must have actually run for the absence assertion above to mean anything"
+  );
 });
 
 test("watch produces an aggregated commit message for multiple file changes", async () => {

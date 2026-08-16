@@ -118,36 +118,43 @@ const READY_TIMEOUT_MS = 10000;
 // failing near whatever value it is set to, regardless of that value's
 // size, is not evidence the value is too small; it is the signature of an
 // externally-driven condition that a bigger number cannot buy margin
-// against. Independently confirmed via `uptime`, taken at intervals across
-// this same calibration session: the load average on this shared,
-// 12-logical-core dev machine climbed from 14.34 to 20.11 over the course
-// of these trials — other agents run concurrently here per AGENTS.md, and
-// their aggregate demand on this machine's cores was still rising while
-// this calibration ran, not holding steady the way a controlled benchmark
-// would. A second independent confirmation: `git stash`-ing every change
-// in this task and re-running the FULL suite on unmodified origin/master
-// reproduced the identical failure class ("did not complete within
-// 90000ms") on the SAME old whole-tick TICK_TIMEOUT_MS this task's
-// INACTIVITY_TIMEOUT_MS is named after, at comparable ambient load, with no
-// synthetic `yes` workers running at all. Taken together, the residual
-// failure rate this task measured is attributable to this specific
-// machine's rising ambient load during this specific session, not to a
-// flaw in inactivity-based sizing, and is very unlikely to be reproducible
-// on a less-contended host or at a quieter moment on this one — see this
-// task's final report for the full quoted four-trial history and the
-// explicit recommendation to the orchestrator on how to weigh it. A
-// SIGSTOP'd child (this file's original reason for existing, see the
-// module comment above) still fails reliably at this budget and well under
-// this package's CI job's 10-minute timeout: no further progress signal is
-// possible once the process itself is frozen, so inactivity accumulates
-// exactly as it did under the old whole-tick model — see this task's final
-// report for the quoted red run (verified at both 90000ms and, before this
-// value was reverted to, 150000ms).
+// against.
+//
+// A later fix-round review measured this properly with a matched control
+// instead of the single-session `uptime`/`git stash` read this comment
+// previously cited, and the corrected finding replaces that paragraph here:
+// at idle load (1.71), a 10-run pass of the PR #102 load scenario against
+// this branch scored 6/10, and the SAME scenario against the unmodified
+// merge-base (pre-dating this task's changes entirely) scored 7/10 — i.e.
+// roughly a 30-40% failure rate on BOTH, not something this task's change
+// introduced or worsened. Every one of the branch's failing runs stalled in
+// the ready-to-push-start gap with ONLY the ready line present in stderr:
+// the trigger edit's filesystem event was never delivered to chokidar at
+// all, not merely delayed past a budget. That is a chokidar/fs-event
+// delivery failure under CPU contention, pre-existing at the merge base
+// under the OLD fixed whole-tick budget — no inactivity-budget size and no
+// additional progress signal can fix it, because the signal this task added
+// never gets a chance to fire when the edit itself is never observed. This
+// failure class is therefore out of this task's scope; a follow-up task to
+// investigate chokidar's fs-event delivery under load will be filed by the
+// orchestrator. A SIGSTOP'd child (this file's original reason for
+// existing, see the module comment above) still fails reliably at this
+// budget and well under this package's CI job's 10-minute timeout: no
+// further progress signal is possible once the process itself is frozen, so
+// inactivity accumulates exactly as it did under the old whole-tick model.
 const INACTIVITY_TIMEOUT_MS = 90000;
 // Poll cadence for withTickDeadline's inactivity mode — cheap enough (a
 // regex match count over an in-memory string) to run this often without
 // measurably perturbing tick timing.
 const INACTIVITY_POLL_INTERVAL_MS = 50;
+// Multiplier applied to a withTickDeadline call's `timeoutMs` to get the
+// absolute whole-tick cap in inactivity mode (see withTickDeadline's own
+// comment for why this second, independent timer exists alongside the
+// inactivity poll). 2.5x gives a signaling-but-genuinely-slow tick real
+// headroom beyond a single inactivity window before the cap treats it as a
+// runaway, while still landing well inside this package's CI job's 10-minute
+// timeout at the default INACTIVITY_TIMEOUT_MS (2.5 * 90000ms = 225000ms).
+const ABSOLUTE_CAP_MULTIPLIER = 2.5;
 
 // Counts PROGRESS_SIGNAL_PATTERN matches in `text`. String#match with a
 // global-flagged RegExp does not mutate the RegExp's own `lastIndex` (unlike
@@ -397,6 +404,25 @@ function waitForWatcherReady(getStderr: () => string, timeoutMs = READY_TIMEOUT_
 //   INACTIVITY_TIMEOUT_MS's comment above for why this needs less margin
 //   than the old whole-tick budget did, and for the load-scenario evidence
 //   that validated the chosen value.
+//
+//   Inactivity mode also arms a SECOND, independent timer: an absolute cap
+//   on the tick's total wall-clock time, at ABSOLUTE_CAP_MULTIPLIER times
+//   `timeoutMs`. Resetting the deadline on every progress signal (the whole
+//   point of inactivity mode) means a tick that keeps signaling — whether a
+//   genuinely long tick or a runaway that emits a fresh line just inside
+//   every window — has no ceiling from the inactivity check alone: gaps can
+//   stack indefinitely, each one individually under budget. This package's
+//   `test`/`test:coverage` scripts (package.json) pass no `--test-timeout`
+//   flag to `node --test`, and that flag's own default when unspecified is
+//   Infinity (Node's test-runner docs), so node:test itself places no ceiling
+//   on this case either; only this package's CI job timeout (10 minutes)
+//   would eventually stop it, taking the whole run down with it instead of
+//   failing one test. The absolute timer fires independently of the
+//   inactivity poll and fails with a DISTINCT message (see `fail` below) so
+//   a red run tells the two failure modes apart:
+//   genuinely stuck (no signal for `timeoutMs`) versus alive-but-runaway
+//   (signaling forever, never finishing within `timeoutMs *
+//   ABSOLUTE_CAP_MULTIPLIER`).
 async function withTickDeadline<T>(
   child: ReturnType<typeof spawn>,
   fn: () => Promise<T>,
@@ -405,6 +431,7 @@ async function withTickDeadline<T>(
 ): Promise<T> {
   let timer: NodeJS.Timeout | null = null;
   let pollTimer: NodeJS.Timeout | null = null;
+  let absoluteCapTimer: NodeJS.Timeout | null = null;
 
   const timeout = new Promise<never>((_, reject) => {
     const fail = (detail: string) => {
@@ -456,6 +483,20 @@ async function withTickDeadline<T>(
         );
       }
     }, INACTIVITY_POLL_INTERVAL_MS);
+
+    // Absolute whole-tick cap, independent of the inactivity poll above —
+    // see withTickDeadline's own comment for why inactivity mode needs this
+    // second timer. Deliberately not reset by progress signals: that is the
+    // entire point, a tick that keeps signaling forever must still lose
+    // eventually. Distinct failure message from the inactivity-poll `fail`
+    // call above so a red run tells the two failure modes apart.
+    const absoluteCapMs = timeoutMs * ABSOLUTE_CAP_MULTIPLIER;
+    absoluteCapTimer = setTimeout(() => {
+      fail(
+        `watch tick exceeded the absolute ${absoluteCapMs}ms whole-tick cap despite ongoing progress ` +
+          `signals — killed the child process. stderr so far: ${getStderr() || "(empty)"}`
+      );
+    }, absoluteCapMs);
   });
 
   try {
@@ -466,6 +507,9 @@ async function withTickDeadline<T>(
     }
     if (pollTimer) {
       clearInterval(pollTimer);
+    }
+    if (absoluteCapTimer) {
+      clearTimeout(absoluteCapTimer);
     }
   }
 }
@@ -537,5 +581,6 @@ module.exports = {
   withTickDeadline,
   runWatchTick,
   stopWatchProcessGroup,
-  INACTIVITY_TIMEOUT_MS
+  INACTIVITY_TIMEOUT_MS,
+  ABSOLUTE_CAP_MULTIPLIER
 };

@@ -20,6 +20,14 @@
 // identically under both models). Together they pin that the reset branch
 // specifically — not just the presence of some deadline — is what this
 // file's structural fix depends on.
+//
+// A separate positive control for the absolute-cap test below: removing
+// withTickDeadline's absolute-cap timer entirely turns that test red (the
+// signal-forever tick then resolves — or rather never settles at all, so
+// the surrounding `assert.rejects` times out — instead of being rejected
+// with the distinct absolute-cap message), while the two tests above stay
+// green either way (neither one ever runs long enough to reach the default
+// 2.5x cap).
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
@@ -92,6 +100,73 @@ test("withTickDeadline (inactivity mode): rejects a tick that shows zero progres
       /no progress signal/,
       "a tick with zero progress signals must still be killed once the inactivity budget elapses"
     );
+  } finally {
+    killDummyGroup(child);
+  }
+});
+
+test("withTickDeadline (inactivity mode): resolves a tick whose progress signals are push-start lines, not ready lines", async () => {
+  const child = spawnDummyGroup();
+  try {
+    let stderr = "";
+    const BUDGET_MS = 400;
+    const GAP_MS = 150;
+    const ITERATIONS = 4;
+    const result = await withTickDeadline(
+      child,
+      async () => {
+        for (let i = 0; i < ITERATIONS; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, GAP_MS));
+          // Matches WATCH_TICK_PUSH_START_PATTERN (/watch tick pushing
+          // snapshot/) in watch-process.ts, not WATCH_READY_PATTERN — pins
+          // that PROGRESS_SIGNAL_PATTERN's alternation resets the deadline
+          // on the push-start line specifically, not only on a ready-shaped
+          // line the way the sibling test above already covers.
+          stderr += "watch tick pushing snapshot\n";
+        }
+        return "done";
+      },
+      BUDGET_MS,
+      () => stderr
+    );
+    assert.equal(
+      result,
+      "done",
+      "a tick signaling only push-start lines must not be killed by the inactivity deadline"
+    );
+  } finally {
+    killDummyGroup(child);
+  }
+});
+
+test("withTickDeadline (inactivity mode): the absolute whole-tick cap fires with a distinct message when a tick keeps signaling forever", async () => {
+  const child = spawnDummyGroup();
+  try {
+    let stderr = "";
+    const BUDGET_MS = 100;
+    // A signal every 20ms keeps resetting the inactivity deadline well
+    // inside BUDGET_MS forever, so the inactivity check (rejects with "no
+    // progress signal") can never be what ends this tick — only the
+    // absolute cap (ABSOLUTE_CAP_MULTIPLIER * BUDGET_MS = 250ms here) can.
+    const signalInterval = setInterval(() => {
+      stderr += "watch tick pushing snapshot\n";
+    }, 20);
+    try {
+      await assert.rejects(
+        () =>
+          withTickDeadline(
+            child,
+            () => new Promise(() => {}), // never settles on its own
+            BUDGET_MS,
+            () => stderr
+          ),
+        /exceeded the absolute .*whole-tick cap/,
+        "a tick that keeps signaling forever must still be killed by the absolute cap, with a message " +
+          "distinct from the inactivity-poll rejection"
+      );
+    } finally {
+      clearInterval(signalInterval);
+    }
   } finally {
     killDummyGroup(child);
   }
