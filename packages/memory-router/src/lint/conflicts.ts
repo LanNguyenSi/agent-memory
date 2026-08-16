@@ -32,7 +32,12 @@
 
 const { existsSync } = require('node:fs');
 const { loadMemoriesFromDir } = require('../memory/loader');
-const { resolveProviderConfig, embedBatch } = require('../embed/provider');
+const {
+  resolveProviderConfig,
+  embedBatch,
+  resolveEmbedTimeoutMs,
+  INDEX_DEFAULT_TIMEOUT_MS,
+} = require('../embed/provider');
 const { openIndex } = require('../embed/index-store');
 const { indexPath, EMBED_DIMENSIONS } = require('../embed/indexer');
 
@@ -502,10 +507,6 @@ export async function lintMemoryDirForConflictsWithSemantic(
   // they run `memory-router index` separately.
   const missingIds = [...neededIds].filter((id) => !embedByMemoryId.has(id));
   if (missingIds.length > 0) {
-    const inputs = missingIds.map((id) => {
-      const m = byMemoryId.get(id);
-      return m ? buildPairEmbedInput(m) : '';
-    });
     const embedFn =
       opts.embedFn ??
       ((texts: string[]) =>
@@ -514,17 +515,37 @@ export async function lintMemoryDirForConflictsWithSemantic(
           model: cfg!.model,
           baseUrl: cfg!.baseUrl,
           inputs: texts,
+          // `lint --semantic` has no prompt to block, same as
+          // rebuildIndex — give it the larger index budget instead of
+          // embedBatch's 5s hook-tight default. Without this, a corpus
+          // with enough missing pairs blows the hook timeout and aborts
+          // (fe9c61bc; measured 85 inputs / ~9.3s-class Ollama batch
+          // against the 5s default).
+          timeoutMs: resolveEmbedTimeoutMs(INDEX_DEFAULT_TIMEOUT_MS),
         }));
-    const vectors = await embedFn(inputs);
-    if (vectors.length !== missingIds.length) {
-      // Fail-open: embedder returned a malformed batch. Don't upgrade
-      // anything; the regex pass already gave a useful signal.
-      process.stderr.write(
-        `[memory-router] --semantic skipped: embedder returned ${vectors.length} vectors for ${missingIds.length} inputs\n`,
-      );
-      return baseReport;
+
+    // Chunk like rebuildIndex (embed/indexer.ts): one HTTP round-trip per
+    // ~64 inputs instead of shipping every missing pair in a single
+    // request. Same BATCH size and same reasoning — see rebuildIndex's
+    // comment on this constant.
+    const BATCH = 64;
+    for (let i = 0; i < missingIds.length; i += BATCH) {
+      const batchIds = missingIds.slice(i, i + BATCH);
+      const inputs = batchIds.map((id) => {
+        const m = byMemoryId.get(id);
+        return m ? buildPairEmbedInput(m) : '';
+      });
+      const vectors = await embedFn(inputs);
+      if (vectors.length !== batchIds.length) {
+        // Fail-open: embedder returned a malformed batch. Don't upgrade
+        // anything; the regex pass already gave a useful signal.
+        process.stderr.write(
+          `[memory-router] --semantic skipped: embedder returned ${vectors.length} vectors for ${batchIds.length} inputs\n`,
+        );
+        return baseReport;
+      }
+      batchIds.forEach((id, j) => embedByMemoryId.set(id, vectors[j]));
     }
-    missingIds.forEach((id, i) => embedByMemoryId.set(id, vectors[i]));
   }
 
   // Walk candidates, upgrade in-place on a copy of the hits array so the
