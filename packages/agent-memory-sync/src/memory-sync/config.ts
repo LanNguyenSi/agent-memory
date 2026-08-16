@@ -179,25 +179,141 @@ function filterOwnerScopedBaseMap(
   return result;
 }
 
-function mapRemotePathToLocalAbsolute(config: RunConfig, remoteRelativePath: string): string | null {
-  const normalizedRemotePath = normalizeRemoteRelativePath(remoteRelativePath);
+// Keeps a base snapshot map from ever recording a remote path that has no
+// configured syncPaths mapping back to a local destination — the push-side
+// half of the defect closed on the pull side by agent-tasks e4b5552a's
+// skippedFiles guard below (mapRemotePathToLocalAbsolute's null return, used
+// there to classify an unmapped remote path as "skipped" instead of
+// "applied"). Design decision (agent-tasks 65380570): an unmapped path is
+// excluded from base snapshots entirely, rather than kept and marked
+// "foreign" (the way filterOwnerScopedBaseMap above handles a peer's
+// ownerScoped file, which IS locally mappable, just not owned by this
+// machine). Two reasons drove that choice over a foreign-marker scheme:
+// (1) it keeps pull's skippedFiles contract from #101 intact — an unmapped
+// path was never materialized locally and never will be, so there is no
+// local state for a base snapshot to track "did local change relative to"
+// in the first place; recording it at all was the bug, not an
+// under-annotated version of correct behavior. (2) it needs no change to the
+// base snapshot's Record<string, string | null> shape (no wrapper object, no
+// sibling "foreign paths" list to keep in sync) — the same shape
+// filterOwnerScopedBaseMap already filters in place.
+//
+// Left unfiltered, an unmapped path pull recorded into the base store
+// (pre-fix: pull.ts's replaceBaseSnapshots(remoteMap) stored every remote
+// file, mapped or not) survives into push's own 3-way merge
+// (applySnapshotToWorkingCopy in push.ts) as base=<content>, local=null
+// (collectLocalSyncFiles never produces an entry for a path with no
+// syncPaths mapping) — and once the remote itself is unchanged since that
+// pull, mergeText's remote===base fast path resolves to "local wins" with
+// content=null, deleting a peer's file this machine never even had a local
+// copy of and reporting it under appliedFiles as if legitimately applied.
+//
+// Call this at THREE call sites, all permanently load-bearing: none of
+// them is "the real fix" with the others as removable legacy-compat
+// backstops.
+// (a) pull's own base write (pull.ts), the root-cause fix: an unmapped
+//     path must never enter the base store in the first place.
+// (b) push's own base write (push.ts, the `stateStore.replaceBaseSnapshots`
+//     call after a successful push), the same root-cause fix applied to
+//     push's own, independent write. push rebuilds its base snapshot from a
+//     fresh, full read of the remote tree after every push (collectRemoteFiles
+//     in push.ts), unmapped paths included, regardless of what that push
+//     itself touched. Left unfiltered, this write alone re-contaminates the
+//     store on every push, no pull required.
+// (c) push's own base READ (push.ts, before applySnapshotToWorkingCopy runs),
+//     the last line of defense against a base map contaminated by
+//     anything other than (a) or (b): a store restored from an old backup,
+//     migrated from a pre-fix on-disk copy, or otherwise written outside
+//     pull/push's own code paths. Dropping this read alone still lets such a
+//     contaminated map reach the merge and silently delete a peer's file,
+//     even with both writes above intact.
+// A fix-round review (agent-tasks 65380570) confirmed all three: dropping
+// either write site alone leaves a demonstrated data-loss path (see
+// push.ts's own call-site comments and the "push never deletes an unmapped
+// peer file" test family in tests/integration/memory-sync.test.ts), and
+// dropping the read site alone still lets a contaminated base map, however
+// it got that way, reach the merge unfiltered.
+interface ResolvedSyncPathEntry {
+  absoluteSource: string;
+  destination: string;
+  kind: "file" | "directory";
+}
 
-  for (const entry of config.syncPaths) {
+// Resolves every syncPaths entry's absoluteSource/destination/kind exactly
+// once. Low-severity perf finding (agent-tasks 65380570): mapRemotePathToLocalAbsolute
+// used to redo this resolution, including resolveSyncPathKind's existsSync/
+// statSync calls when an entry has no explicit `kind`, on every single
+// invocation, and both of its per-key callers below (filterUnmappedBaseMap
+// here, pull.ts's per-path unmapped guard) call it once per key in a map
+// that can hold many entries, for an O(keys x syncPaths) count of redundant
+// stat calls per run. Callers that loop over many keys should resolve once
+// via this function and pass the result to mapRemotePathToLocalAbsolute's
+// optional third argument instead of letting it re-resolve per call.
+function resolveSyncPathEntries(config: RunConfig): ResolvedSyncPathEntry[] {
+  return config.syncPaths.map((entry) => {
     const absoluteSource = resolveWorkspacePath(config.rootDir, entry.source);
-    const destination = normalizeRemoteRelativePath(entry.destination || entry.source);
-    const kind = resolveSyncPathKind(absoluteSource, entry);
+    return {
+      absoluteSource,
+      destination: normalizeRemoteRelativePath(entry.destination || entry.source),
+      kind: resolveSyncPathKind(absoluteSource, entry)
+    };
+  });
+}
 
-    if (kind === "file" && normalizedRemotePath === destination) {
-      return absoluteSource;
+function filterUnmappedBaseMap(
+  config: RunConfig,
+  baseMap: Record<string, string | null>
+): Record<string, string | null> {
+  const resolvedEntries = resolveSyncPathEntries(config);
+  const result: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(baseMap)) {
+    if (mapRemotePathToLocalAbsolute(config, key, resolvedEntries) === null) {
+      continue;
+    }
+    result[key] = value;
+  }
+
+  return result;
+}
+
+function mapRemotePathToLocalAbsolute(
+  config: RunConfig,
+  remoteRelativePath: string,
+  resolvedEntries?: ResolvedSyncPathEntry[]
+): string | null {
+  let normalizedRemotePath: string;
+  try {
+    normalizedRemotePath = normalizeRemoteRelativePath(remoteRelativePath);
+  } catch (error) {
+    // A key that fails normalization (e.g. empty, or escaping rootDir via a
+    // leading "..") must never crash a caller looping over a store this
+    // function does not fully control: filterUnmappedBaseMap over an
+    // on-disk base snapshot store, pull.ts's per-path guard over base/local/
+    // remote keys. Treat it the same as "no configured syncPaths entry maps
+    // this", i.e. unmapped, rather than propagating normalizeRemoteRelativePath's
+    // CliError. Low-severity finding (agent-tasks 65380570); see the "a
+    // malformed key in the base snapshot store" tests in
+    // tests/unit/config.test.ts and tests/integration/memory-sync.test.ts.
+    if (error instanceof CliError) {
+      return null;
+    }
+    throw error;
+  }
+
+  const entries = resolvedEntries || resolveSyncPathEntries(config);
+
+  for (const entry of entries) {
+    if (entry.kind === "file" && normalizedRemotePath === entry.destination) {
+      return entry.absoluteSource;
     }
 
     if (
-      kind === "directory" &&
-      (normalizedRemotePath === destination || normalizedRemotePath.startsWith(`${destination}/`))
+      entry.kind === "directory" &&
+      (normalizedRemotePath === entry.destination || normalizedRemotePath.startsWith(`${entry.destination}/`))
     ) {
-      const relativeSuffix = normalizedRemotePath.slice(destination.length).replace(/^\/+/, "");
-      const resolved = path.resolve(absoluteSource, relativeSuffix);
-      if (resolved !== absoluteSource && !resolved.startsWith(`${absoluteSource}${path.sep}`)) {
+      const relativeSuffix = normalizedRemotePath.slice(entry.destination.length).replace(/^\/+/, "");
+      const resolved = path.resolve(entry.absoluteSource, relativeSuffix);
+      if (resolved !== entry.absoluteSource && !resolved.startsWith(`${entry.absoluteSource}${path.sep}`)) {
         return null;
       }
       return resolved;
@@ -278,7 +394,9 @@ function isHiddenEntryName(name: string): boolean {
 module.exports = {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
+  filterUnmappedBaseMap,
   mapRemotePathToLocalAbsolute,
   normalizeRemoteRelativePath,
+  resolveSyncPathEntries,
   toRepositoryRelativePath
 };
