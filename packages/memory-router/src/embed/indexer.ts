@@ -5,6 +5,7 @@ const {
   embedBatch,
   resolveProviderConfig,
   resolveEmbedTimeoutMs,
+  resolveHookEmbedTimeoutMs,
   INDEX_DEFAULT_TIMEOUT_MS,
 } = require('./provider');
 const { openIndex } = require('./index-store');
@@ -248,6 +249,13 @@ async function semanticSearch(
           model: cfg.model,
           baseUrl: cfg.baseUrl,
           inputs: [prompt],
+          // Hook-specific budget: MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS, then
+          // the shared MEMORY_ROUTER_EMBED_TIMEOUT_MS, then the tight 5s
+          // hook default. Decoupled from the index-rebuild call above so a
+          // persistent shared-var export for `index` headroom can't also
+          // widen this call's prompt-blocking budget — see
+          // resolveHookEmbedTimeoutMs in provider.ts.
+          timeoutMs: resolveHookEmbedTimeoutMs(),
         });
       } catch (err) {
         throw describeEmbedError(err, cfg);
