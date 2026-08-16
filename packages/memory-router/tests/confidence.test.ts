@@ -217,6 +217,74 @@ test('loadBlendWeights: an invalid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override (no
   );
 });
 
+// --- minSemanticScoreSource / minSemanticScoreModel (agent-tasks d33f968c)
+//
+// resolveBlended (src/router.ts) needs to tell a specifically-calibrated map
+// entry (bge-m3) and an operator's own explicit override apart from the
+// generic, un-calibrated provider fallback every OTHER Ollama model
+// (all-minilm, mxbai-embed-large, nomic-embed-text, ...) resolves through —
+// only the fallback case is worth a "you might not know your semantic path
+// just went silent" stderr hint. These pin the three-way source resolution
+// loadBlendWeights.minSemanticScoreSource feeds that hint.
+
+test('loadBlendWeights: minSemanticScoreSource is "map" for a calibrated Ollama model (bge-m3)', () => {
+  withFloorEnv(
+    { MEMORY_ROUTER_EMBED_PROVIDER: 'ollama', MEMORY_ROUTER_EMBED_MODEL: 'bge-m3' },
+    () => {
+      const weights = loadBlendWeights();
+      assert.equal(weights.minSemanticScoreSource, 'map');
+      assert.equal(weights.minSemanticScoreModel, 'bge-m3');
+    },
+  );
+});
+
+test('loadBlendWeights: minSemanticScoreSource is "fallback" for an un-calibrated Ollama model (all-minilm)', () => {
+  withFloorEnv(
+    { MEMORY_ROUTER_EMBED_PROVIDER: 'ollama', MEMORY_ROUTER_EMBED_MODEL: 'all-minilm' },
+    () => {
+      const weights = loadBlendWeights();
+      assert.equal(weights.minSemanticScoreSource, 'fallback');
+      assert.equal(weights.minSemanticScoreModel, 'all-minilm');
+    },
+  );
+});
+
+test('loadBlendWeights: minSemanticScoreSource is "provider" for openai (its own deliberate 0.5 default, not an uncalibrated fallback — agent-tasks d33f968c fix round)', () => {
+  withFloorEnv(
+    { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test-not-real' },
+    () => {
+      const weights = loadBlendWeights();
+      assert.equal(weights.minSemanticScoreSource, 'provider');
+    },
+  );
+});
+
+test('loadBlendWeights: minSemanticScoreSource is "env" when a valid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override is present, even for an otherwise-"map" model', () => {
+  withFloorEnv(
+    {
+      MEMORY_ROUTER_EMBED_PROVIDER: 'ollama',
+      MEMORY_ROUTER_EMBED_MODEL: 'bge-m3',
+      MEMORY_ROUTER_BLEND_MIN_SEMANTIC: '0.33',
+    },
+    () => {
+      assert.equal(loadBlendWeights().minSemanticScoreSource, 'env');
+    },
+  );
+});
+
+test('loadBlendWeights: an invalid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override does NOT count as "env" — source falls through to the conditional default', () => {
+  withFloorEnv(
+    {
+      MEMORY_ROUTER_EMBED_PROVIDER: 'ollama',
+      MEMORY_ROUTER_EMBED_MODEL: 'all-minilm',
+      MEMORY_ROUTER_BLEND_MIN_SEMANTIC: 'not-a-number',
+    },
+    () => {
+      assert.equal(loadBlendWeights().minSemanticScoreSource, 'fallback');
+    },
+  );
+});
+
 // --- Direct pins on normalizeOllamaModelName / OLLAMA_MODEL_FLOOR_DEFAULTS -
 //
 // The tests above only exercise the two through resolveDefaultMinSemanticScore
