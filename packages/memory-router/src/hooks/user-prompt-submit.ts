@@ -7,7 +7,7 @@ const { readStdin } = require('./io');
 // Single source of truth for the version reported by the `--version` CLI
 // short-circuit. Bump alongside package.json on release; the
 // cli-version test asserts they stay in sync.
-const PACKAGE_VERSION = '0.6.0';
+const PACKAGE_VERSION = '0.7.0';
 
 // Claude Code UserPromptSubmit hook input. The full schema also carries
 // session_id / transcript_path / permission_mode — we only need prompt + cwd.
