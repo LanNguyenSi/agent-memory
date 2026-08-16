@@ -340,8 +340,8 @@ Commands:
                         OPENAI_API_KEY is unset (fail-open: regex signal
                         still ships, exit code unaffected by the skip).
     When no check flag is given, --drift + --unknown-topics run by default
-    (--conflicts stays opt-in). Exits non-zero on any drift/topic finding
-    or any HIGH conflict.
+    (--conflicts stays opt-in). Exits non-zero on any drift/topic finding,
+    a rejected topics.yml (unknown-topics check only), or any HIGH conflict.
     --fix auto-applies drift fixes where safe (appends missing pointers,
     removes duplicate entries). Orphan pointers are never auto-deleted.
     --json emits a machine-readable report for drift and for conflicts;
@@ -640,6 +640,10 @@ async function runLint(
     if (json && checks.drift) process.stderr.write(formatReportText(report));
     else process.stdout.write(formatReportText(report));
     if (report.hits.length > 0) exitCode = 1;
+    // An invalid topics.yml is a broken vocabulary, not just an unknown-topic
+    // hit; it must fail CI even when the built-in-default fallback happens to
+    // scan clean, otherwise a purely exit-code-driven caller never sees it.
+    if (report.vocabularyError) exitCode = 1;
   }
 
   if (checks.conflicts) {
