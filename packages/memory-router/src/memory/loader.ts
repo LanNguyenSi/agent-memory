@@ -7,8 +7,10 @@ const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
 // Canonical set of memory types; must stay in sync with the ambient
 // `MemoryType` union in types.d.ts. lint/drift.ts imports this set for its
-// own raw-parse check, so unknown-type files skipped here still get
-// drift-lint signal (topics lint loads via this loader and skips them).
+// own field-requirement checks (description required, name/type must be
+// strings) on top of parseFrontmatterYaml below, so unknown-type files
+// still get drift-lint signal (topics lint loads via this loader and skips
+// them).
 const VALID_TYPES: ReadonlySet<string> = new Set([
   'user',
   'feedback',
@@ -90,6 +92,34 @@ function parseMemoryFileWithReason(path: string, source: string): ParseResult {
 function parseMemoryFile(path: string, source: string): Memory | null {
   const result = parseMemoryFileWithReason(path, source);
   return result.ok ? result.memory : null;
+}
+
+type FrontmatterYamlResult =
+  | { ok: true; raw: unknown; body: string }
+  | { ok: false; kind: 'no-delimiter' }
+  | { ok: false; kind: 'yaml-error'; detail: string };
+
+// Additive, read-only-consumer export: extracts and YAML-parses ONLY the
+// frontmatter block (no field-requirement validation), reusing the exact
+// same FRONTMATTER_RE and parseYaml() call parseMemoryFileWithReason above
+// uses. Exists so lint/drift.ts's scanMemories can stop carrying its own
+// copy of that regex/parse step while still running its own
+// drift-specific field checks (description required, name/type must be
+// strings) on the raw parsed value, including for shapes
+// parseMemoryFileWithReason itself would reject (e.g. unknown type) —
+// drift needs signal on those files, parseMemoryFileWithReason does not
+// expose the raw value on its own reject paths. Purely additive: does not
+// touch parseMemoryFileWithReason or loadMemoriesFromDir, both unchanged.
+function parseFrontmatterYaml(source: string): FrontmatterYamlResult {
+  const match = FRONTMATTER_RE.exec(source);
+  if (!match) return { ok: false, kind: 'no-delimiter' };
+  try {
+    const raw = parseYaml(match[1]);
+    return { ok: true, raw, body: (match[2] ?? '').trim() };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, kind: 'yaml-error', detail };
+  }
 }
 
 // The sibling loadMemoriesFromDirWithRejects below mirrors this walk; keep file selection in sync.
@@ -217,5 +247,6 @@ module.exports = {
   loadMemoriesFromDirWithRejects,
   parseMemoryFile,
   parseMemoryFileWithReason,
+  parseFrontmatterYaml,
   VALID_TYPES,
 };
