@@ -572,6 +572,8 @@ OPENAI_API_KEY=sk-... memory-router lint ~/.claude/projects/PROJECT/memory --con
 
 Reuses the embedding cache the Confidence Gate already maintains in `~/.claude/projects/PROJECT/memory/.memory-router/index.sqlite` (built by `memory-router index`); pairs not yet in the index are embedded on the fly without persisting. When `OPENAI_API_KEY` is unset the semantic step prints a stderr warning and falls back to the regex-only signal, so CI without secrets stays green.
 
+If an embed call for a missing pair actually errors (timeout, HTTP failure, malformed response) the failure is enriched with the same provider/model/base-URL context as `memory-router index` (e.g. `embedding call failed (provider=ollama baseUrl=default model=bge-m3): The operation was aborted due to timeout`) and propagates, exiting `lint` non-zero; this is deliberately fail-closed, unlike the fail-open "no provider configured" case just above, because it signals a real failure in a provider the operator did configure rather than a provider intentionally left unset.
+
 The polarity vocabulary covers ALL-CAPS and lowercase forms of `always`, `never`, `must`, `must not`, `do`, `do not`, `don't`, `prefer`, `require`, `avoid`, `skip`, plus formal-register markers `mandatory`, `mandate`, `compulsory`, `prohibit`, `forbid`, `disallow`, and `cannot`. So a memory written as "Code review is **mandatory** before merge" and one as "Code review is **forbidden** on hot-fix branches" form a HIGH conflict on the `workflow` topic without either having to spell out `ALWAYS` / `NEVER`.
 
 Pass `--json` for a machine-readable report, mirroring `--drift --json`:

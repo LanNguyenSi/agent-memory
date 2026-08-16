@@ -291,6 +291,71 @@ test('lint --semantic: embedding vectors stay aligned to their pair ids across a
   }
 });
 
+// Guards a single arbitrary env var for the duration of `fn`, same shape as
+// withEmbedTimeoutEnv above, generalized so the enrichment test below can
+// pin an exact provider/model/baseUrl string without leaking into other
+// tests or being pulled off whatever the ambient shell happens to export.
+async function withEnvVar<T>(
+  name: string,
+  value: string | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const orig = process.env[name];
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+  try {
+    return await fn();
+  } finally {
+    if (orig === undefined) delete process.env[name];
+    else process.env[name] = orig;
+  }
+}
+
+// 372ed7ab: the chunked missing-pair embed call let a raw fetch/HTTP error
+// through unenriched. Live repro (reviewer finding, PR #103): the operator
+// saw exactly "The operation was aborted due to timeout" on stderr/exit,
+// with no clue which provider/model/endpoint it was even talking to.
+// rebuildIndex (embed/indexer.ts) already wrapped its own embedBatch calls
+// with describeEmbedError; this pins that the chunked lint --semantic path
+// gets the same treatment.
+test('lint --semantic: a missing-pair embed error is enriched with describeEmbedError context (parity with rebuildIndex)', async () => {
+  const dir = tmpDir();
+  writePairs(dir, 1); // one opposite-polarity pair -> exactly one missing-embed request
+  const origFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+
+  (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+    // Node's literal message for a fetch aborted via AbortSignal.timeout —
+    // see tests/unit/embed-provider.test.ts's "AbortError from fetch
+    // propagates unchanged" test for the same DOMException shape.
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  }) as unknown as typeof fetch;
+
+  try {
+    await withOpenAiKey(async () => {
+      await withEmbedTimeoutEnv(undefined, async () => {
+        await withEnvVar('MEMORY_ROUTER_EMBED_MODEL', 'text-embedding-3-small', async () => {
+          await withEnvVar('OPENAI_BASE_URL', undefined, async () => {
+            await assert.rejects(
+              () => lintMemoryDirForConflictsWithSemantic(dir, { semantic: true }),
+              (err: Error) => {
+                assert.equal(
+                  err.message,
+                  'embedding call failed (provider=openai baseUrl=default model=text-embedding-3-small): The operation was aborted due to timeout',
+                );
+                return true;
+              },
+            );
+          });
+        });
+      });
+    });
+  } finally {
+    if (origFetch) (globalThis as { fetch: typeof fetch }).fetch = origFetch;
+    else delete (globalThis as { fetch?: typeof fetch }).fetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('lint --semantic: a malformed non-first chunk fails open to the untouched base report, with a chunk-sized stderr message', async () => {
   const dir = tmpDir();
   const N = 35; // 70 missing ids: chunk 1 = 64 (ok), chunk 2 = 6 (short by one)
