@@ -19,7 +19,9 @@
 // withTickDeadline, runWatchTick) live in ../helpers/watch-process.ts,
 // shared with watch-restore.test.ts — see that file's header comment for
 // why waiting for the watcher's own 'ready' signal (rather than a fixed
-// sleep) and a hard per-tick deadline both matter here.
+// sleep) matters here, and watch-process.ts's own comments for why
+// withTickDeadline now bounds inactivity since the last progress signal
+// instead of the tick's total duration.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -40,7 +42,8 @@ const {
   waitForWatcherReady,
   withTickDeadline,
   runWatchTick,
-  stopWatchProcessGroup
+  stopWatchProcessGroup,
+  INACTIVITY_TIMEOUT_MS
 } = require("../helpers/watch-process.ts");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
@@ -202,14 +205,19 @@ test("watch tick queues locally when the remote is unreachable, then replays the
     offlineStderr += chunk.toString("utf8");
   });
 
-  const offlineExitCode = await withTickDeadline(offlineChild, async () => {
-    await waitForWatcherReady(() => offlineStderr);
-    writeText(path.join(workspaceRoot, "MEMORY.md"), "queued change\n");
+  const offlineExitCode = await withTickDeadline(
+    offlineChild,
+    async () => {
+      await waitForWatcherReady(() => offlineStderr);
+      writeText(path.join(workspaceRoot, "MEMORY.md"), "queued change\n");
 
-    return new Promise<number>((resolve) => {
-      offlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
-    });
-  }).finally(() => stopWatchProcessGroup(offlineChild));
+      return new Promise<number>((resolve) => {
+        offlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
+      });
+    },
+    INACTIVITY_TIMEOUT_MS,
+    () => offlineStderr
+  ).finally(() => stopWatchProcessGroup(offlineChild));
 
   assert.equal(offlineExitCode, 0, `watch exited non-zero while offline. stderr: ${offlineStderr}`);
   assert.match(offlineStderr, /queued locally/);
@@ -248,14 +256,19 @@ test("watch tick queues locally when the remote is unreachable, then replays the
     onlineStderr += chunk.toString("utf8");
   });
 
-  const onlineExitCode = await withTickDeadline(onlineChild, async () => {
-    await waitForWatcherReady(() => onlineStderr);
-    writeText(path.join(workspaceRoot, "logs", "trigger.md"), "trigger\n");
+  const onlineExitCode = await withTickDeadline(
+    onlineChild,
+    async () => {
+      await waitForWatcherReady(() => onlineStderr);
+      writeText(path.join(workspaceRoot, "logs", "trigger.md"), "trigger\n");
 
-    return new Promise<number>((resolve) => {
-      onlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
-    });
-  }).finally(() => stopWatchProcessGroup(onlineChild));
+      return new Promise<number>((resolve) => {
+        onlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
+      });
+    },
+    INACTIVITY_TIMEOUT_MS,
+    () => onlineStderr
+  ).finally(() => stopWatchProcessGroup(onlineChild));
 
   assert.equal(onlineExitCode, 0, `watch exited non-zero while replaying. stderr: ${onlineStderr}`);
   assert.deepEqual(fs.readdirSync(queueDir), [], "expected the queue to be empty after a successful replay");

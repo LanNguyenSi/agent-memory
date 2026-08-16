@@ -140,6 +140,18 @@ function registerWatchCommand(program: import("commander").Command): void {
       // throw before performPush's own try/catch and so still propagate to
       // handleSnapshotError below (fail loud, non-zero exit), unchanged.
       async function pushSnapshot(message: string): Promise<void> {
+        // Printed the instant this tick actually starts performPush (fetch +
+        // 3-way merge + commit + push over git), not only once the result is
+        // known below. Before this line, --verbose watch went silent between
+        // its "watching N path(s)..." ready line and this tick's own result
+        // line, so a long-but-progressing tick (CPU-starved host, slow
+        // remote) was indistinguishable from a genuinely wedged child from
+        // the outside — see tests/helpers/watch-process.ts's withTickDeadline,
+        // which polls this exact line (stably shaped: literal
+        // "watch tick pushing snapshot", never templated with per-run data)
+        // to reset its inactivity deadline instead of bounding the whole
+        // tick by a fixed wall-clock budget.
+        writeInfo("watch tick pushing snapshot", outputOptions);
         const result = await performPush(runConfig, {
           dryRun: false,
           commitMessage: message,

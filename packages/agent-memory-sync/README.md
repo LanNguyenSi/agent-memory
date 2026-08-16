@@ -114,6 +114,8 @@ Options:
 
 A single edit produces a `update <path>` commit; several edits within the debounce window land as a single `update N memories` commit with a bulleted body listing each path. Deletions become `remove <path>`. A push that fails because the remote is unreachable or rejects it (auth, non-fast-forward, network) is queued locally instead — see [Sync behavior](#sync-behavior) and the note below; a genuine config/data error (e.g. a required `syncPaths` entry missing) still surfaces on stderr with a non-zero exit, and the process never silently swallows *that* class of error. `SIGINT` / `SIGTERM` flush any pending debounce before exiting.
 
+With `--verbose`, each tick prints `watch tick pushing snapshot` to stderr the instant it starts the actual git work (fetch, merge, commit, push), ahead of the tick's own result line (`pushed snapshot ...`, `watch tick queued locally ...`, or `watch tick produced no remote changes`). This is a mid-tick progress signal, not just a start/end pair: an external supervisor (or a test harness — see `tests/helpers/watch-process.ts`'s `withTickDeadline`) can treat it as proof the process is still alive and working, distinct from a genuinely wedged child that stops writing anything at all.
+
 ##### systemd unit
 
 ```ini
