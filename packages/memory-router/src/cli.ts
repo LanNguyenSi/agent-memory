@@ -340,8 +340,8 @@ Commands:
                         OPENAI_API_KEY is unset (fail-open: regex signal
                         still ships, exit code unaffected by the skip).
     When no check flag is given, --drift + --unknown-topics run by default
-    (--conflicts stays opt-in). Exits non-zero on any drift/topic finding
-    or any HIGH conflict.
+    (--conflicts stays opt-in). Exits non-zero on any drift/topic finding,
+    a rejected topics.yml (unknown-topics check only), or any HIGH conflict.
     --fix auto-applies drift fixes where safe (appends missing pointers,
     removes duplicate entries). Orphan pointers are never auto-deleted.
     --json emits a machine-readable report for drift and for conflicts;

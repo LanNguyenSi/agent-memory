@@ -75,7 +75,7 @@ test('lint: valid custom topics.yml, no hits -> exit 0 (unchanged)', () => {
   }
 });
 
-test('lint: broken topics.yml, zero unknown-topic hits -> exit != 0 (the fix)', () => {
+test('lint: broken topics.yml, zero unknown-topic hits -> exit 1 (the fix)', () => {
   const dir = makeTmpDir();
   try {
     // Invalid YAML, so `loadVocabularyResult` rejects it and the scan below
@@ -86,7 +86,38 @@ test('lint: broken topics.yml, zero unknown-topic hits -> exit != 0 (the fix)', 
     writeMemory(dir, 'a.md', 'name: a\ndescription: x\ntype: feedback\ntopics:\n  - workflow');
     const { status, stdout } = run(['lint', dir, '--unknown-topics']);
     assert.match(stdout, /invalid topics\.yml/);
-    assert.notEqual(status, 0, stdout);
+    assert.equal(status, 1, stdout);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lint: broken topics.yml, default check set (no flag) -> exit 1', () => {
+  const dir = makeTmpDir();
+  try {
+    // The realistic CI shape: `lint <dir>` with no check flag runs
+    // --drift + --unknown-topics by default. A drift-clean corpus (MEMORY.md
+    // pointer present) isolates the vocabulary rejection as the only signal.
+    fs.writeFileSync(path.join(dir, 'topics.yml'), '- name: [unterminated\n');
+    writeMemory(dir, 'a.md', 'name: a\ndescription: x\ntype: feedback\ntopics:\n  - workflow');
+    fs.writeFileSync(path.join(dir, 'MEMORY.md'), '- [a](a.md)\n');
+    const { status, stdout } = run(['lint', dir]);
+    assert.match(stdout, /invalid topics\.yml/);
+    assert.equal(status, 1, stdout);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lint: broken topics.yml plus an unknown-topic hit -> exit 1 with both signals', () => {
+  const dir = makeTmpDir();
+  try {
+    fs.writeFileSync(path.join(dir, 'topics.yml'), '- name: [unterminated\n');
+    writeMemory(dir, 'a.md', 'name: a\ndescription: x\ntype: feedback\ntopics:\n  - not-a-real-topic');
+    const { status, stdout } = run(['lint', dir, '--unknown-topics']);
+    assert.match(stdout, /invalid topics\.yml/);
+    assert.match(stdout, /not-a-real-topic/);
+    assert.equal(status, 1, stdout);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

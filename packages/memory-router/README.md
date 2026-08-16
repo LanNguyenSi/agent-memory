@@ -187,7 +187,7 @@ Both the Topic Gate and `memory-router lint --unknown-topics` load and validate 
 - **Present and valid:** the corpus vocabulary, corpus-wide, fully replacing the default: a memory tagged `security` under a custom vocabulary that doesn't declare a `security` entry will not match on that topic anymore.
 - **Present and invalid** (YAML error, missing/duplicate `name`, wrong field shape): rejected with a clear error message.
   - The **Topic Gate** never crashes over it, it degrades silently to the built-in default: the `UserPromptSubmit` hook must never block a prompt over a broken corpus file. Set `MEMORY_ROUTER_DEBUG=1` to see the rejection reason on stderr.
-  - `memory-router lint --unknown-topics` also falls back to the built-in default for the scan itself, but prints the rejection reason at the top of its report instead of hiding it, and exits 1 for the rejection alone, even when the fallback scan itself finds zero unknown-topic hits.
+  - `memory-router lint --unknown-topics` also falls back to the built-in default for the scan itself, but prints the rejection reason at the top of its report instead of hiding it, and exits 1 for the rejection alone, even when the fallback scan itself finds zero unknown-topic hits. The exit gate applies to runs that include the unknown-topics check (the default check set includes it); a `--drift`-only or `--conflicts`-only run neither reports nor fails on a rejected topics.yml.
 
 `Topic` is a plain string at the type level; there is no compiled-in closed set left to extend in source. What counts as a known topic is resolved at load time against whichever vocabulary is active, not enforced by TypeScript.
 
