@@ -6,6 +6,19 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-16
+
+**Upgrade note (behavior-changing default for every Ollama consumer):** the
+un-overridden `minSemanticScore` floor is now model/provider-conditional
+instead of a flat 0.5 (bge-m3 resolves to the calibrated 0.78, every other
+Ollama model falls back to 0.78 at the provider level, OpenAI keeps 0.5).
+This costs measured recall on borderline matches in exchange for clean
+negative controls; the full measurement and the one-line rollback
+(`MEMORY_ROUTER_BLEND_MIN_SEMANTIC=0.5` reproduces the pre-upgrade behavior
+exactly) are in the first "Changed" bullet below. A new once-per-process
+stderr hint (first "Added" bullet) tells you when an uncalibrated fallback
+floor is dropping every semantic candidate for your model.
+
 ### Added
 
 - `resolveBlended` (`src/router.ts`) now prints a once-per-process stderr hint when the relevance floor drops every semantic candidate for a run AND that floor came from an un-calibrated Ollama fallback (source `'fallback'`), not from a specifically-calibrated `OLLAMA_MODEL_FLOOR_DEFAULTS` entry (today only `bge-m3`, source `'map'`), an explicit `MEMORY_ROUTER_BLEND_MIN_SEMANTIC` override (source `'env'`), or OpenAI's own deliberate provider default (source `'provider'`, split out of the `'fallback'` bucket in this same fix round: 0.5 is OpenAI's documented default and an all-below-floor run there is the normal junk-rejection outcome, not a calibration gap; the hint previously misfired on a healthy OpenAI run before this split), a residual risk from the model-conditional floor above (PR #97): a model with a systematically lower cosine band than `bge-m3` (e.g. `all-minilm`, `mxbai-embed-large`) can silently lose its entire semantic path under the generic 0.78 fallback, with no signal the operator ever sees. `loadBlendWeights()` gains `minSemanticScoreSource` (`'env' | 'map' | 'fallback' | 'provider'`) and `minSemanticScoreModel` to carry that provenance; `resolveDefaultMinSemanticScoreDetail()` in `src/gates/confidence.ts` is the new provenance-aware resolver `resolveDefaultMinSemanticScore()` now delegates to (its own remaining callers are the pinned tests in `tests/confidence.test.ts`, no production callsite). The hint is stderr-only (the hook's stdout `additionalContext` contract is untouched), sanitizes the interpolated model name before printing it (trims and strips control characters, keeps any `:tag` suffix; the env var is operator/misconfiguration-controlled provenance), and is never gated behind a debug flag, since an operator who doesn't already know they have this problem won't think to enable one. The guard is once-per-process, not once-per-corpus: the `UserPromptSubmit` hook is a fresh short-lived process per prompt, so an affected corpus sees the line on every prompt until the model is calibrated or the floor is overridden; the MCP server and eval runner, both longer-lived processes, emit it at most once for their whole process lifetime. Seven cases pinned in `tests/floor-drop-hint.test.ts`: fallback floor with all candidates below it (fires once, a second call in the same process fires nothing), a calibrated map hit (`bge-m3`, silent), an explicit override (silent), OpenAI's provider default (silent), a fallback floor with at least one surviving candidate (silent, not a total loss), and a fallback floor with no candidates at all, an empty result or a caught search error (silent; mutation-verified against the guard's `semanticCandidateCount > 0` conjunct, which the pre-fix-round suite left unpinned).
