@@ -1,7 +1,12 @@
 const { mkdirSync, statSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { loadMemoriesFromDir } = require('../memory/loader');
-const { embedBatch, resolveProviderConfig } = require('./provider');
+const {
+  embedBatch,
+  resolveProviderConfig,
+  resolveEmbedTimeoutMs,
+  INDEX_DEFAULT_TIMEOUT_MS,
+} = require('./provider');
 const { openIndex } = require('./index-store');
 const { debug } = require('../debug');
 
@@ -169,6 +174,10 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
           model: cfg.model,
           baseUrl: cfg.baseUrl,
           inputs: batch.map((b) => buildEmbedInput(b.memory)),
+          // Index rebuild gets its own, larger budget than embedBatch's
+          // hook-tight default — see INDEX_DEFAULT_TIMEOUT_MS in provider.ts
+          // for the measured Ollama batch times that motivated this.
+          timeoutMs: resolveEmbedTimeoutMs(INDEX_DEFAULT_TIMEOUT_MS),
         });
       } catch (err) {
         throw describeEmbedError(err, cfg);

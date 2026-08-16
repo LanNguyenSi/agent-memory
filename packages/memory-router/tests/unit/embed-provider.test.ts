@@ -9,7 +9,28 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { embedBatch, resolveProviderConfig } = require('../../src/embed/provider');
+const {
+  embedBatch,
+  resolveProviderConfig,
+  resolveEmbedTimeoutMs,
+  DEFAULT_TIMEOUT_MS,
+  INDEX_DEFAULT_TIMEOUT_MS,
+} = require('../../src/embed/provider');
+
+// Save/restore MEMORY_ROUTER_EMBED_TIMEOUT_MS around a test body. `value ===
+// undefined` deletes the var (unset), matching this file's per-test env
+// save/restore convention used below for OPENAI_API_KEY etc.
+function withEmbedTimeoutEnv<T>(value: string | undefined, fn: () => T): T {
+  const orig = process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS;
+  if (value === undefined) delete process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS;
+  else process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS = value;
+  try {
+    return fn();
+  } finally {
+    if (orig === undefined) delete process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS;
+    else process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS = orig;
+  }
+}
 
 // ─── embedBatch ──────────────────────────────────────────────────────────────
 
@@ -302,6 +323,117 @@ test('embedBatch: explicit timeoutMs overrides the default', async () => {
     await embedBatch({ apiKey: 'k', model: 'm', inputs: ['x'], timeoutMs: 1234 });
 
     assert.equal(capturedTimeoutArg, 1234, 'explicit timeoutMs must win over the default');
+  } finally {
+    AbortSignal.timeout = origTimeout;
+    if (origFetch) {
+      (globalThis as { fetch: typeof fetch }).fetch = origFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  }
+});
+
+// ─── resolveEmbedTimeoutMs / MEMORY_ROUTER_EMBED_TIMEOUT_MS ─────────────────
+// ad1dba42: the hook path (DEFAULT_TIMEOUT_MS, 5000) must stay tight so a
+// prompt is never blocked for long; the index-rebuild path
+// (INDEX_DEFAULT_TIMEOUT_MS) needs a much larger budget instead, since a
+// real Ollama batch measured 5-17 s on the mm-v1-T008 corpus. Both defaults
+// are overridable via one env var.
+
+test('the two path defaults are pinned: hook stays 5000ms, index rebuild is at least 60000ms and strictly larger than the hook default', () => {
+  assert.equal(DEFAULT_TIMEOUT_MS, 5000, 'hook/semanticSearch default must stay 5000ms');
+  assert.ok(
+    INDEX_DEFAULT_TIMEOUT_MS >= 60_000,
+    `index-rebuild default must be at least 60000ms, got ${INDEX_DEFAULT_TIMEOUT_MS}`,
+  );
+  assert.ok(
+    INDEX_DEFAULT_TIMEOUT_MS > DEFAULT_TIMEOUT_MS,
+    'index-rebuild default must be strictly more generous than the hook default',
+  );
+});
+
+test('resolveEmbedTimeoutMs: no env var set → returns the caller-supplied fallback unchanged', () => {
+  withEmbedTimeoutEnv(undefined, () => {
+    assert.equal(resolveEmbedTimeoutMs(DEFAULT_TIMEOUT_MS), DEFAULT_TIMEOUT_MS);
+    assert.equal(resolveEmbedTimeoutMs(INDEX_DEFAULT_TIMEOUT_MS), INDEX_DEFAULT_TIMEOUT_MS);
+  });
+});
+
+test('resolveEmbedTimeoutMs: a valid positive value overrides the fallback, for either path default', () => {
+  withEmbedTimeoutEnv('12345', () => {
+    assert.equal(resolveEmbedTimeoutMs(DEFAULT_TIMEOUT_MS), 12345);
+    assert.equal(resolveEmbedTimeoutMs(INDEX_DEFAULT_TIMEOUT_MS), 12345);
+  });
+});
+
+for (const bad of ['', '   ', 'not-a-number', 'NaN', '-1', '-500', '0']) {
+  test(`resolveEmbedTimeoutMs: invalid override ${JSON.stringify(bad)} falls back to the caller-supplied default`, () => {
+    withEmbedTimeoutEnv(bad, () => {
+      assert.equal(resolveEmbedTimeoutMs(DEFAULT_TIMEOUT_MS), DEFAULT_TIMEOUT_MS);
+      assert.equal(resolveEmbedTimeoutMs(INDEX_DEFAULT_TIMEOUT_MS), INDEX_DEFAULT_TIMEOUT_MS);
+    });
+  });
+}
+
+test('embedBatch: MEMORY_ROUTER_EMBED_TIMEOUT_MS overrides the default when timeoutMs is omitted', async () => {
+  const origFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+  const origTimeout = AbortSignal.timeout;
+  let capturedTimeoutArg: number | undefined;
+
+  try {
+    (AbortSignal as { timeout: (ms: number) => AbortSignal }).timeout = (ms: number) => {
+      capturedTimeoutArg = ms;
+      return origTimeout.call(AbortSignal, ms);
+    };
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ data: [] }),
+      text: async () => '',
+    } as unknown as Response)) as unknown as typeof fetch;
+
+    await withEmbedTimeoutEnv('9999', async () => {
+      await embedBatch({ apiKey: 'k', model: 'm', inputs: ['x'] }); // timeoutMs omitted
+    });
+
+    assert.equal(capturedTimeoutArg, 9999, 'env override must win over DEFAULT_TIMEOUT_MS');
+  } finally {
+    AbortSignal.timeout = origTimeout;
+    if (origFetch) {
+      (globalThis as { fetch: typeof fetch }).fetch = origFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  }
+});
+
+test('embedBatch: an explicit opts.timeoutMs still wins over MEMORY_ROUTER_EMBED_TIMEOUT_MS', async () => {
+  // Callers that pin their own budget (e.g. indexer.ts) must not be
+  // second-guessed by a global env override once they've already resolved
+  // their own value into opts.timeoutMs.
+  const origFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+  const origTimeout = AbortSignal.timeout;
+  let capturedTimeoutArg: number | undefined;
+
+  try {
+    (AbortSignal as { timeout: (ms: number) => AbortSignal }).timeout = (ms: number) => {
+      capturedTimeoutArg = ms;
+      return origTimeout.call(AbortSignal, ms);
+    };
+    (globalThis as { fetch: typeof fetch }).fetch = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ data: [] }),
+      text: async () => '',
+    } as unknown as Response)) as unknown as typeof fetch;
+
+    await withEmbedTimeoutEnv('9999', async () => {
+      await embedBatch({ apiKey: 'k', model: 'm', inputs: ['x'], timeoutMs: 42 });
+    });
+
+    assert.equal(capturedTimeoutArg, 42, 'an explicit timeoutMs must not be overridden by the env var');
   } finally {
     AbortSignal.timeout = origTimeout;
     if (origFetch) {
