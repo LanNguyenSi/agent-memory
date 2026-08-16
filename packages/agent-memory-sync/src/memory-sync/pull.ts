@@ -51,6 +51,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       mergedFiles: [],
       conflictFiles: [],
       deletedFiles: [],
+      skippedFiles: [],
       notes: [`remote unreachable (${reachability.reason}); skipped pull, local files unchanged`]
     };
   }
@@ -81,6 +82,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
   const deletedFiles: string[] = [];
+  const skippedFiles: string[] = [];
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const mergeResult = mergeText({
@@ -90,6 +92,35 @@ async function performPull(config: PullConfig, options: PullOptions) {
       strategy: config.conflictStrategy
     });
 
+    const currentLocalValue = readSnapshotValue(localMap, remoteRelativePath);
+    if (mergeResult.content === currentLocalValue) {
+      continue;
+    }
+
+    const localAbsolutePath = mapRemotePathToLocalAbsolute(config, remoteRelativePath);
+    if (!localAbsolutePath) {
+      // No configured syncPaths entry maps this remote path back to a local
+      // destination, so nothing is ever written or deleted for it below.
+      // Reporting-honesty fix (agent-tasks e4b5552a): this used to land in
+      // changedFiles (surfaced as appliedFiles) BEFORE this guard skipped
+      // the write, so the payload claimed "applied" for a file that was
+      // never touched. Track it here instead, so appliedFiles stays an
+      // honest "files this run actually wrote or deleted" list.
+      //
+      // Fix-round finding (agent-tasks e4b5552a, MEDIUM #1): this guard must
+      // also run BEFORE the merged/conflict classification below, not just
+      // before the write. An unmapped path that mergeText resolves to
+      // "conflict" (e.g. base/remote both non-null, local null because it
+      // was never written) used to still land in conflictFiles even though
+      // no local file with markers was ever created for it — the payload
+      // claimed conflicts=1 for a file nothing could ever show a conflict
+      // in. Classifying it here, once, as skipped, and returning before the
+      // merged/conflict pushes keeps conflictFiles/mergedFiles an honest
+      // "files this run actually merged or left conflict markers in" list.
+      skippedFiles.push(remoteRelativePath);
+      continue;
+    }
+
     if (mergeResult.status === "merged") {
       mergedFiles.push(remoteRelativePath);
     }
@@ -97,16 +128,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       conflictFiles.push(remoteRelativePath);
     }
 
-    const currentLocalValue = readSnapshotValue(localMap, remoteRelativePath);
-    if (mergeResult.content === currentLocalValue) {
-      continue;
-    }
-
     changedFiles.push(remoteRelativePath);
-    const localAbsolutePath = mapRemotePathToLocalAbsolute(config, remoteRelativePath);
-    if (!localAbsolutePath) {
-      continue;
-    }
 
     if (options.dryRun) {
       if (mergeResult.content === null) {
@@ -143,6 +165,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       mergedFiles,
       conflictFiles,
       deletedFiles,
+      skippedFiles,
       notes: []
     };
   }
@@ -156,6 +179,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
     mergedFiles,
     conflictFiles,
     deletedFiles,
+    skippedFiles,
     notes: []
   };
 }

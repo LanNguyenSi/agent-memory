@@ -442,14 +442,16 @@ test("pull from a freshly initialized remote with no prior commits is a safe no-
 // local path). Here a file is committed directly to the remote's
 // repositorySubdir, outside of any push from this CLI, with a name that
 // createConfig's syncPaths (MEMORY.md, logs/) does not cover.
-// KNOWN REPORTING-HONESTY DISCREPANCY, characterized here, not endorsed:
-// pull.ts adds the remote path to changedFiles (surfaced as appliedFiles)
-// BEFORE the `if (!localAbsolutePath) continue;` guard skips the write, so
-// the payload claims "applied" for a file that was never written. A follow-up
-// task exists to either exclude unmapped paths from appliedFiles or surface
-// them separately (skippedFiles). If that fix lands, flip this test's
-// appliedFiles assertion accordingly.
-test("pull reports (but does not write) a remote file that no configured syncPath maps to a local path", () => {
+// FLIPPED (agent-tasks e4b5552a): this test used to characterize a
+// reporting-honesty discrepancy — pull.ts added the remote path to
+// changedFiles (surfaced as appliedFiles) BEFORE the
+// `if (!localAbsolutePath) continue;` guard skipped the write, so the
+// payload claimed "applied" for a file that was never written. pull.ts now
+// checks the mapping first and records an unmapped path in skippedFiles
+// instead of changedFiles, so appliedFiles only ever lists files this run
+// actually wrote or deleted. This test pins that fix: the unmapped remote
+// file must never appear in appliedFiles, and must appear in skippedFiles.
+test("pull reports an unmapped remote file as skipped, not applied, and does not write it", () => {
   const root = createSandbox("pull-unmapped");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -471,12 +473,191 @@ test("pull reports (but does not write) a remote file that no configured syncPat
 
   assert.equal(payload.runs[0].status, "applied");
   assert.ok(
-    payload.runs[0].appliedFiles.includes("unmapped-notes.md"),
-    `expected the unmapped remote file to be reported as applied: ${JSON.stringify(payload.runs[0].appliedFiles)}`
+    !payload.runs[0].appliedFiles.includes("unmapped-notes.md"),
+    `unmapped remote file must never be reported as applied: ${JSON.stringify(payload.runs[0].appliedFiles)}`
+  );
+  assert.ok(
+    payload.runs[0].skippedFiles.includes("unmapped-notes.md"),
+    `expected the unmapped remote file to be reported as skipped: ${JSON.stringify(payload.runs[0].skippedFiles)}`
   );
   assert.equal(
     fileExists(path.join(workspaceRoot, "unmapped-notes.md")),
     false,
     "must not write a file for a remote path with no configured local mapping"
   );
+});
+
+// Fix-round finding (agent-tasks e4b5552a, MEDIUM #1): a remote path with no
+// configured syncPaths mapping still gets recorded into the base snapshot
+// store by ANY prior pull (replaceBaseSnapshots stores every remote file,
+// mapped or not — see pull.ts's collectRemoteFiles). A later remote edit to
+// that same unmapped path then merges as base=v1/local=null/remote=v2, which
+// mergeText resolves to a "conflict" (no clean fast path and no
+// append-only-suffix relationship applies) before pull.ts's mapping guard
+// ever ran. The guard used to sit AFTER the merged/conflict pushes, so this
+// path landed in conflictFiles even though no local file was ever written
+// for it to hold conflict markers in — reviewer-reproduced as
+// `conflicts=1 skipped=1` for a file the run never touched. The guard now
+// runs first, so an unmapped path is classified exactly once, as skipped,
+// and never enters mergedFiles/conflictFiles.
+test("pull records a second remote change to an already-tracked unmapped file as skipped only, never merged or conflicted", () => {
+  const root = createSandbox("pull-unmapped-second-change");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "base\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const remoteCheckoutV1 = cloneRemote(remoteDir, root, "remote-unmapped-v1");
+  writeText(path.join(remoteCheckoutV1, "shared", "unmapped-notes.md"), "v1\n");
+  git(["add", "."], remoteCheckoutV1);
+  git(["commit", "-m", "add an unmapped file, first version"], remoteCheckoutV1);
+  git(["push", "origin", "HEAD:main"], remoteCheckoutV1);
+
+  // Establishes the unmapped path in the base snapshot store, at v1, without
+  // ever writing it locally.
+  runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+
+  const remoteCheckoutV2 = cloneRemote(remoteDir, root, "remote-unmapped-v2");
+  writeText(path.join(remoteCheckoutV2, "shared", "unmapped-notes.md"), "v2\n");
+  git(["add", "."], remoteCheckoutV2);
+  git(["commit", "-m", "change the unmapped file again"], remoteCheckoutV2);
+  git(["push", "origin", "HEAD:main"], remoteCheckoutV2);
+
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.ok(
+    payload.runs[0].skippedFiles.includes("unmapped-notes.md"),
+    `expected the unmapped remote file to be reported as skipped: ${JSON.stringify(payload.runs[0].skippedFiles)}`
+  );
+  assert.ok(
+    !payload.runs[0].conflictFiles.includes("unmapped-notes.md"),
+    `unmapped remote file must never be reported as a conflict: ${JSON.stringify(payload.runs[0].conflictFiles)}`
+  );
+  assert.ok(
+    !payload.runs[0].mergedFiles.includes("unmapped-notes.md"),
+    `unmapped remote file must never be reported as merged: ${JSON.stringify(payload.runs[0].mergedFiles)}`
+  );
+  assert.equal(
+    fileExists(path.join(workspaceRoot, "unmapped-notes.md")),
+    false,
+    "must not write a file for a remote path with no configured local mapping"
+  );
+});
+
+// Fix-round finding (agent-tasks e4b5552a, MEDIUM #3): run.ts's default
+// "sync" mode merges pull's and push's skippedFiles into the combined
+// result (`skippedFiles: unique([...pullResult.skippedFiles, ...])`), but no
+// existing test drove an unmapped remote path through `--mode sync` — every
+// prior skippedFiles test used `--mode pull` directly. Mutation-tested: with
+// that merge line deleted, this test goes red (see fix-round report).
+test("run --mode sync reports an unmapped remote file as skipped in the combined result", () => {
+  const root = createSandbox("sync-unmapped");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "base\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const remoteCheckout = cloneRemote(remoteDir, root, "remote-sync-extra");
+  writeText(path.join(remoteCheckout, "shared", "unmapped-notes.md"), "orphan content\n");
+  git(["add", "."], remoteCheckout);
+  git(["commit", "-m", "add a file outside configured syncPaths"], remoteCheckout);
+  git(["push", "origin", "HEAD:main"], remoteCheckout);
+
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(payload.runs[0].kind, "sync");
+  assert.ok(
+    Array.isArray(payload.runs[0].skippedFiles) && payload.runs[0].skippedFiles.includes("unmapped-notes.md"),
+    `expected the combined sync result to report the unmapped file as skipped: ${JSON.stringify(payload.runs[0].skippedFiles)}`
+  );
+  // Not asserting the path is absent from appliedFiles here: this is exactly
+  // the documented sync nuance (README's "Sync behavior" section,
+  // agent-tasks e4b5552a fix-round finding #2) — pull's own base-snapshot
+  // recording of the unmapped path (replaceBaseSnapshots stores every
+  // remote file, mapped or not) then feeds push's own remote===base fast
+  // path, which independently applies (here: deletes) the same path from
+  // the push side. That push-side deletion of an unmapped peer file is a
+  // separate, pre-existing behavior out of scope for this fix round.
+  assert.equal(
+    fileExists(path.join(workspaceRoot, "unmapped-notes.md")),
+    false,
+    "must not write a file for a remote path with no configured local mapping"
+  );
+});
+
+// Fix-round finding (agent-tasks e4b5552a, LOW #4): the dry-run pull branch
+// (performPull's `if (options.dryRun)`) shares the same mapping guard as the
+// real-write branch, but no existing dry-run test exercised an unmapped
+// remote path — the existing dry-run coverage only pins the "would update" /
+// "would delete" mapped-path cases.
+test("dry-run pull previews an unmapped remote file as skipped, not applied, and does not write it", () => {
+  const root = createSandbox("pull-dry-run-unmapped");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "base\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const remoteCheckout = cloneRemote(remoteDir, root, "remote-dry-run-unmapped");
+  writeText(path.join(remoteCheckout, "shared", "unmapped-notes.md"), "orphan content\n");
+  git(["add", "."], remoteCheckout);
+  git(["commit", "-m", "add a file outside configured syncPaths"], remoteCheckout);
+  git(["push", "origin", "HEAD:main"], remoteCheckout);
+
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--dry-run", "--output", "json"]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(payload.runs[0].status, "dry-run");
+  assert.deepEqual(payload.runs[0].appliedFiles, []);
+  assert.ok(
+    payload.runs[0].skippedFiles.includes("unmapped-notes.md"),
+    `expected the unmapped remote file to be reported as skipped: ${JSON.stringify(payload.runs[0].skippedFiles)}`
+  );
+  assert.equal(
+    fileExists(path.join(workspaceRoot, "unmapped-notes.md")),
+    false,
+    "a dry-run must not write a file for a remote path with no configured local mapping"
+  );
+});
+
+// Fix-round finding (agent-tasks e4b5552a, LOW #4): pins skippedFiles as a
+// present, empty array (not undefined/absent) on a pull that has nothing to
+// skip — the flip side of the "present and non-empty" coverage above.
+test("pull with only a mapped change reports an empty skippedFiles array, not undefined", () => {
+  const root = createSandbox("pull-no-skips");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "before\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const remoteCheckout = cloneRemote(remoteDir, root, "remote-no-skips");
+  writeText(path.join(remoteCheckout, "shared", "MEMORY.md"), "before\nremote-change\n");
+  git(["add", "."], remoteCheckout);
+  git(["commit", "-m", "remote update"], remoteCheckout);
+  git(["push", "origin", "HEAD:main"], remoteCheckout);
+
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(payload.runs[0].status, "applied");
+  assert.deepEqual(payload.runs[0].appliedFiles, ["MEMORY.md"]);
+  assert.ok(Array.isArray(payload.runs[0].skippedFiles), "skippedFiles must be a present array, not undefined");
+  assert.deepEqual(payload.runs[0].skippedFiles, []);
 });
