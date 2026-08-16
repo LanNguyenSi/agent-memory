@@ -5,9 +5,13 @@ function summarizeOperation(operation: {
   conflictFiles: string[];
   deletedFiles?: string[];
   // Remote paths pull saw changed but never wrote/deleted locally, because no
-  // configured syncPaths entry maps them to a local destination. Kept out of
-  // appliedFiles/mergedFiles/conflictFiles so those stay an honest "files
-  // this run actually touched" list (agent-tasks e4b5552a).
+  // configured syncPaths entry maps them to a local destination. Within
+  // pull's own reporting, kept out of appliedFiles/mergedFiles/conflictFiles
+  // so those stay an honest "files this run actually touched" list
+  // (agent-tasks e4b5552a). On a merged sync result the same path can still
+  // appear in appliedFiles/conflictFiles too, if push's own remote-side
+  // handling independently touched it; skippedFiles here only reflects
+  // pull's side of that combined payload.
   skippedFiles?: string[];
   queuedSnapshotId?: string | null;
   notes?: string[];
