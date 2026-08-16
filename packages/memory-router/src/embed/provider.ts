@@ -34,23 +34,44 @@ const DEFAULT_TIMEOUT_MS = 5000;
 // case with margin, not just the typical case.
 const INDEX_DEFAULT_TIMEOUT_MS = 60_000;
 
-// Env override for both DEFAULT_TIMEOUT_MS and INDEX_DEFAULT_TIMEOUT_MS.
-// Mirrors src/gates/confidence.ts's recencyHalfLifeDays guard (a
-// duration-shaped value must be strictly positive to mean anything) rather
-// than that file's envFloat (which allows 0 for a weight/boost, a shape
-// where 0 is a meaningful "off"). Unset, empty, non-numeric, zero, and
-// negative all fall back to `fallback` unchanged. The value must also be an
-// integer no larger than 2147483647: AbortSignal.timeout throws RangeError
-// on fractional or > uint32 delays, and Node's 32-bit timer silently
-// overflows anything above 2^31-1 to an effective 1 ms budget, so those
-// values would defeat the guard's whole purpose on the hook path.
-function resolveEmbedTimeoutMs(fallback: number): number {
-  const raw = process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === '') return fallback;
+// Shared guard for every timeout env var below. Mirrors
+// src/gates/confidence.ts's recencyHalfLifeDays guard (a duration-shaped
+// value must be strictly positive to mean anything) rather than that
+// file's envFloat (which allows 0 for a weight/boost, a shape where 0 is a
+// meaningful "off"). Unset, empty, non-numeric, zero, and negative all
+// resolve to `undefined` (caller decides the fallback). The value must
+// also be an integer no larger than 2147483647: AbortSignal.timeout throws
+// RangeError on fractional or > uint32 delays, and Node's 32-bit timer
+// silently overflows anything above 2^31-1 to an effective 1 ms budget, so
+// those values would defeat the guard's whole purpose on the hook path.
+function parseTimeoutOverride(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 2_147_483_647
     ? parsed
-    : fallback;
+    : undefined;
+}
+
+// Env override for both DEFAULT_TIMEOUT_MS and INDEX_DEFAULT_TIMEOUT_MS.
+function resolveEmbedTimeoutMs(fallback: number): number {
+  return parseTimeoutOverride(process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS) ?? fallback;
+}
+
+// Hook-only env override, precedence over the shared
+// MEMORY_ROUTER_EMBED_TIMEOUT_MS knob above. b1bbbf68: a persistent
+// MEMORY_ROUTER_EMBED_TIMEOUT_MS export (shell profile) meant to give
+// `memory-router index` more headroom otherwise also raised the hook's
+// per-prompt budget by the same amount, and the hook (UserPromptSubmit)
+// must never block a prompt for long — see README "Timeout budgets" for
+// the coupling this decouples. Only src/embed/indexer.ts's semanticSearch
+// consults this; rebuildIndex (the index-rebuild path) never reads it.
+function resolveHookEmbedTimeoutMs(): number {
+  // Precedence: hook-specific override, then the shared override, then the
+  // 5s hook default.
+  return (
+    parseTimeoutOverride(process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS) ??
+    resolveEmbedTimeoutMs(DEFAULT_TIMEOUT_MS)
+  );
 }
 
 async function embedBatch(opts: EmbedOptions): Promise<number[][]> {
@@ -204,6 +225,7 @@ module.exports = {
   embedBatch,
   resolveProviderConfig,
   resolveEmbedTimeoutMs,
+  resolveHookEmbedTimeoutMs,
   DEFAULT_TIMEOUT_MS,
   INDEX_DEFAULT_TIMEOUT_MS,
 };

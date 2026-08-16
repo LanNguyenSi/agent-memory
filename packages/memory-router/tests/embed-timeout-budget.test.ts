@@ -90,6 +90,22 @@ async function withEmbedTimeoutEnv<T>(
   }
 }
 
+// Same shape as withEmbedTimeoutEnv above, for the hook-specific knob.
+async function withHookEmbedTimeoutEnv<T>(
+  value: string | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const orig = process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+  if (value === undefined) delete process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+  else process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS = value;
+  try {
+    return await fn();
+  } finally {
+    if (orig === undefined) delete process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+    else process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS = orig;
+  }
+}
+
 // Same "must actually await" requirement as withEmbedTimeoutEnv above.
 async function withOpenAiKey<T>(fn: () => Promise<T>): Promise<T> {
   const orig = process.env.OPENAI_API_KEY;
@@ -192,6 +208,129 @@ test('rebuildIndex: an invalid MEMORY_ROUTER_EMBED_TIMEOUT_MS (negative) falls b
           captured.every((v) => v === INDEX_DEFAULT_TIMEOUT_MS),
           `every batch must use the index default, got ${JSON.stringify(captured)}`,
         );
+      });
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// b1bbbf68: MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS decouples the hook
+// (semanticSearch) path's embed-timeout budget from the shared
+// MEMORY_ROUTER_EMBED_TIMEOUT_MS knob above, which otherwise also raises
+// the index-rebuild path's budget any time a caller sets it. Precedence:
+// hook knob, then the shared knob, then DEFAULT_TIMEOUT_MS. The
+// index-rebuild path must never read the hook knob.
+
+test('MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS overrides only semanticSearch; rebuildIndex keeps INDEX_DEFAULT_TIMEOUT_MS', async () => {
+  const dir = tmpMemoryDir();
+  try {
+    await withOpenAiKey(async () => {
+      await withHookEmbedTimeoutEnv('4242', async () => {
+        await withEmbedTimeoutEnv(undefined, async () => {
+          const rebuildCaptured = await withCapturedTimeouts(async () => {
+            const result = await rebuildIndex(dir);
+            assert.ok(result.embedded > 0);
+          });
+          assert.deepEqual(
+            rebuildCaptured,
+            [INDEX_DEFAULT_TIMEOUT_MS],
+            'rebuildIndex must ignore the hook-only knob and keep its own default',
+          );
+
+          const searchCaptured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('a prompt not seen before', [], dir, 5);
+            assert.deepEqual(hits, []);
+          });
+          assert.deepEqual(searchCaptured, [4242]);
+        });
+      });
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('precedence: hook knob wins over the shared knob for semanticSearch, but the shared knob still governs rebuildIndex', async () => {
+  const dir = tmpMemoryDir();
+  try {
+    await withOpenAiKey(async () => {
+      await withHookEmbedTimeoutEnv('111', async () => {
+        await withEmbedTimeoutEnv('7777', async () => {
+          const rebuildCaptured = await withCapturedTimeouts(async () => {
+            const result = await rebuildIndex(dir);
+            assert.ok(result.embedded > 0);
+          });
+          assert.deepEqual(
+            rebuildCaptured,
+            [7777],
+            'rebuildIndex must keep responding to the shared knob, unaffected by the hook knob',
+          );
+
+          const searchCaptured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('another new prompt', [], dir, 5);
+            assert.deepEqual(hits, []);
+          });
+          assert.deepEqual(
+            searchCaptured,
+            [111],
+            'semanticSearch must prefer the hook knob over the shared knob',
+          );
+        });
+      });
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('semanticSearch: an invalid MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS (negative) falls back to the shared knob end-to-end, not straight to DEFAULT_TIMEOUT_MS', async () => {
+  const dir = tmpMemoryDir();
+  try {
+    await withOpenAiKey(async () => {
+      await withEmbedTimeoutEnv(undefined, async () => {
+        await withCapturedTimeouts(async () => {
+          const first = await rebuildIndex(dir);
+          assert.ok(first.embedded > 0);
+        });
+      });
+
+      await withHookEmbedTimeoutEnv('-100', async () => {
+        await withEmbedTimeoutEnv('7777', async () => {
+          const searchCaptured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('a third new prompt', [], dir, 5);
+            assert.deepEqual(hits, []);
+          });
+          assert.deepEqual(
+            searchCaptured,
+            [7777],
+            'an invalid hook knob must fall back to the shared knob, not jump straight to DEFAULT_TIMEOUT_MS',
+          );
+        });
+      });
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('semanticSearch: an invalid MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS (negative) with no shared knob set falls back to DEFAULT_TIMEOUT_MS end-to-end', async () => {
+  const dir = tmpMemoryDir();
+  try {
+    await withOpenAiKey(async () => {
+      await withEmbedTimeoutEnv(undefined, async () => {
+        await withCapturedTimeouts(async () => {
+          const first = await rebuildIndex(dir);
+          assert.ok(first.embedded > 0);
+        });
+
+        await withHookEmbedTimeoutEnv('-100', async () => {
+          const searchCaptured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('a fourth new prompt', [], dir, 5);
+            assert.deepEqual(hits, []);
+          });
+          assert.deepEqual(searchCaptured, [DEFAULT_TIMEOUT_MS]);
+        });
       });
     });
   } finally {
