@@ -52,9 +52,14 @@ test("stopWatchProcessGroup actually kills the whole watch process group, not ju
     process.env
   );
 
-  // Force the deadline path (500ms) rather than waiting out TICK_TIMEOUT_MS;
-  // `fn` never settles on its own, so this always times out and SIGKILLs the
-  // group. The rejection is expected and irrelevant to this test.
+  // Force the deadline path (500ms) rather than waiting out
+  // INACTIVITY_TIMEOUT_MS; `fn` never settles on its own, so this always
+  // times out and SIGKILLs the group. No stderr source is passed, so this
+  // stays on withTickDeadline's original fixed-wall-clock path (see
+  // watch-process.ts) rather than its newer inactivity mode — this test has
+  // no progress signal to poll in the first place, and is pinning
+  // group-kill behavior, not tick timing semantics. The rejection is
+  // expected and irrelevant to this test.
   await withTickDeadline(child, () => new Promise(() => {}), 500).catch(() => {});
 
   // Idempotent on top of the deadline path's own kill — exercises the same
