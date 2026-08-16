@@ -2,6 +2,7 @@ const { readdirSync } = require("node:fs");
 const {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
+  filterUnmappedBaseMap,
   toRepositoryRelativePath
 } = require("./config");
 const { RemoteUnavailableError, RemoteQueueEscalationError } = require("../errors");
@@ -83,7 +84,15 @@ async function performPush(config: PushConfig, options: PushOptions) {
   // too — filtering currentLocalMap above is not sufficient on its own,
   // since applySnapshotToWorkingCopy's targetPaths is localFiles keys UNION
   // baseFiles keys; see filterOwnerScopedBaseMap's own comment in config.ts.
-  const currentBaseMap = filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots());
+  // filterUnmappedBaseMap (agent-tasks 65380570) is the defensive backstop
+  // for a base snapshot store that already carries an unmapped peer path
+  // recorded by a pull that ran before that fix shipped — pull.ts's own
+  // write side now excludes such paths going forward, but a store written
+  // before the fix would otherwise still feed applySnapshotToWorkingCopy a
+  // base=<content>/local=null pair for a path this machine never had a
+  // local file for, resolving to a silent remote delete. See that
+  // function's comment in config.ts for the full writeup.
+  const currentBaseMap = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots()));
 
   const queuedSnapshots = stateStore.listQueuedSnapshots();
   const snapshots = [
@@ -100,11 +109,15 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // freshly collected snapshots. The `as Record<string, string>` cast is
     // safe: filterOwnerScopedBaseMap only ever drops keys, it never turns an
     // existing string value into null, and localFiles never held null values
-    // to begin with.
+    // to begin with. filterUnmappedBaseMap (agent-tasks 65380570) runs on
+    // baseFiles for the same reason it runs on currentBaseMap above: a
+    // snapshot queued before that fix shipped can still carry an unmapped
+    // peer path in its stored baseFiles, recorded by an old, unfiltered
+    // stateStore.readBaseSnapshots() call at enqueue time.
     ...queuedSnapshots.map((entry: { id: string; data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> } }) => ({
       id: entry.id,
       localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
-      baseFiles: filterOwnerScopedBaseMap(config, entry.data.baseFiles),
+      baseFiles: filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles)),
       message: `sync(queue): replay ${entry.id}`
     })),
     {

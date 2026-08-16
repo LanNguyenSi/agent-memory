@@ -549,6 +549,72 @@ test("pull records a second remote change to an already-tracked unmapped file as
   );
 });
 
+// Repro test for the push-side half of the unmapped-path defect (agent-tasks
+// 65380570), reproduced by the reviewer of PR #101 against both
+// origin/master and this fix branch: a pull that records an unmapped remote
+// path into the base snapshot store (readBaseSnapshots) then feeds the NEXT
+// push's 3-way merge (applySnapshotToWorkingCopy in push.ts) a
+// base=<content>/local=null pair for that path — collectLocalSyncFiles never
+// produces an entry for a path with no syncPaths mapping, so "local" is
+// always null for it. With the remote itself unchanged since that pull,
+// mergeText's remote===base fast path resolved to "local wins" with
+// content=null, silently DELETING a peer's file this machine never had a
+// local copy of, and reporting it under appliedFiles as if legitimately
+// applied — a data-loss-class bug: some OTHER peer's file disappears from
+// the shared remote because THIS machine happened to run pull then push.
+// Fixed by config.ts's filterUnmappedBaseMap, called from both pull.ts's
+// base-snapshot write and push.ts's base-snapshot read (see those call
+// sites' comments for the full design-decision writeup). Repro recipe from
+// the bug report: commit a file directly into the bare remote's
+// repositorySubdir (never touched by this CLI, simulating another peer's
+// push), pull (records it into base snapshots as skippedFiles), then push.
+test("push never deletes an unmapped peer file the previous pull only recorded into base snapshots", () => {
+  const root = createSandbox("push-unmapped-peer-delete");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "base\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const remoteCheckout = cloneRemote(remoteDir, root, "remote-push-unmapped");
+  writeText(path.join(remoteCheckout, "shared", "unmapped-notes.md"), "peer content\n");
+  git(["add", "."], remoteCheckout);
+  git(["commit", "-m", "add a peer file outside configured syncPaths"], remoteCheckout);
+  git(["push", "origin", "HEAD:main"], remoteCheckout);
+
+  const beforePullPush = cloneRemote(remoteDir, root, "remote-push-unmapped-before");
+  assert.equal(
+    fileExists(path.join(beforePullPush, "shared", "unmapped-notes.md")),
+    true,
+    "sanity check: the peer file exists on the remote before pull+push"
+  );
+
+  const pullResult = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  const pullPayload = JSON.parse(pullResult.stdout);
+  assert.ok(
+    pullPayload.runs[0].skippedFiles.includes("unmapped-notes.md"),
+    `expected pull to skip the unmapped peer file: ${JSON.stringify(pullPayload.runs[0].skippedFiles)}`
+  );
+
+  const pushResult = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const pushPayload = JSON.parse(pushResult.stdout);
+
+  assert.ok(
+    !pushPayload.runs[0].appliedFiles.includes("unmapped-notes.md"),
+    `push must never report an unmapped peer file as applied: ${JSON.stringify(pushPayload.runs[0].appliedFiles)}`
+  );
+
+  const afterPullPush = cloneRemote(remoteDir, root, "remote-push-unmapped-after");
+  assert.equal(
+    fileExists(path.join(afterPullPush, "shared", "unmapped-notes.md")),
+    true,
+    "push must not delete an unmapped peer file it never had a local copy of"
+  );
+});
+
 // Fix-round finding (agent-tasks e4b5552a, MEDIUM #3): run.ts's default
 // "sync" mode merges pull's and push's skippedFiles into the combined
 // result (`skippedFiles: unique([...pullResult.skippedFiles, ...])`), but no
@@ -580,18 +646,35 @@ test("run --mode sync reports an unmapped remote file as skipped in the combined
     Array.isArray(payload.runs[0].skippedFiles) && payload.runs[0].skippedFiles.includes("unmapped-notes.md"),
     `expected the combined sync result to report the unmapped file as skipped: ${JSON.stringify(payload.runs[0].skippedFiles)}`
   );
-  // Not asserting the path is absent from appliedFiles here: this is exactly
-  // the documented sync nuance (README's "Sync behavior" section,
-  // agent-tasks e4b5552a fix-round finding #2) — pull's own base-snapshot
-  // recording of the unmapped path (replaceBaseSnapshots stores every
-  // remote file, mapped or not) then feeds push's own remote===base fast
-  // path, which independently applies (here: deletes) the same path from
-  // the push side. That push-side deletion of an unmapped peer file is a
-  // separate, pre-existing behavior out of scope for this fix round.
+  // FLIPPED (agent-tasks 65380570): this test used to NOT assert
+  // appliedFiles here, with a comment documenting the push-side half of the
+  // same defect as a separate, out-of-scope behavior — pull's own
+  // base-snapshot recording of the unmapped path (replaceBaseSnapshots
+  // stored every remote file, mapped or not) fed push's own remote===base
+  // fast path, which independently resolved to "local wins" with
+  // content=null and DELETED the unmapped peer file from the remote,
+  // reporting it under appliedFiles. pull.ts now strips unmapped paths out
+  // of what it records into the base snapshot store
+  // (config.ts's filterUnmappedBaseMap), so push never sees a base entry for
+  // a path it never had a local file for, and never treats that path's
+  // absence locally as a delete. This test now pins the fixed behavior: the
+  // unmapped peer file survives the combined sync and is never reported as
+  // applied.
+  assert.ok(
+    !payload.runs[0].appliedFiles.includes("unmapped-notes.md"),
+    `unmapped peer file must never be reported as applied by push: ${JSON.stringify(payload.runs[0].appliedFiles)}`
+  );
   assert.equal(
     fileExists(path.join(workspaceRoot, "unmapped-notes.md")),
     false,
     "must not write a file for a remote path with no configured local mapping"
+  );
+
+  const postSyncRemote = cloneRemote(remoteDir, root, "sync-unmapped-post");
+  assert.equal(
+    fileExists(path.join(postSyncRemote, "shared", "unmapped-notes.md")),
+    true,
+    "sync's push half must not delete an unmapped peer file from the remote"
   );
 });
 

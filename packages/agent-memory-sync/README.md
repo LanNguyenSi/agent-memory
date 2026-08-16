@@ -371,10 +371,12 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   (e.g. a file committed to the remote's `repositorySubdir` outside of any `push` from a configured
   machine). Within pull's own reporting such a path never appears in `appliedFiles`, which is
   otherwise a "files this run actually wrote or deleted" list, not a "files this run noticed"
-  list; under the default `--mode sync`, though, the same path can also legitimately land in the
-  merged result's `appliedFiles`/`conflictFiles` if push's own remote-side handling touches it
-  independently, so `skippedFiles` on a sync result is pull's honest accounting, not a claim that
-  the path is absent everywhere else in that payload. Not every result carries the field at all:
+  list. Under the default `--mode sync` the same path also never lands in the combined result's
+  `appliedFiles`/`conflictFiles`: an unmapped path is excluded from the base snapshot store pull
+  writes (see "Unmapped remote paths and base snapshots" below), so the push half of a sync run
+  has no base entry for it either and leaves it untouched on the remote. `skippedFiles` on a sync
+  result is therefore pull's own honest accounting AND the whole story for that path in that
+  payload. Not every result carries the field at all:
   like `deletedFiles`, `skippedFiles` comes from pull's own accounting, so a raw push result never
   has it (the exit-code-4 remote-unavailable-during-pull fallback inside `run`'s `executeMode`, and
   the synthetic result a scheduled tick produces on queue escalation, are both push-only payloads
@@ -385,6 +387,43 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   itself was unreachable): a completed run can list entries in `skippedFiles` for individual paths
   while its own `status` is `applied`
 - `--dry-run` previews the result without changing local files or the remote repository
+
+### Unmapped remote paths and base snapshots
+
+A remote path with no configured `syncPaths` mapping (the `skippedFiles` case above) is never
+recorded into either machine's *base snapshot* store — the local record of "what the remote last
+looked like" that `pull` and `push` both use to detect changes. This matters because base
+snapshots feed a 3-way merge: `push`, in particular, visits every path in `local files UNION base
+files`, and a path present only in `baseFiles` (base non-null, local null because there is, and
+never will be, a local file for it) looks exactly like "the local copy of this file was deleted" —
+the same shape a genuine local delete produces. Recording an unmapped path there let `push` see
+that shape and, on the very next run, delete an unrelated peer's file from the remote and report it
+under `appliedFiles` as if it had been legitimately applied — a data-loss bug (agent-tasks
+65380570), reproducible with: commit a file directly into the remote's `repositorySubdir` (outside
+any configured machine's `push`), `pull` (used to record it into base snapshots regardless),
+`push` (used to then delete it from the remote).
+
+Two designs were considered for the fix:
+
+- **Exclude unmapped paths from base snapshots entirely** (the one shipped): an unmapped path was
+  never materialized locally and never will be, so there is no local state for a base snapshot to
+  track "did local change relative to" in the first place — recording it at all was the bug, not
+  an under-annotated version of correct behavior. This needs no change to the base snapshot's
+  shape (still a plain `path -> content | null` map) and keeps `skippedFiles`'s own contract
+  (a `pull`-only concern, orthogonal to what either side's base snapshot store holds) untouched.
+- **Keep the path but mark it "foreign"** (not shipped): closer to how `ownerScoped` peer files are
+  handled today (`filterOwnerScopedBaseMap`), but those files DO have a configured local mapping —
+  they are foreign only in the sense of "not this machine's own file within a shared directory",
+  a materially different situation from a path with no mapping at all. Doing the same for unmapped
+  paths would need either a wrapper value or a sibling "foreign paths" list alongside the existing
+  map, purely to represent something the fix can instead just not store.
+
+The shipped fix filters at both ends: `pull` (`src/memory-sync/pull.ts`) no longer includes an
+unmapped path when it writes the new base snapshot after a run, and `push`
+(`src/memory-sync/push.ts`) also filters its own base snapshot read (and any already-queued
+snapshot's stored `baseFiles`) before merging — a defensive backstop for a store that already
+carries a contaminated entry from before this fix shipped. Both call the same helper,
+`filterUnmappedBaseMap` in `src/memory-sync/config.ts`.
 
 ## Project Structure
 

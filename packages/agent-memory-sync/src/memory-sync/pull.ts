@@ -2,6 +2,7 @@ const { existsSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const {
   collectLocalSyncFiles,
+  filterUnmappedBaseMap,
   mapRemotePathToLocalAbsolute,
   normalizeRemoteRelativePath
 } = require("./config");
@@ -152,7 +153,14 @@ async function performPull(config: PullConfig, options: PullOptions) {
     const state = stateStore.loadState();
     state.lastRemoteHead = remoteHeadAfter;
     state.lastRunAt = new Date().toISOString();
-    stateStore.replaceBaseSnapshots(remoteMap);
+    // filterUnmappedBaseMap (config.ts): the base snapshot store must never
+    // record a remote path this run just classified as skippedFiles above
+    // (no configured syncPaths destination maps it back to a local file) —
+    // see that function's comment for the full agent-tasks 65380570
+    // writeup. Left unfiltered, the next push's 3-way merge would see
+    // base=<content>/local=null for that path and silently delete it from
+    // the remote as a false "local wins".
+    stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, remoteMap));
     stateStore.saveState(state);
     stateStore.clearTemp();
 

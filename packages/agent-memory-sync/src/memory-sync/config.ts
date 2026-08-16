@@ -179,6 +179,55 @@ function filterOwnerScopedBaseMap(
   return result;
 }
 
+// Keeps a base snapshot map from ever recording a remote path that has no
+// configured syncPaths mapping back to a local destination — the push-side
+// half of the defect closed on the pull side by agent-tasks e4b5552a's
+// skippedFiles guard below (mapRemotePathToLocalAbsolute's null return, used
+// there to classify an unmapped remote path as "skipped" instead of
+// "applied"). Design decision (agent-tasks 65380570): an unmapped path is
+// excluded from base snapshots entirely, rather than kept and marked
+// "foreign" (the way filterOwnerScopedBaseMap above handles a peer's
+// ownerScoped file, which IS locally mappable, just not owned by this
+// machine). Two reasons drove that choice over a foreign-marker scheme:
+// (1) it keeps pull's skippedFiles contract from #101 intact — an unmapped
+// path was never materialized locally and never will be, so there is no
+// local state for a base snapshot to track "did local change relative to"
+// in the first place; recording it at all was the bug, not a
+// under-annotated version of correct behavior. (2) it needs no change to the
+// base snapshot's Record<string, string | null> shape (no wrapper object, no
+// sibling "foreign paths" list to keep in sync) — the same shape
+// filterOwnerScopedBaseMap already filters in place.
+//
+// Left unfiltered, an unmapped path pull recorded into the base store
+// (pre-fix: pull.ts's replaceBaseSnapshots(remoteMap) stored every remote
+// file, mapped or not) survives into push's own 3-way merge
+// (applySnapshotToWorkingCopy in push.ts) as base=<content>, local=null
+// (collectLocalSyncFiles never produces an entry for a path with no
+// syncPaths mapping) — and once the remote itself is unchanged since that
+// pull, mergeText's remote===base fast path resolves to "local wins" with
+// content=null, deleting a peer's file this machine never even had a local
+// copy of and reporting it under appliedFiles as if legitimately applied.
+// Call this both where pull decides what to persist as the new base (the
+// root-cause fix, going forward) and where push reads the base snapshot
+// store back (a defensive backstop for a store that already carries a
+// contaminated entry from before this fix shipped — mirrors why
+// filterOwnerScopedBaseMap is applied on both the write and read side of its
+// own defect class).
+function filterUnmappedBaseMap(
+  config: RunConfig,
+  baseMap: Record<string, string | null>
+): Record<string, string | null> {
+  const result: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(baseMap)) {
+    if (mapRemotePathToLocalAbsolute(config, key) === null) {
+      continue;
+    }
+    result[key] = value;
+  }
+
+  return result;
+}
+
 function mapRemotePathToLocalAbsolute(config: RunConfig, remoteRelativePath: string): string | null {
   const normalizedRemotePath = normalizeRemoteRelativePath(remoteRelativePath);
 
@@ -278,6 +327,7 @@ function isHiddenEntryName(name: string): boolean {
 module.exports = {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
+  filterUnmappedBaseMap,
   mapRemotePathToLocalAbsolute,
   normalizeRemoteRelativePath,
   toRepositoryRelativePath
