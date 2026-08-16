@@ -167,6 +167,10 @@ test('parseFrontmatterYaml: ok, no-delimiter, and yaml-error outcomes are pinned
     description: 'y',
     type: 'reference',
   });
+  // `body` is the raw, unprocessed capture (no trim/strip): applier.ts's
+  // planChange consumes this directly and applies its own normalization on
+  // top (see tests/applier.test.ts's body-normalization tests).
+  assert.equal((ok as { body: string }).body, 'body\n');
 
   const noDelimiter = parseFrontmatterYaml('# heading only, no frontmatter\n');
   assert.deepEqual(noDelimiter, { ok: false, kind: 'no-delimiter' });
@@ -178,6 +182,36 @@ test('parseFrontmatterYaml: ok, no-delimiter, and yaml-error outcomes are pinned
     (yamlError as { detail: string }).detail.length > 0,
     'yaml-error carries a non-empty detail message',
   );
+  // Pin the exact key set on the yaml-error branch, not just individual
+  // field presence: catches a stray/renamed key that individual assertions
+  // above would miss.
+  assert.deepEqual(Object.keys(yamlError).sort(), ['detail', 'error', 'kind', 'ok']);
+  // `error` carries the original caught exception (not just its message):
+  // applier.ts's planChange rethrows it verbatim to preserve the pre-dedup
+  // thrown-error identity (its `${String(err)}` starts with the class name,
+  // e.g. "YAMLParseError:", not a generic "Error:").
+  const rawError = (yamlError as { error: unknown }).error;
+  assert.ok(rawError instanceof Error, 'error is the original Error instance');
+  assert.match(String(rawError), /^YAMLParseError: /);
+  assert.equal((rawError as Error).message, (yamlError as { detail: string }).detail);
+});
+
+// CRLF ok-case: FRONTMATTER_RE's `\r?\n` must match a CRLF-delimited
+// frontmatter block exactly like an LF one, both for the delimiter match
+// and for what ends up in `raw`/`body`. Without this, a CRLF-blind regex
+// mutant only surfaces indirectly through the write path (see
+// tests/applier.test.ts's CRLF test); this pins the parse step itself.
+test('parseFrontmatterYaml: CRLF-delimited frontmatter parses the same as LF', () => {
+  const ok = parseFrontmatterYaml(
+    '---\r\nname: x\r\ndescription: y\r\ntype: reference\r\n---\r\n\r\nbody\r\n',
+  );
+  assert.equal(ok.ok, true);
+  assert.deepEqual((ok as { raw: unknown }).raw, {
+    name: 'x',
+    description: 'y',
+    type: 'reference',
+  });
+  assert.equal((ok as { body: string }).body, '\r\nbody\r\n');
 });
 
 test('MEMORY.md is skipped by the loader', () => {

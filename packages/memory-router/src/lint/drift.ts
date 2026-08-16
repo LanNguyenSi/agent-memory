@@ -29,15 +29,22 @@ const MEMORY_MD = 'MEMORY.md';
 // (parseMemoryFileWithReason) would reject (e.g. unknown type); drift
 // still needs signal on those files (topics lint loads via the loader and
 // goes blind on them until the type is fixed).
+//
+// `require()` resolves to `any`, so this annotation is never checked
+// against loader.ts's real export; it types the destructured `any` for use
+// below. Referencing the shared, globally-declared FrontmatterYamlResult
+// (types.d.ts) rather than a hand-copied structural type means a field
+// rename on that shared type can't go unnoticed here: loader.ts's own
+// `parseFrontmatterYaml` return statement is checked against the same
+// name, and the `parsed.detail`/`parsed.raw` accesses below are checked
+// against it too, so a rename ships red instead of degrading silently to
+// `undefined`.
 const {
   VALID_TYPES,
   parseFrontmatterYaml,
 }: {
   VALID_TYPES: ReadonlySet<string>;
-  parseFrontmatterYaml: (source: string) =>
-    | { ok: true; raw: unknown }
-    | { ok: false; kind: 'no-delimiter' }
-    | { ok: false; kind: 'yaml-error'; detail: string };
+  parseFrontmatterYaml: (source: string) => FrontmatterYamlResult;
 } = require('../memory/loader');
 const REQUIRED_FIELDS: readonly string[] = ['name', 'description', 'type'];
 

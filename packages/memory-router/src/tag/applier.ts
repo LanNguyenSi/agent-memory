@@ -6,10 +6,14 @@ const {
   writeFileSync,
 } = require('node:fs');
 const { basename, join } = require('node:path');
-const { parse: parseYaml, stringify: stringifyYaml } = require('yaml');
+const { stringify: stringifyYaml } = require('yaml');
 const { proposeFrontmatter } = require('./heuristics');
-
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+// Shared frontmatter delimiter-match-plus-YAML-parse step; see the comment
+// on parseFrontmatterYaml in loader.ts for the full rationale. This file
+// used to carry its own byte-identical FRONTMATTER_RE + parseYaml() copy
+// (the last write-path holdout after lint/drift.ts moved onto the shared
+// export).
+const { parseFrontmatterYaml } = require('../memory/loader');
 
 interface FileChange {
   path: string;
@@ -45,9 +49,20 @@ function planChange(path: string): FileChange {
   const source = readFileSync(path, 'utf8') as string;
   // Detect the file's line-ending style so we preserve it on write.
   const eol: '\n' | '\r\n' = /\r\n/.test(source) ? '\r\n' : '\n';
-  const match = FRONTMATTER_RE.exec(source);
+  const parsed = parseFrontmatterYaml(source);
 
-  if (!match) {
+  if (!parsed.ok) {
+    if (parsed.kind === 'yaml-error') {
+      // Pre-dedup fidelity: this file has a `---` delimiter but malformed
+      // YAML inside it, which used to surface as an uncaught parseYaml()
+      // throw propagating out of this function. Rethrow the original
+      // caught error object (not a re-wrapped Error) so cli.ts's per-file
+      // try/catch around planChange still reports the error's own
+      // `${String(err)}` rendering (e.g. "YAMLParseError: ...") under
+      // "errored", not silently under "skipped" the way the no-delimiter
+      // case below is.
+      throw parsed.error;
+    }
     return {
       path,
       id,
@@ -61,8 +76,14 @@ function planChange(path: string): FileChange {
     };
   }
 
-  const existing = (parseYaml(match[1]) ?? {}) as Record<string, unknown>;
-  const body = match[2].replace(/^\r?\n/, '');
+  const existing = (parsed.raw ?? {}) as Record<string, unknown>;
+  // parseFrontmatterYaml's body is the raw, unprocessed capture (shared with
+  // parseMemoryFileWithReason's own body handling in loader.ts, which
+  // instead `.trim()`s it for the read path). The write path here strips
+  // only a single leading newline so mid-body blank lines and trailing
+  // whitespace survive the plan/apply round trip unchanged; `.trim()` would
+  // eat them.
+  const body = parsed.body.replace(/^\r?\n/, '');
 
   if (
     typeof existing.name !== 'string' ||
