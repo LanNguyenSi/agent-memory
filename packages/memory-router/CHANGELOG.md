@@ -14,6 +14,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `loadMemoriesFromDir`'s observable output is unchanged: reference-diffed against origin/master across the existing loader fixtures plus a dedicated edge-case corpus (normal, idempotent, CRLF, no-delimiter, malformed-YAML, missing name/type, and body-whitespace fixtures), byte-for-byte identical before and after.
   - New tests: `tests/applier.test.ts` pins the no-delimiter skip path, the malformed-YAML rethrow (asserting the exact `YAMLParseError:` prefix survives), and the body-normalization edge case (an extra leading blank line and trailing whitespace both survive the write-path round trip); `tests/loader.test.ts` pins `parseFrontmatterYaml`'s new `body` and `error` fields directly.
 
+### Fixed
+
+- `memory-router lint --semantic`'s missing-pair embed call now wraps errors with `describeEmbedError` (re-exported from `src/embed/indexer.ts`), the same provider/model/base-URL enrichment `rebuildIndex` and `semanticSearch` already had. Previously a raw fetch/HTTP failure (e.g. Node's literal `The operation was aborted due to timeout` when `AbortSignal.timeout` fires) reached the CLI with no indication of which provider/model/endpoint it came from (reviewer finding from PR #103, 372ed7ab). This failure stays fail-closed (`lint` exits 1), an intentional asymmetry with the fail-open "no provider configured" case (missing `OPENAI_API_KEY`, exit 0 on the regex-only report), now documented in `src/lint/conflicts.ts` and the README's `--semantic` section: a missing provider is a chosen configuration state, while an embed call that errors mid-flight signals a real failure in a provider the operator did configure. New test in `tests/lint-conflicts-embed-budget.test.ts` pins the enriched error text end-to-end through a mocked `AbortSignal.timeout` fetch abort.
+
 ## [0.7.0] - 2026-08-16
 
 **Upgrade note (behavior-changing default for every Ollama consumer):** the
@@ -147,6 +151,7 @@ agent-tasks task `1e3a371f`, PR #46.
 ### Added
 
 - `memory-router-user-prompt-submit --version` (alias `-v`): fast-exit CLI short-circuit that prints the package version and returns 0 before touching stdin. Tooling that probes installed memory routers (e.g. `harness doctor`'s `memory.router.min_version` check in harness 0.13) otherwise hangs on `readStdin()` until the 5s probe budget expires. A new node:test in `tests/cli-version.test.ts` reads `package.json#version` and asserts the bin's stdout matches, catching drift if the in-source `PACKAGE_VERSION` constant gets out of sync with `package.json` on a release bump.
+
 
 ### Fixed
 
