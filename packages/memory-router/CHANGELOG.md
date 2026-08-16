@@ -6,6 +6,18 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `src/tag/applier.ts`'s `planChange` now reuses the loader's shared `parseFrontmatterYaml` (`src/memory/loader.ts`) for the frontmatter delimiter-match-plus-YAML-parse step, instead of carrying its own byte-identical `FRONTMATTER_RE` + `parseYaml()` copy, the last write-path holdout after `lint/drift.ts` moved onto the shared export (PR #99). `parseMemoryFileWithReason` itself now delegates to `parseFrontmatterYaml` instead of carrying its own duplicate delimiter-match-plus-parse step.
+  - `parseFrontmatterYaml` gains back an additive `body` field: the raw, unprocessed capture group 2 that PR #99's fix round dropped as dead code. `planChange` needs it to apply its own body normalization on top of the shared raw capture (strips only a single leading newline, unlike the read path's `.trim()` in `parseMemoryFileWithReason`).
+  - It also gains a new `error` field on its `yaml-error` outcome, carrying the original caught exception, not just its stringified `.message`. On malformed-but-delimited YAML, `planChange` rethrows this original error object verbatim so `cli.ts`'s per-file try/catch around `planChange` keeps reporting the error's own `${String(err)}` rendering (e.g. `YAMLParseError: ...`) under "errored", the same as before this dedup. A naive re-wrap (`new Error(detail)`) would have silently changed that to `Error: ...` and, at the CLI-summary level, could have turned a real parse failure into a silent skip.
+  - `loadMemoriesFromDir`'s observable output is unchanged: reference-diffed against origin/master across the existing loader fixtures plus a dedicated edge-case corpus (normal, idempotent, CRLF, no-delimiter, malformed-YAML, missing name/type, and body-whitespace fixtures), byte-for-byte identical before and after.
+  - New tests: `tests/applier.test.ts` pins the no-delimiter skip path, the malformed-YAML rethrow (asserting the exact `YAMLParseError:` prefix survives), and the body-normalization edge case (an extra leading blank line and trailing whitespace both survive the write-path round trip); `tests/loader.test.ts` pins `parseFrontmatterYaml`'s new `body` and `error` fields directly.
+
+### Fixed
+
+- `memory-router lint --semantic`'s missing-pair embed call now wraps errors with `describeEmbedError` (re-exported from `src/embed/indexer.ts`), the same provider/model/base-URL enrichment `rebuildIndex` and `semanticSearch` already had. Previously a raw fetch/HTTP failure (e.g. Node's literal `The operation was aborted due to timeout` when `AbortSignal.timeout` fires) reached the CLI with no indication of which provider/model/endpoint it came from (reviewer finding from PR #103, 372ed7ab). This failure stays fail-closed (`lint` exits 1), an intentional asymmetry with the fail-open "no provider configured" case (missing `OPENAI_API_KEY`, exit 0 on the regex-only report), now documented in `src/lint/conflicts.ts` and the README's `--semantic` section: a missing provider is a chosen configuration state, while an embed call that errors mid-flight signals a real failure in a provider the operator did configure. New test in `tests/lint-conflicts-embed-budget.test.ts` pins the enriched error text end-to-end through a mocked `AbortSignal.timeout` fetch abort.
+
 ## [0.7.0] - 2026-08-16
 
 **Upgrade note (behavior-changing default for every Ollama consumer):** the
@@ -139,6 +151,7 @@ agent-tasks task `1e3a371f`, PR #46.
 ### Added
 
 - `memory-router-user-prompt-submit --version` (alias `-v`): fast-exit CLI short-circuit that prints the package version and returns 0 before touching stdin. Tooling that probes installed memory routers (e.g. `harness doctor`'s `memory.router.min_version` check in harness 0.13) otherwise hangs on `readStdin()` until the 5s probe budget expires. A new node:test in `tests/cli-version.test.ts` reads `package.json#version` and asserts the bin's stdout matches, catching drift if the in-source `PACKAGE_VERSION` constant gets out of sync with `package.json` on a release bump.
+
 
 ### Fixed
 

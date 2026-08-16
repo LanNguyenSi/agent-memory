@@ -279,4 +279,14 @@ async function semanticSearch(
   }
 }
 
-module.exports = { rebuildIndex, semanticSearch, indexPath, EMBED_DIMENSIONS };
+module.exports = {
+  rebuildIndex,
+  semanticSearch,
+  indexPath,
+  EMBED_DIMENSIONS,
+  // Re-exported so src/lint/conflicts.ts's `--semantic` missing-pair embed
+  // call can wrap its errors with the same provider/model/baseUrl context
+  // as rebuildIndex and semanticSearch above, instead of carrying its own
+  // drifting copy (372ed7ab).
+  describeEmbedError,
+};

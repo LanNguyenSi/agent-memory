@@ -2,6 +2,7 @@ const { readdirSync } = require("node:fs");
 const {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
+  filterUnmappedBaseMap,
   toRepositoryRelativePath
 } = require("./config");
 const { RemoteUnavailableError, RemoteQueueEscalationError } = require("../errors");
@@ -83,7 +84,26 @@ async function performPush(config: PushConfig, options: PushOptions) {
   // too — filtering currentLocalMap above is not sufficient on its own,
   // since applySnapshotToWorkingCopy's targetPaths is localFiles keys UNION
   // baseFiles keys; see filterOwnerScopedBaseMap's own comment in config.ts.
-  const currentBaseMap = filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots());
+  // filterUnmappedBaseMap (agent-tasks 65380570) here is PERMANENT
+  // load-bearing defense-in-depth, not a removable compatibility shim for
+  // stores written before this fix shipped. pull.ts's write and this
+  // function's own write (see the `stateStore.replaceBaseSnapshots` call
+  // near the end of this function) both already filter through the same
+  // helper, but this read still has to filter too: it is the last line of
+  // defense against a base map contaminated by anything OTHER than those
+  // two filtered writes: a store restored from an old backup, migrated
+  // from a pre-fix on-disk copy, or otherwise written outside pull/push's
+  // own code paths. Skip this read-side filter and applySnapshotToWorkingCopy
+  // sees a base=<content>/local=null pair for such a path; with the remote
+  // unchanged since, mergeText's remote===base fast path resolves to "local
+  // wins" with content=null, silently deleting a peer's file this machine
+  // never had a local copy of. See filterUnmappedBaseMap's own comment in
+  // config.ts for the full writeup, including why removing any one of its
+  // three call sites (this read, and both writes) reopens the bug.
+  const currentBaseMap = filterUnmappedBaseMap(
+    config,
+    filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots())
+  );
 
   const queuedSnapshots = stateStore.listQueuedSnapshots();
   const snapshots = [
@@ -100,11 +120,18 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // freshly collected snapshots. The `as Record<string, string>` cast is
     // safe: filterOwnerScopedBaseMap only ever drops keys, it never turns an
     // existing string value into null, and localFiles never held null values
-    // to begin with.
+    // to begin with. filterUnmappedBaseMap (agent-tasks 65380570) runs on
+    // baseFiles for the same reason it runs on currentBaseMap above: a
+    // queued snapshot's stored baseFiles was captured from
+    // stateStore.readBaseSnapshots() at enqueue time (enqueueCurrentSnapshot
+    // below) and, being read back from disk rather than freshly produced by
+    // a filtered write, is exactly the kind of external input the read-side
+    // filter is permanent defense-in-depth against. Never treat this call
+    // as redundant just because push's own write is filtered too.
     ...queuedSnapshots.map((entry: { id: string; data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> } }) => ({
       id: entry.id,
       localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
-      baseFiles: filterOwnerScopedBaseMap(config, entry.data.baseFiles),
+      baseFiles: filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles)),
       message: `sync(queue): replay ${entry.id}`
     })),
     {
@@ -187,7 +214,19 @@ async function performPush(config: PushConfig, options: PushOptions) {
     const state = stateStore.loadState();
     state.lastRemoteHead = remoteHeadAfter;
     state.lastRunAt = new Date().toISOString();
-    stateStore.replaceBaseSnapshots(finalRemoteFiles);
+    // filterUnmappedBaseMap (agent-tasks 65380570): finalRemoteFiles is a
+    // fresh, full read of the entire remote repositorySubdir tree, unmapped
+    // paths included, regardless of whether THIS push touched them at all
+    // (see collectRemoteFiles below). Left unfiltered, this write alone
+    // re-contaminates the base store on every single push, with no pull
+    // involved: the very next push would then read an unmapped peer path
+    // back out of the base store (the read-side filter above exists
+    // precisely to catch that), feed applySnapshotToWorkingCopy a
+    // base=<content>/local=null pair for it, and silently delete it from
+    // the remote. This is the root-cause fix for push's own base write,
+    // symmetric with pull.ts's write-side filter. See that function's
+    // comment in config.ts for the full three-call-site writeup.
+    stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, finalRemoteFiles));
     stateStore.saveState(state);
     stateStore.clearTemp();
 
