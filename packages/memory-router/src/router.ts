@@ -15,6 +15,16 @@ const { semanticSearch } = require('./embed/indexer');
 // as `resolveConfidence` — callers that can't await leave it out.
 const DEFAULT_GATES: Gate[] = [topicGate, toolGate];
 
+// Uncalibrated-floor drop hint (agent-tasks d33f968c, review residual of
+// mm-v1-T008/PR #97): true once this process has emitted the stderr hint
+// below. Module-level and never reset except by a fresh process — the
+// real caller (the hook binary, see src/hooks/user-prompt-submit.ts) is a
+// short-lived `node` process per prompt, so "once per process" already
+// means "once per prompt" there; a long-lived caller (MCP server) still
+// only gets it once for the life of that process, deliberately, so a
+// noisy corpus can't spam stderr on every request.
+let floorDropHintEmitted = false;
+
 function resolve(
   ctx: RouterContext,
   memories: Memory[],
@@ -172,7 +182,42 @@ async function resolveBlended(
   // also has an independent topic hit is unaffected by this filter — the
   // filter only removes the SEMANTIC contribution, topic candidacy is
   // evaluated separately below.
+  const semanticCandidateCount = semanticHits.length;
   semanticHits = semanticHits.filter((h) => h.score >= weights.minSemanticScore);
+
+  // Uncalibrated-floor drop hint (agent-tasks d33f968c, review residual of
+  // mm-v1-T008/PR #97): the model/provider-conditional floor above
+  // (src/gates/confidence.ts) has a specifically-calibrated entry for only
+  // one model (bge-m3); every OTHER un-calibrated Ollama model (all-minilm,
+  // mxbai-embed-large, nomic-embed-text, ...) falls through to the generic
+  // provider default instead — a value measured against bge-m3's cosine
+  // band, not that model's own. A model with a systematically lower band
+  // can silently lose its ENTIRE semantic path this way: every real
+  // candidate this run scored below the floor, so the run degrades to the
+  // topic-only path below with no indication why. Surface that once per
+  // process (see floorDropHintEmitted above), stderr only — never stdout,
+  // so the hook's injected-context contract (tests/floor-drop-hint.test.ts)
+  // stays byte-identical — and never behind a debug flag, since an operator
+  // who doesn't know they have this problem won't think to enable one.
+  // Deliberately excludes: a calibrated map entry (bge-m3,
+  // minSemanticScoreSource === 'map') or an operator's own explicit
+  // MEMORY_ROUTER_BLEND_MIN_SEMANTIC override (source === 'env') — both are
+  // a deliberate choice, not a silent gap; a run where the semantic path
+  // found nothing to filter at all (semanticCandidateCount === 0, e.g. no
+  // index/provider, or the caught search error above); and a run where at
+  // least one candidate still passed (there is a live semantic signal, not
+  // a total loss).
+  if (
+    !floorDropHintEmitted &&
+    weights.minSemanticScoreSource === 'fallback' &&
+    semanticCandidateCount > 0 &&
+    semanticHits.length === 0
+  ) {
+    floorDropHintEmitted = true;
+    process.stderr.write(
+      `memory-router: uncalibrated relevance floor ${weights.minSemanticScore} for model "${weights.minSemanticScoreModel ?? 'unknown'}" dropped all ${semanticCandidateCount} semantic candidate(s) this run; set MEMORY_ROUTER_BLEND_MIN_SEMANTIC to override, or calibrate a floor for this model, see README "Calibration" (#calibration-mm-v1-t008).\n`,
+    );
+  }
 
   // Semantic path contributed nothing (no index/provider, the caught error
   // above, or every candidate falling below the relevance floor):

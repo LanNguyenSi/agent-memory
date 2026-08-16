@@ -89,6 +89,30 @@ interface BlendWeights {
    */
   minSemanticScore: number;
   /**
+   * Where minSemanticScore's value came from (agent-tasks d33f968c, review
+   * residual of mm-v1-T008/PR #97): 'env' when an explicit, valid
+   * MEMORY_ROUTER_BLEND_MIN_SEMANTIC override was present, 'map' when it
+   * resolved through a specifically-calibrated OLLAMA_MODEL_FLOOR_DEFAULTS
+   * entry (today only bge-m3), 'fallback' otherwise — the un-calibrated
+   * PROVIDER_FLOOR_DEFAULTS.ollama/openai value, which every OTHER Ollama
+   * model (all-minilm, mxbai-embed-large, nomic-embed-text, ...) resolves
+   * through today. Consumed by resolveBlended (src/router.ts) to decide
+   * whether a "every semantic candidate fell below the floor" run is
+   * something the operator already chose (map/env — stay silent) or a
+   * gap they likely don't know about (fallback — warn once).
+   */
+  minSemanticScoreSource: 'env' | 'map' | 'fallback';
+  /**
+   * The resolved embedding model name (untrimmed/untagged, as returned by
+   * resolveProviderConfig) minSemanticScoreSource was resolved against, or
+   * null when no provider config was resolvable at all (misconfigured
+   * explicit openai with no API key — the semantic path is dead on that
+   * path regardless, see resolveDefaultMinSemanticScoreDetail below). Only
+   * used to name the model in resolveBlended's stderr hint; never affects
+   * scoring.
+   */
+  minSemanticScoreModel: string | null;
+  /**
    * How many raw semantic-search candidates resolveBlended asks for before
    * capping the final result at maxHits (see semanticK in src/router.ts,
    * which takes Math.max(maxHits, this) — never narrower than the final
@@ -168,6 +192,12 @@ const BLEND_DEFAULTS: BlendWeights = {
   // resolveDefaultMinSemanticScore below. Kept here only because
   // BlendWeights requires every field to have a value.
   minSemanticScore: PROVIDER_FLOOR_DEFAULTS.openai,
+  // Same "unreachable, only here because BlendWeights requires every field"
+  // note applies to these two: loadBlendWeights always computes its own
+  // source/model via resolveDefaultMinSemanticScoreDetail (agent-tasks
+  // d33f968c), never reads this struct's placeholders.
+  minSemanticScoreSource: 'fallback',
+  minSemanticScoreModel: null,
   candidateK: 5,
 };
 
@@ -202,9 +232,23 @@ function normalizeOllamaModelName(model: string): string {
 // semanticSearch path), so the floor default tracks the SAME provider/
 // model resolution the actual embedding call would use for this prompt,
 // not a stricter or looser one.
-function resolveDefaultMinSemanticScore(): number {
+//
+// Returns provenance (source/model) alongside the numeric value (agent-tasks
+// d33f968c): resolveBlended (src/router.ts) needs to tell "this floor is a
+// specifically-calibrated map entry (bge-m3)" apart from "this floor is the
+// generic, un-calibrated provider fallback every OTHER model falls through
+// to" to decide whether an all-candidates-dropped run is worth a stderr
+// hint. resolveDefaultMinSemanticScore below stays the pre-existing
+// number-only shape for its own (many) pinned callers.
+function resolveDefaultMinSemanticScoreDetail(): {
+  value: number;
+  source: 'map' | 'fallback';
+  model: string | null;
+} {
   const cfg = resolveProviderConfig({ autoDetectOllama: true });
-  if (!cfg || cfg.provider === 'openai') return PROVIDER_FLOOR_DEFAULTS.openai;
+  if (!cfg || cfg.provider === 'openai') {
+    return { value: PROVIDER_FLOOR_DEFAULTS.openai, source: 'fallback', model: cfg?.model ?? null };
+  }
   const normalized = normalizeOllamaModelName(cfg.model);
   // hasOwnProperty guard, not a plain OLLAMA_MODEL_FLOOR_DEFAULTS[normalized]
   // bracket lookup + ?? fallback: a bracket lookup walks the prototype
@@ -213,8 +257,12 @@ function resolveDefaultMinSemanticScore(): number {
   // through Object.prototype's own properties instead of correctly falling
   // through to PROVIDER_FLOOR_DEFAULTS.ollama.
   return Object.prototype.hasOwnProperty.call(OLLAMA_MODEL_FLOOR_DEFAULTS, normalized)
-    ? OLLAMA_MODEL_FLOOR_DEFAULTS[normalized]
-    : PROVIDER_FLOOR_DEFAULTS.ollama;
+    ? { value: OLLAMA_MODEL_FLOOR_DEFAULTS[normalized], source: 'map', model: cfg.model }
+    : { value: PROVIDER_FLOOR_DEFAULTS.ollama, source: 'fallback', model: cfg.model };
+}
+
+function resolveDefaultMinSemanticScore(): number {
+  return resolveDefaultMinSemanticScoreDetail().value;
 }
 
 // A negative override is invalid for every weight in this module (a
@@ -224,11 +272,26 @@ function resolveDefaultMinSemanticScore(): number {
 // non-positive guard recencyModifier already applies to
 // weights.recencyHalfLifeDays specifically (division-by-zero/inverted-decay
 // concern there) to every MEMORY_ROUTER_BLEND_* env override.
-function envFloat(name: string, fallback: number): number {
+//
+// envFloat delegates to envFloatResolved (agent-tasks d33f968c) so
+// loadBlendWeights' minSemanticScoreSource can tell "the raw override
+// string was present AND valid" apart from "absent/invalid, fell back"
+// without re-deriving that validity check a second time (single source of
+// truth — a callsite duplicating envFloat's own validation logic could
+// silently drift from it).
+function envFloatResolved(
+  name: string,
+  fallback: number,
+): { value: number; usedOverride: boolean } {
   const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
+  if (raw === undefined || raw.trim() === '') return { value: fallback, usedOverride: false };
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  if (Number.isFinite(parsed) && parsed >= 0) return { value: parsed, usedOverride: true };
+  return { value: fallback, usedOverride: false };
+}
+
+function envFloat(name: string, fallback: number): number {
+  return envFloatResolved(name, fallback).value;
 }
 
 // Read fresh on every call (not memoized): a test-suite process that flips
@@ -236,6 +299,14 @@ function envFloat(name: string, fallback: number): number {
 // and this is cheap (four env reads plus one sync, no-I/O provider
 // resolution) on the hot path.
 function loadBlendWeights(): BlendWeights {
+  const minSemanticDefault = resolveDefaultMinSemanticScoreDetail();
+  // Fallback (used only when MEMORY_ROUTER_BLEND_MIN_SEMANTIC is unset or
+  // invalid) is now the model/provider-conditional default, not a flat
+  // constant — see resolveDefaultMinSemanticScoreDetail above.
+  const minSemantic = envFloatResolved(
+    'MEMORY_ROUTER_BLEND_MIN_SEMANTIC',
+    minSemanticDefault.value,
+  );
   return {
     topicBoost: envFloat('MEMORY_ROUTER_BLEND_TOPIC_BOOST', BLEND_DEFAULTS.topicBoost),
     recencyWeight: envFloat(
@@ -247,13 +318,9 @@ function loadBlendWeights(): BlendWeights {
       BLEND_DEFAULTS.recencyHalfLifeDays,
     ),
     typeWeight: envFloat('MEMORY_ROUTER_BLEND_TYPE_WEIGHT', BLEND_DEFAULTS.typeWeight),
-    // Fallback (used only when MEMORY_ROUTER_BLEND_MIN_SEMANTIC is unset or
-    // invalid) is now the model/provider-conditional default, not a flat
-    // constant — see resolveDefaultMinSemanticScore above.
-    minSemanticScore: envFloat(
-      'MEMORY_ROUTER_BLEND_MIN_SEMANTIC',
-      resolveDefaultMinSemanticScore(),
-    ),
+    minSemanticScore: minSemantic.value,
+    minSemanticScoreSource: minSemantic.usedOverride ? 'env' : minSemanticDefault.source,
+    minSemanticScoreModel: minSemanticDefault.model,
     candidateK: envFloat('MEMORY_ROUTER_BLEND_CANDIDATE_K', BLEND_DEFAULTS.candidateK),
   };
 }
@@ -302,6 +369,7 @@ module.exports = {
   typeModifier,
   recencyModifier,
   resolveDefaultMinSemanticScore,
+  resolveDefaultMinSemanticScoreDetail,
   normalizeOllamaModelName,
   OLLAMA_MODEL_FLOOR_DEFAULTS,
 };
