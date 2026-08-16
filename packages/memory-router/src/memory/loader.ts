@@ -16,7 +16,27 @@ const VALID_TYPES: ReadonlySet<string> = new Set([
   'reference',
 ]);
 
-type ParseResult = { ok: true; memory: Memory } | { ok: false; reason: string };
+type ParseResult =
+  | {
+      ok: true;
+      memory: Memory;
+      /**
+       * Raw-frontmatter presence flags, captured before `type`/`topics`
+       * resolution overwrites them on the returned `memory.frontmatter`.
+       * Exported for consumers (consolidate/schema-metrics.ts) that report
+       * on legacy (`metadata.`-nested) vs. canonical (top-level) shape;
+       * loadMemoriesFromDir itself ignores these.
+       */
+      hasTopLevelType: boolean;
+      hasMetadataType: boolean;
+      hasTopLevelTopics: boolean;
+      hasMetadataTopics: boolean;
+    }
+  | { ok: false; reason: string };
+
+function hasNonEmptyArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
 
 function parseMemoryFileWithReason(path: string, source: string): ParseResult {
   const match = FRONTMATTER_RE.exec(source);
@@ -65,7 +85,14 @@ function parseMemoryFileWithReason(path: string, source: string): ParseResult {
 
   const id = basename(path, extname(path));
   const frontmatter = { ...fm, type: resolvedType, topics: resolvedTopics };
-  return { ok: true, memory: { id, path, frontmatter, body } };
+  return {
+    ok: true,
+    memory: { id, path, frontmatter, body },
+    hasTopLevelType: Boolean(fm.type),
+    hasMetadataType: Boolean(fm.metadata?.type),
+    hasTopLevelTopics: hasNonEmptyArray(fm.topics),
+    hasMetadataTopics: hasNonEmptyArray(fm.metadata?.topics),
+  };
 }
 
 function parseMemoryFile(path: string, source: string): Memory | null {
@@ -127,4 +154,74 @@ function loadMemoriesFromDir(dir: string): Memory[] {
   return memories;
 }
 
-module.exports = { loadMemoriesFromDir, parseMemoryFile, VALID_TYPES };
+type ScanEntry =
+  | ({ path: string; id: string; ok: true } & Omit<Extract<ParseResult, { ok: true }>, 'ok'>)
+  | { path: string; id: string; ok: false; reason: string };
+
+// Same directory walk as loadMemoriesFromDir (readdir, sort, *.md filter,
+// MEMORY.md exclusion, stat, read, parse), but reports every file's outcome
+// instead of silently dropping rejects: for consumers (consolidate/
+// schema-metrics.ts) that need reject reasons and the raw-shape flags
+// alongside the accepted set. loadMemoriesFromDir itself is untouched and
+// keeps its own debugWarn-and-drop behavior; this is an additive sibling,
+// not a replacement.
+function loadMemoriesFromDirWithRejects(dir: string): ScanEntry[] {
+  const out: ScanEntry[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    debugWarn(`could not read memory dir ${dir}: ${detail}`);
+    return out;
+  }
+
+  entries.sort();
+
+  for (const entry of entries) {
+    if (!entry.endsWith('.md')) continue;
+    if (entry === 'MEMORY.md') continue;
+
+    const path = join(dir, entry);
+    const id = basename(path, extname(path));
+
+    let stat;
+    try {
+      stat = statSync(path);
+    } catch (err) {
+      const reason = `stat failed: ${String(err)}`;
+      debugWarn(`skipped ${path}: ${reason}`);
+      out.push({ path, id, ok: false, reason });
+      continue;
+    }
+    if (!stat.isFile()) continue;
+
+    let source: string;
+    try {
+      source = readFileSync(path, 'utf8');
+    } catch (err) {
+      const reason = `read failed: ${String(err)}`;
+      debugWarn(`skipped ${path}: ${reason}`);
+      out.push({ path, id, ok: false, reason });
+      continue;
+    }
+
+    const result = parseMemoryFileWithReason(path, source);
+    if (result.ok) {
+      out.push({ path, id, ...result });
+    } else {
+      debugWarn(`skipped ${path}: ${result.reason}`);
+      out.push({ path, id, ok: false, reason: result.reason });
+    }
+  }
+
+  return out;
+}
+
+module.exports = {
+  loadMemoriesFromDir,
+  loadMemoriesFromDirWithRejects,
+  parseMemoryFile,
+  parseMemoryFileWithReason,
+  VALID_TYPES,
+};
