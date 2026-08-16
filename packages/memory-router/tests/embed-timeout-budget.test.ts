@@ -143,27 +143,35 @@ test('semanticSearch: no env override → embedBatch call uses DEFAULT_TIMEOUT_M
   const dir = tmpMemoryDir();
   try {
     await withOpenAiKey(async () => {
-      // Build the index first (its own capture window, discarded) so
-      // semanticSearch finds an index file and actually reaches the
-      // query-embedding call. Still needs the fetch stub - no live network
-      // calls anywhere in this file.
-      await withEmbedTimeoutEnv(undefined, async () => {
-        await withCapturedTimeouts(async () => {
-          const first = await rebuildIndex(dir);
-          assert.ok(first.embedded > 0);
+      // b1bbbf68 fix-round: also neutralize the hook-only knob, not just
+      // the shared one. An ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
+      // (e.g. exported in a shell profile, exactly as this package's own
+      // README recipe recommends) would otherwise win the precedence
+      // check below and make this "no override" test pass or fail
+      // depending on the operator's shell, not the code.
+      await withHookEmbedTimeoutEnv(undefined, async () => {
+        // Build the index first (its own capture window, discarded) so
+        // semanticSearch finds an index file and actually reaches the
+        // query-embedding call. Still needs the fetch stub - no live network
+        // calls anywhere in this file.
+        await withEmbedTimeoutEnv(undefined, async () => {
+          await withCapturedTimeouts(async () => {
+            const first = await rebuildIndex(dir);
+            assert.ok(first.embedded > 0);
+          });
         });
-      });
 
-      await withEmbedTimeoutEnv(undefined, async () => {
-        const captured = await withCapturedTimeouts(async () => {
-          const hits = await semanticSearch('a prompt not seen before', [], dir, 5);
-          assert.deepEqual(hits, []); // empty `memories` arg, see embed-multi-provider.test.ts
+        await withEmbedTimeoutEnv(undefined, async () => {
+          const captured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('a prompt not seen before', [], dir, 5);
+            assert.deepEqual(hits, []); // empty `memories` arg, see embed-multi-provider.test.ts
+          });
+          assert.deepEqual(
+            captured,
+            [DEFAULT_TIMEOUT_MS],
+            'semanticSearch must keep the tight hook default, not the larger index default',
+          );
         });
-        assert.deepEqual(
-          captured,
-          [DEFAULT_TIMEOUT_MS],
-          'semanticSearch must keep the tight hook default, not the larger index default',
-        );
       });
     });
   } finally {
@@ -175,18 +183,25 @@ test('MEMORY_ROUTER_EMBED_TIMEOUT_MS overrides both rebuildIndex and semanticSea
   const dir = tmpMemoryDir();
   try {
     await withOpenAiKey(async () => {
-      await withEmbedTimeoutEnv('7777', async () => {
-        const rebuildCaptured = await withCapturedTimeouts(async () => {
-          const result = await rebuildIndex(dir);
-          assert.ok(result.embedded > 0);
-        });
-        assert.deepEqual(rebuildCaptured, [7777]);
+      // b1bbbf68 fix-round: same ambient-hook-knob hazard as the test
+      // above. Without this, an ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
+      // would win over the shared knob this test is exercising and the
+      // semanticSearch assertion below would observe the ambient value
+      // instead of 7777.
+      await withHookEmbedTimeoutEnv(undefined, async () => {
+        await withEmbedTimeoutEnv('7777', async () => {
+          const rebuildCaptured = await withCapturedTimeouts(async () => {
+            const result = await rebuildIndex(dir);
+            assert.ok(result.embedded > 0);
+          });
+          assert.deepEqual(rebuildCaptured, [7777]);
 
-        const searchCaptured = await withCapturedTimeouts(async () => {
-          const hits = await semanticSearch('another new prompt', [], dir, 5);
-          assert.deepEqual(hits, []);
+          const searchCaptured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('another new prompt', [], dir, 5);
+            assert.deepEqual(hits, []);
+          });
+          assert.deepEqual(searchCaptured, [7777]);
         });
-        assert.deepEqual(searchCaptured, [7777]);
       });
     });
   } finally {
@@ -335,5 +350,59 @@ test('semanticSearch: an invalid MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS (negative) 
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// b1bbbf68 fix-round: an ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
+// (e.g. exported in a shell profile, exactly as the README's own recipe
+// recommends) must never leak into a test that means to observe the
+// "no hook override" or "shared knob governs" behavior. The two tests
+// above learned this the hard way and now neutralize the hook knob
+// themselves; this test pins the guard by simulating the ambient value
+// directly (a raw env save/restore, not the withHookEmbedTimeoutEnv
+// helper, since using the helper here would just prove the helper works,
+// not that the neutralization is actually wired into the tests that need
+// it) and re-checking both behaviors still hold once neutralized.
+test('hermeticity: an ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS does not leak into the no-override or shared-knob semanticSearch behavior', async () => {
+  const origHook = process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+  process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS = '9999';
+  const dir = tmpMemoryDir();
+  try {
+    await withOpenAiKey(async () => {
+      await withHookEmbedTimeoutEnv(undefined, async () => {
+        await withEmbedTimeoutEnv(undefined, async () => {
+          await withCapturedTimeouts(async () => {
+            const first = await rebuildIndex(dir);
+            assert.ok(first.embedded > 0);
+          });
+
+          const noOverrideCaptured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('a fifth new prompt, no override', [], dir, 5);
+            assert.deepEqual(hits, []);
+          });
+          assert.deepEqual(
+            noOverrideCaptured,
+            [DEFAULT_TIMEOUT_MS],
+            'an ambient hook knob must not leak into the no-override case once neutralized',
+          );
+        });
+
+        await withEmbedTimeoutEnv('7777', async () => {
+          const sharedKnobCaptured = await withCapturedTimeouts(async () => {
+            const hits = await semanticSearch('a sixth new prompt, shared knob', [], dir, 5);
+            assert.deepEqual(hits, []);
+          });
+          assert.deepEqual(
+            sharedKnobCaptured,
+            [7777],
+            'an ambient hook knob must not leak into the shared-knob case once neutralized',
+          );
+        });
+      });
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (origHook === undefined) delete process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+    else process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS = origHook;
   }
 });

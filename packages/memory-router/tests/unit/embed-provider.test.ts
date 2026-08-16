@@ -438,6 +438,16 @@ test('resolveHookEmbedTimeoutMs: hook knob set → wins over both the shared kno
   });
 });
 
+// b1bbbf68 fix-round: pins the accepted upper boundary. Its rejected
+// neighbor '3000000000' is already covered by the invalid table below;
+// this confirms parseTimeoutOverride's `<= 2147483647` check is inclusive,
+// not off-by-one.
+test('resolveHookEmbedTimeoutMs: the upper boundary value 2147483647 is accepted', () => {
+  withHookEmbedTimeoutEnv('2147483647', () => {
+    assert.equal(resolveHookEmbedTimeoutMs(), 2147483647);
+  });
+});
+
 // Same invalid-value table as resolveEmbedTimeoutMs above (PR #96).
 for (const bad of [
   '',
