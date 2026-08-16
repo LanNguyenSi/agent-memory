@@ -103,18 +103,6 @@ interface BlendWeights {
   candidateK: number;
 }
 
-const BLEND_DEFAULTS: BlendWeights = {
-  topicBoost: 0.05,
-  recencyWeight: 0.05,
-  recencyHalfLifeDays: 30,
-  typeWeight: 0.03,
-  // The openai/no-resolvable-provider branch of the conditional default
-  // below (unchanged from before this feature). NOT the value actually
-  // used on an Ollama path — see resolveDefaultMinSemanticScore.
-  minSemanticScore: 0.5,
-  candidateK: 5,
-};
-
 // --- Model-conditional relevance floor default ------------------------------
 //
 // minSemanticScore's un-overridden default depends on which embedding
@@ -152,6 +140,10 @@ const BLEND_DEFAULTS: BlendWeights = {
 // model's problem. Keeping the two constants apart means a future
 // model-specific calibration only touches OLLAMA_MODEL_FLOOR_DEFAULTS,
 // without changing this resolution shape.
+//
+// Declared ABOVE BLEND_DEFAULTS (unlike the original mm-v1-T004 file order)
+// so PROVIDER_FLOOR_DEFAULTS.openai below is already initialized where
+// BLEND_DEFAULTS.minSemanticScore references it.
 const OLLAMA_MODEL_FLOOR_DEFAULTS: Record<string, number> = {
   'bge-m3': 0.78,
 };
@@ -160,6 +152,24 @@ const PROVIDER_FLOOR_DEFAULTS = {
   openai: 0.5,
   ollama: 0.78,
 } as const;
+
+const BLEND_DEFAULTS: BlendWeights = {
+  topicBoost: 0.05,
+  recencyWeight: 0.05,
+  recencyHalfLifeDays: 30,
+  typeWeight: 0.03,
+  // A reference to PROVIDER_FLOOR_DEFAULTS.openai, not a duplicated literal
+  // 0.5 — the two constants can no longer drift apart. This field is
+  // itself unreachable as an actual default: loadBlendWeights' envFloat
+  // fallback always calls resolveDefaultMinSemanticScore() instead of
+  // reading this struct, and every branch of that resolver (openai,
+  // ollama with or without a per-model entry) already returns its own
+  // PROVIDER_FLOOR_/OLLAMA_MODEL_FLOOR_DEFAULTS value directly — see
+  // resolveDefaultMinSemanticScore below. Kept here only because
+  // BlendWeights requires every field to have a value.
+  minSemanticScore: PROVIDER_FLOOR_DEFAULTS.openai,
+  candidateK: 5,
+};
 
 // Ollama model identifiers can carry a `:tag` suffix (`bge-m3:latest`,
 // `bge-m3:567m`, an explicit quantization tag, etc — see `ollama list`)
@@ -171,7 +181,15 @@ const PROVIDER_FLOOR_DEFAULTS = {
 // (`meta.embed_model = 'bge-m3'`, verified against the live index) — but
 // an operator who instead pins an explicit tag must still match the same
 // calibrated floor, not silently fall through to the generic provider
-// fallback (today numerically identical, but see the comment above).
+// fallback (today numerically identical, but see the comment above). This
+// normalization is exact-string on the family name only, not a fuzzy or
+// semantic match: a pinned tag whose normalized family matches an entry
+// here still has to satisfy the index's own provenance check first
+// (mm-v1-T003, unmodified: `meta.embed_model` compared to the resolved
+// model string exactly). Pin a tag that does not match the index's
+// provenance and the provenance check rejects the query BEFORE this floor
+// ever gets a chance to apply — 0 hits plus a mismatch warning, not a
+// floor-filtered result.
 // Case-insensitive and trimmed defensively (env-var provenance).
 function normalizeOllamaModelName(model: string): string {
   return model.trim().toLowerCase().split(':')[0];
@@ -188,7 +206,15 @@ function resolveDefaultMinSemanticScore(): number {
   const cfg = resolveProviderConfig({ autoDetectOllama: true });
   if (!cfg || cfg.provider === 'openai') return PROVIDER_FLOOR_DEFAULTS.openai;
   const normalized = normalizeOllamaModelName(cfg.model);
-  return OLLAMA_MODEL_FLOOR_DEFAULTS[normalized] ?? PROVIDER_FLOOR_DEFAULTS.ollama;
+  // hasOwnProperty guard, not a plain OLLAMA_MODEL_FLOOR_DEFAULTS[normalized]
+  // bracket lookup + ?? fallback: a bracket lookup walks the prototype
+  // chain, so a model name of '__proto__' or 'constructor' (env-var
+  // provenance, so attacker- or misconfiguration-controlled) would resolve
+  // through Object.prototype's own properties instead of correctly falling
+  // through to PROVIDER_FLOOR_DEFAULTS.ollama.
+  return Object.prototype.hasOwnProperty.call(OLLAMA_MODEL_FLOOR_DEFAULTS, normalized)
+    ? OLLAMA_MODEL_FLOOR_DEFAULTS[normalized]
+    : PROVIDER_FLOOR_DEFAULTS.ollama;
 }
 
 // A negative override is invalid for every weight in this module (a
@@ -276,4 +302,6 @@ module.exports = {
   typeModifier,
   recencyModifier,
   resolveDefaultMinSemanticScore,
+  normalizeOllamaModelName,
+  OLLAMA_MODEL_FLOOR_DEFAULTS,
 };

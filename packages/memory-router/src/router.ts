@@ -161,16 +161,17 @@ async function resolveBlended(
   }
 
   // Relevance floor (mm-v1-T004 fix-round 2, HIGH): drop any semantic hit
-  // scoring below MEMORY_ROUTER_BLEND_MIN_SEMANTIC (default 0.5, see
-  // BLEND_DEFAULTS.minSemanticScore in src/gates/confidence.ts) BEFORE the
-  // degradation guard below. A sub-floor cosine match is noise, not a real
-  // signal; filtering it out here (rather than letting it into the blend at
-  // a near-zero weight) means a corpus/provider that only ever returns weak
-  // matches for a prompt degrades to the deterministic topic-only path
-  // instead of quietly blending in scores that were never a real match. A
-  // memory that also has an independent topic hit is unaffected by this
-  // filter — the filter only removes the SEMANTIC contribution, topic
-  // candidacy is evaluated separately below.
+  // scoring below MEMORY_ROUTER_BLEND_MIN_SEMANTIC (model/provider-
+  // conditional default, see resolveDefaultMinSemanticScore in
+  // src/gates/confidence.ts) BEFORE the degradation guard below. A
+  // sub-floor cosine match is noise, not a real signal; filtering it out
+  // here (rather than letting it into the blend at a near-zero weight)
+  // means a corpus/provider that only ever returns weak matches for a
+  // prompt degrades to the deterministic topic-only path instead of
+  // quietly blending in scores that were never a real match. A memory that
+  // also has an independent topic hit is unaffected by this filter — the
+  // filter only removes the SEMANTIC contribution, topic candidacy is
+  // evaluated separately below.
   semanticHits = semanticHits.filter((h) => h.score >= weights.minSemanticScore);
 
   // Semantic path contributed nothing (no index/provider, the caught error
