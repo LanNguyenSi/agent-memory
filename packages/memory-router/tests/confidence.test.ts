@@ -249,12 +249,12 @@ test('loadBlendWeights: minSemanticScoreSource is "fallback" for an un-calibrate
   );
 });
 
-test('loadBlendWeights: minSemanticScoreSource is "fallback" for openai (provider-level default, not a per-model map)', () => {
+test('loadBlendWeights: minSemanticScoreSource is "provider" for openai (its own deliberate 0.5 default, not an uncalibrated fallback — agent-tasks d33f968c fix round)', () => {
   withFloorEnv(
     { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test-not-real' },
     () => {
       const weights = loadBlendWeights();
-      assert.equal(weights.minSemanticScoreSource, 'fallback');
+      assert.equal(weights.minSemanticScoreSource, 'provider');
     },
   );
 });

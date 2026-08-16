@@ -90,18 +90,21 @@ interface BlendWeights {
   minSemanticScore: number;
   /**
    * Where minSemanticScore's value came from (agent-tasks d33f968c, review
-   * residual of mm-v1-T008/PR #97): 'env' when an explicit, valid
-   * MEMORY_ROUTER_BLEND_MIN_SEMANTIC override was present, 'map' when it
-   * resolved through a specifically-calibrated OLLAMA_MODEL_FLOOR_DEFAULTS
-   * entry (today only bge-m3), 'fallback' otherwise — the un-calibrated
-   * PROVIDER_FLOOR_DEFAULTS.ollama/openai value, which every OTHER Ollama
-   * model (all-minilm, mxbai-embed-large, nomic-embed-text, ...) resolves
-   * through today. Consumed by resolveBlended (src/router.ts) to decide
-   * whether a "every semantic candidate fell below the floor" run is
-   * something the operator already chose (map/env — stay silent) or a
-   * gap they likely don't know about (fallback — warn once).
+   * residual of mm-v1-T008/PR #97; 'provider' split out of the original
+   * 'fallback' bucket in the d33f968c fix round): 'env' when an explicit,
+   * valid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override was present, 'map' when
+   * it resolved through a specifically-calibrated OLLAMA_MODEL_FLOOR_DEFAULTS
+   * entry (today only bge-m3), 'provider' for OpenAI's PROVIDER_FLOOR_
+   * DEFAULTS.openai (0.5 is OpenAI's own deliberate, documented default, not
+   * an uncalibrated gap), 'fallback' otherwise — the un-calibrated
+   * PROVIDER_FLOOR_DEFAULTS.ollama value, which every OTHER Ollama model
+   * (all-minilm, mxbai-embed-large, nomic-embed-text, ...) resolves through
+   * today. Consumed by resolveBlended (src/router.ts) to decide whether a
+   * "every semantic candidate fell below the floor" run is something the
+   * operator already chose or provider-native (map/env/provider — stay
+   * silent) or a gap they likely don't know about (fallback — warn once).
    */
-  minSemanticScoreSource: 'env' | 'map' | 'fallback';
+  minSemanticScoreSource: 'env' | 'map' | 'fallback' | 'provider';
   /**
    * The resolved embedding model name (untrimmed/untagged, as returned by
    * resolveProviderConfig) minSemanticScoreSource was resolved against, or
@@ -143,7 +146,9 @@ interface BlendWeights {
 //      OPENAI_API_KEY — a misconfiguration where the semantic path stays
 //      dead regardless, see resolveProviderConfig): 0.5,
 //      PROVIDER_FLOOR_DEFAULTS.openai, unchanged from the pre-existing
-//      flat default.
+//      flat default. Provenance 'provider', not 'fallback' — this is
+//      OpenAI's own deliberate, documented default, not an uncalibrated
+//      gap (see resolveDefaultMinSemanticScoreDetail below).
 //   3. provider === 'ollama': the model, normalized (see
 //      normalizeOllamaModelName below), looked up in
 //      OLLAMA_MODEL_FLOOR_DEFAULTS; a model with no specific entry
@@ -235,19 +240,31 @@ function normalizeOllamaModelName(model: string): string {
 //
 // Returns provenance (source/model) alongside the numeric value (agent-tasks
 // d33f968c): resolveBlended (src/router.ts) needs to tell "this floor is a
-// specifically-calibrated map entry (bge-m3)" apart from "this floor is the
-// generic, un-calibrated provider fallback every OTHER model falls through
-// to" to decide whether an all-candidates-dropped run is worth a stderr
-// hint. resolveDefaultMinSemanticScore below stays the pre-existing
-// number-only shape for its own (many) pinned callers.
+// specifically-calibrated map entry (bge-m3)" apart from "this floor is
+// OpenAI's own deliberate provider default (0.5, not a calibration gap)"
+// apart from "this floor is the generic, un-calibrated Ollama provider
+// fallback every OTHER model falls through to" to decide whether an
+// all-candidates-dropped run is worth a stderr hint (only the third case
+// is — see resolveBlended's own comment). resolveDefaultMinSemanticScore
+// below stays the pre-existing number-only shape; its only remaining
+// callers today are the pinned tests in tests/confidence.test.ts, not any
+// production code — every production path (loadBlendWeights below) reads
+// this Detail function directly.
 function resolveDefaultMinSemanticScoreDetail(): {
   value: number;
-  source: 'map' | 'fallback';
+  source: 'map' | 'fallback' | 'provider';
   model: string | null;
 } {
   const cfg = resolveProviderConfig({ autoDetectOllama: true });
   if (!cfg || cfg.provider === 'openai') {
-    return { value: PROVIDER_FLOOR_DEFAULTS.openai, source: 'fallback', model: cfg?.model ?? null };
+    // 'provider', not 'fallback': OpenAI's 0.5 is a deliberate, documented
+    // default for that provider's own cosine band, not an uncalibrated gap
+    // like the Ollama no-map-entry branch below — an all-candidates-dropped
+    // run here is the normal junk-rejection outcome, not a signal the
+    // operator is missing a calibration. Keeps resolveBlended's stderr hint
+    // (gated on source === 'fallback', src/router.ts) from misfiring on a
+    // healthy OpenAI run (agent-tasks d33f968c fix round).
+    return { value: PROVIDER_FLOOR_DEFAULTS.openai, source: 'provider', model: cfg?.model ?? null };
   }
   const normalized = normalizeOllamaModelName(cfg.model);
   // hasOwnProperty guard, not a plain OLLAMA_MODEL_FLOOR_DEFAULTS[normalized]
