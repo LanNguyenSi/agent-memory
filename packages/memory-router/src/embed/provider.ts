@@ -28,10 +28,10 @@ interface EmbedOptions {
 const DEFAULT_TIMEOUT_MS = 5000;
 
 // Index rebuilds have no prompt to block, so they can afford to wait: a real
-// 64-input batch against Ollama measured 5-17 s on the mm-v1-T008 reference
-// corpus (nomic-embed-text 5-7 s, bge-m3 8-17 s), and the very first batch
-// after a cold model load is reliably the slowest one, so this budget must
-// clear that worst case with margin, not just the typical case.
+// 64-input batch against Ollama measured roughly 3.5-10 s warm and 11-17 s
+// for the first batch after a cold model load (reliably the slowest) on the
+// mm-v1-T008 reference corpus, so this budget must clear that cold worst
+// case with margin, not just the typical case.
 const INDEX_DEFAULT_TIMEOUT_MS = 60_000;
 
 // Env override for both DEFAULT_TIMEOUT_MS and INDEX_DEFAULT_TIMEOUT_MS.
@@ -39,12 +39,18 @@ const INDEX_DEFAULT_TIMEOUT_MS = 60_000;
 // duration-shaped value must be strictly positive to mean anything) rather
 // than that file's envFloat (which allows 0 for a weight/boost, a shape
 // where 0 is a meaningful "off"). Unset, empty, non-numeric, zero, and
-// negative all fall back to `fallback` unchanged.
+// negative all fall back to `fallback` unchanged. The value must also be an
+// integer no larger than 2147483647: AbortSignal.timeout throws RangeError
+// on fractional or > uint32 delays, and Node's 32-bit timer silently
+// overflows anything above 2^31-1 to an effective 1 ms budget, so those
+// values would defeat the guard's whole purpose on the hook path.
 function resolveEmbedTimeoutMs(fallback: number): number {
   const raw = process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === '') return fallback;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 2_147_483_647
+    ? parsed
+    : fallback;
 }
 
 async function embedBatch(opts: EmbedOptions): Promise<number[][]> {

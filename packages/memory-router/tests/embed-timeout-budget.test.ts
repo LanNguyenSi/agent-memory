@@ -187,7 +187,11 @@ test('rebuildIndex: an invalid MEMORY_ROUTER_EMBED_TIMEOUT_MS (negative) falls b
           const result = await rebuildIndex(dir);
           assert.ok(result.embedded > 0);
         });
-        assert.deepEqual(captured, [INDEX_DEFAULT_TIMEOUT_MS]);
+        assert.ok(captured.length > 0, 'expected at least one embed batch');
+        assert.ok(
+          captured.every((v) => v === INDEX_DEFAULT_TIMEOUT_MS),
+          `every batch must use the index default, got ${JSON.stringify(captured)}`,
+        );
       });
     });
   } finally {

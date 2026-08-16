@@ -366,7 +366,22 @@ test('resolveEmbedTimeoutMs: a valid positive value overrides the fallback, for 
   });
 });
 
-for (const bad of ['', '   ', 'not-a-number', 'NaN', '-1', '-500', '0']) {
+// '1500.7' (fractional) and '5e9' (> uint32) would make AbortSignal.timeout
+// throw RangeError; '3000000000' sits in the 32-bit overflow window where
+// Node silently degrades the timer to 1 ms; 'Infinity' fails isInteger.
+for (const bad of [
+  '',
+  '   ',
+  'not-a-number',
+  'NaN',
+  '-1',
+  '-500',
+  '0',
+  '1500.7',
+  '5e9',
+  '3000000000',
+  'Infinity',
+]) {
   test(`resolveEmbedTimeoutMs: invalid override ${JSON.stringify(bad)} falls back to the caller-supplied default`, () => {
     withEmbedTimeoutEnv(bad, () => {
       assert.equal(resolveEmbedTimeoutMs(DEFAULT_TIMEOUT_MS), DEFAULT_TIMEOUT_MS);
