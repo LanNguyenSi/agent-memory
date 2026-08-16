@@ -95,7 +95,7 @@ function parseMemoryFile(path: string, source: string): Memory | null {
 }
 
 type FrontmatterYamlResult =
-  | { ok: true; raw: unknown; body: string }
+  | { ok: true; raw: unknown }
   | { ok: false; kind: 'no-delimiter' }
   | { ok: false; kind: 'yaml-error'; detail: string };
 
@@ -106,16 +106,18 @@ type FrontmatterYamlResult =
 // copy of that regex/parse step while still running its own
 // drift-specific field checks (description required, name/type must be
 // strings) on the raw parsed value, including for shapes
-// parseMemoryFileWithReason itself would reject (e.g. unknown type) —
-// drift needs signal on those files, parseMemoryFileWithReason does not
+// parseMemoryFileWithReason itself would reject (e.g. unknown type); drift
+// needs signal on those files, parseMemoryFileWithReason does not
 // expose the raw value on its own reject paths. Purely additive: does not
 // touch parseMemoryFileWithReason or loadMemoriesFromDir, both unchanged.
+// No `body` field: the only consumer (drift.ts) never reads the body, so it
+// is not part of this result shape.
 function parseFrontmatterYaml(source: string): FrontmatterYamlResult {
   const match = FRONTMATTER_RE.exec(source);
   if (!match) return { ok: false, kind: 'no-delimiter' };
   try {
     const raw = parseYaml(match[1]);
-    return { ok: true, raw, body: (match[2] ?? '').trim() };
+    return { ok: true, raw };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return { ok: false, kind: 'yaml-error', detail };

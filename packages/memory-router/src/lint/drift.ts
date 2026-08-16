@@ -26,7 +26,7 @@ const MEMORY_MD = 'MEMORY.md';
 // instead of carrying its own copy, then runs its own field-requirement
 // checks (description required, name/type must be strings) on the raw
 // parsed value below, including for shapes the loader's own hot-path parse
-// (parseMemoryFileWithReason) would reject (e.g. unknown type) — drift
+// (parseMemoryFileWithReason) would reject (e.g. unknown type); drift
 // still needs signal on those files (topics lint loads via the loader and
 // goes blind on them until the type is fixed).
 const {
@@ -35,7 +35,7 @@ const {
 }: {
   VALID_TYPES: ReadonlySet<string>;
   parseFrontmatterYaml: (source: string) =>
-    | { ok: true; raw: unknown; body: string }
+    | { ok: true; raw: unknown }
     | { ok: false; kind: 'no-delimiter' }
     | { ok: false; kind: 'yaml-error'; detail: string };
 } = require('../memory/loader');

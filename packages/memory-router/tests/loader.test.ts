@@ -3,7 +3,11 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
-const { loadMemoriesFromDir, parseMemoryFileWithReason } = require('../src/memory/loader');
+const {
+  loadMemoriesFromDir,
+  parseMemoryFileWithReason,
+  parseFrontmatterYaml,
+} = require('../src/memory/loader');
 
 const fixturesDir = path.join(__dirname, 'fixtures', 'memories');
 
@@ -147,6 +151,32 @@ test('parseMemoryFileWithReason: reject reasons are pinned for each rejection ca
       ok: false,
       reason: 'unknown type "howto" (expected: user, feedback, project, reference)',
     },
+  );
+});
+
+// Direct unit test for parseFrontmatterYaml (required export, see
+// module.exports): pins its three outcomes in isolation from
+// parseMemoryFileWithReason's own field-requirement layer, since drift.ts
+// depends on this function alone doing the delimiter-match-plus-YAML-parse
+// step and nothing more.
+test('parseFrontmatterYaml: ok, no-delimiter, and yaml-error outcomes are pinned', () => {
+  const ok = parseFrontmatterYaml('---\nname: x\ndescription: y\ntype: reference\n---\nbody\n');
+  assert.equal(ok.ok, true);
+  assert.deepEqual((ok as { raw: unknown }).raw, {
+    name: 'x',
+    description: 'y',
+    type: 'reference',
+  });
+
+  const noDelimiter = parseFrontmatterYaml('# heading only, no frontmatter\n');
+  assert.deepEqual(noDelimiter, { ok: false, kind: 'no-delimiter' });
+
+  const yamlError = parseFrontmatterYaml('---\n: : :\nname: x\n---\nbody\n');
+  assert.equal(yamlError.ok, false);
+  assert.equal((yamlError as { kind: string }).kind, 'yaml-error');
+  assert.ok(
+    (yamlError as { detail: string }).detail.length > 0,
+    'yaml-error carries a non-empty detail message',
   );
 });
 

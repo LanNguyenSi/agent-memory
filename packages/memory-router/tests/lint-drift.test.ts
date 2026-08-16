@@ -10,6 +10,7 @@ const {
   formatDriftReportJson,
   formatFixResultText,
 } = require('../src/lint/drift');
+const { parseMemoryFileWithReason } = require('../src/memory/loader');
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-drift-'));
@@ -159,6 +160,29 @@ test('invalid frontmatter: missing required fields', () => {
   const bad = findHits(report.hits, 'invalid_frontmatter');
   assert.equal(bad.length, 1);
   assert.match(bad[0].detail, /description.*type|type.*description/);
+});
+
+// Pins the deliberate loader-vs-drift field-policy divergence: the loader's
+// hot-path parseMemoryFileWithReason only requires name and a valid type
+// (not description), while drift.ts's own REQUIRED_FIELDS additionally
+// requires description. A file with name+type but no description must be
+// ACCEPTED by the loader and flagged invalid_frontmatter by drift, so this
+// test goes red if either side's field policy is ever folded into the
+// other's.
+test('loader-vs-drift divergence: name+type without description loads but drift-flags', () => {
+  const source = '---\nname: X\ntype: feedback\n---\n\nbody\n';
+
+  const loaded = parseMemoryFileWithReason('x.md', source);
+  assert.equal(loaded.ok, true, 'loader accepts a file missing only description');
+
+  const dir = makeTmpDir();
+  writeMemory(dir, 'x.md', 'name: X\ntype: feedback');
+  writeMemoryMd(dir, '- [X](x.md) — hook\n');
+
+  const report = lintMemoryDirForDrift(dir);
+  const bad = findHits(report.hits, 'invalid_frontmatter');
+  assert.equal(bad.length, 1);
+  assert.match(bad[0].detail, /description/);
 });
 
 test('invalid frontmatter: unknown type', () => {
