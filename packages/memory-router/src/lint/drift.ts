@@ -17,19 +17,30 @@ const {
   existsSync,
 } = require('node:fs');
 const { basename, extname, join } = require('node:path');
-const { parse: parseYaml } = require('yaml');
 
 const LINE_CAP = 200;
 const DESCRIPTION_CAP = 150;
 const MEMORY_MD = 'MEMORY.md';
-// Canonical type set lives in the loader; drift lint does its own raw parse,
-// so files the loader rejects still get DRIFT lint signal (topics lint loads
-// via the loader and goes blind on them until the type is fixed).
-const { VALID_TYPES }: { VALID_TYPES: ReadonlySet<string> } =
-  require('../memory/loader');
+// The frontmatter delimiter regex and the YAML-parse call both live in the
+// loader (parseFrontmatterYaml); drift lint reuses that shared parse step
+// instead of carrying its own copy, then runs its own field-requirement
+// checks (description required, name/type must be strings) on the raw
+// parsed value below, including for shapes the loader's own hot-path parse
+// (parseMemoryFileWithReason) would reject (e.g. unknown type); drift
+// still needs signal on those files (topics lint loads via the loader and
+// goes blind on them until the type is fixed).
+const {
+  VALID_TYPES,
+  parseFrontmatterYaml,
+}: {
+  VALID_TYPES: ReadonlySet<string>;
+  parseFrontmatterYaml: (source: string) =>
+    | { ok: true; raw: unknown }
+    | { ok: false; kind: 'no-delimiter' }
+    | { ok: false; kind: 'yaml-error'; detail: string };
+} = require('../memory/loader');
 const REQUIRED_FIELDS: readonly string[] = ['name', 'description', 'type'];
 
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 // Match markdown link whose target ends in .md. Restrictive on the URL side
 // (no whitespace, no nested parens) so we do not misparse prose that
 // happens to contain parentheses.
@@ -204,24 +215,18 @@ function scanMemories(dir: string): ScannedMemory[] {
       validationErrors: [],
     };
 
-    const fmMatch = FRONTMATTER_RE.exec(source);
-    if (!fmMatch) {
-      record.validationErrors.push('missing YAML frontmatter block');
+    const parsed = parseFrontmatterYaml(source);
+    if (!parsed.ok) {
+      record.validationErrors.push(
+        parsed.kind === 'no-delimiter'
+          ? 'missing YAML frontmatter block'
+          : `frontmatter YAML parse error: ${parsed.detail}`,
+      );
       memories.push(record);
       continue;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = parseYaml(fmMatch[1]);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      record.validationErrors.push(`frontmatter YAML parse error: ${msg}`);
-      memories.push(record);
-      continue;
-    }
-
-    const { errors, frontmatter } = validateFrontmatter(parsed);
+    const { errors, frontmatter } = validateFrontmatter(parsed.raw);
     record.validationErrors = errors;
     if (frontmatter) record.frontmatter = frontmatter;
     memories.push(record);
