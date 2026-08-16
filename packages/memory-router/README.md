@@ -468,6 +468,7 @@ Overrides:
 - `MEMORY_ROUTER_OLLAMA_EMBED_MODEL`: model name override for the auto-detected Ollama path specifically; not consulted anywhere else.
 - `OPENAI_BASE_URL`: OpenAI-compatible proxy base URL (OpenAI path only).
 - `MEMORY_ROUTER_OLLAMA_BASE_URL`: Ollama base URL, default `http://localhost:11434`. Ollama is queried through its OpenAI-compatible `/v1/embeddings` endpoint, unauthenticated.
+- `MEMORY_ROUTER_EMBED_TIMEOUT_MS`: per-request timeout override, applies to both the hook's confidence-gate path (default `5000`) and `memory-router index`'s rebuild path (default `60000`); an unset, empty, non-numeric, zero, negative, fractional, or larger-than-`2147483647` value falls back to that path's own default rather than erroring (the upper bound is Node's 32-bit timer limit; beyond it `AbortSignal.timeout` either throws or silently degrades to a 1 ms timer).
 
 Model-variable precedence:
 
@@ -480,6 +481,8 @@ Model-variable precedence:
 Embedding dimensionality is never hardcoded: it's read off the first real embed response and recorded in the index alongside the provider and model. An index opened under a different provider refuses at open time to silently compare incompatible vector spaces. A same-provider dimensionality change (rare, e.g. switching to a differently-sized OpenAI model) isn't checked at open time; it's instead caught the moment it's actually written or queried, by the same plain dimension check that would fire against sqlite-vec's fixed column width anyway. Either way `memory-router index`/the Confidence Gate raise an error naming the exact rebuild command (`rm -rf '<dir>/.memory-router' && memory-router index '<dir>'`) instead of returning wrong neighbours. Switching `MEMORY_ROUTER_EMBED_MODEL` between two *same-dimension* models of the same provider (e.g. two same-width OpenAI models) is unaffected by either check: the existing per-memory model tag already excludes stale rows from a search, no rebuild required.
 
 Local Ollama setup: `ollama pull nomic-embed-text`, then run `ollama serve` (or use the app) before `memory-router index`/normal hook usage.
+
+Timeout budgets: the hook's confidence-gate embed call defaults to a tight 5 s (it must never block a prompt for long) while `memory-router index`'s rebuild defaults to a much more generous 60 s per batch, because a real 64-input Ollama batch on the mm-v1-T008 reference corpus measured roughly 3.5-10 s warm and 11-17 s for the first batch after a cold model load (reliably the slowest), which used to blow past the old shared 5 s budget and make `index` unusable. `MEMORY_ROUTER_EMBED_TIMEOUT_MS` overrides both defaults at once. Beware what that coupling means: a value exported persistently (shell profile) to give `index` more headroom also raises the hook's per-prompt budget to the same value, and the hook must never block a prompt for long. Prefer the per-invocation form, `MEMORY_ROUTER_EMBED_TIMEOUT_MS=120000 memory-router index <dir>`, which widens the index budget without touching the hook.
 
 #### Query-embedding cache
 

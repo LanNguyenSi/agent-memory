@@ -21,13 +21,41 @@ interface EmbedOptions {
 }
 
 // 5 s is plenty for a single embed call on healthy networks and bounds the
-// hook's worst-case prompt latency. Index rebuilds use the same timeout per
-// batch (64 inputs) which is the larger call.
+// hook's worst-case prompt latency — the hook must never block a prompt for
+// long, so this stays deliberately tight. See INDEX_DEFAULT_TIMEOUT_MS below
+// for why the index-rebuild path needs a much larger budget instead of
+// reusing this one.
 const DEFAULT_TIMEOUT_MS = 5000;
+
+// Index rebuilds have no prompt to block, so they can afford to wait: a real
+// 64-input batch against Ollama measured roughly 3.5-10 s warm and 11-17 s
+// for the first batch after a cold model load (reliably the slowest) on the
+// mm-v1-T008 reference corpus, so this budget must clear that cold worst
+// case with margin, not just the typical case.
+const INDEX_DEFAULT_TIMEOUT_MS = 60_000;
+
+// Env override for both DEFAULT_TIMEOUT_MS and INDEX_DEFAULT_TIMEOUT_MS.
+// Mirrors src/gates/confidence.ts's recencyHalfLifeDays guard (a
+// duration-shaped value must be strictly positive to mean anything) rather
+// than that file's envFloat (which allows 0 for a weight/boost, a shape
+// where 0 is a meaningful "off"). Unset, empty, non-numeric, zero, and
+// negative all fall back to `fallback` unchanged. The value must also be an
+// integer no larger than 2147483647: AbortSignal.timeout throws RangeError
+// on fractional or > uint32 delays, and Node's 32-bit timer silently
+// overflows anything above 2^31-1 to an effective 1 ms budget, so those
+// values would defeat the guard's whole purpose on the hook path.
+function resolveEmbedTimeoutMs(fallback: number): number {
+  const raw = process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 2_147_483_647
+    ? parsed
+    : fallback;
+}
 
 async function embedBatch(opts: EmbedOptions): Promise<number[][]> {
   const base = (opts.baseUrl ?? 'https://api.openai.com').replace(/\/+$/, '');
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? resolveEmbedTimeoutMs(DEFAULT_TIMEOUT_MS);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -172,4 +200,10 @@ function resolveProviderConfig(
   return null;
 }
 
-module.exports = { embedBatch, resolveProviderConfig };
+module.exports = {
+  embedBatch,
+  resolveProviderConfig,
+  resolveEmbedTimeoutMs,
+  DEFAULT_TIMEOUT_MS,
+  INDEX_DEFAULT_TIMEOUT_MS,
+};
