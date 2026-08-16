@@ -365,6 +365,14 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   snapshot was queued than a genuinely stuck remote — a diagnostic note is emitted on that
   otherwise-silent "queued" outcome instead
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers
+- a `pull`/`sync` JSON/YAML result carries a `skippedFiles` array (alongside `appliedFiles`,
+  `mergedFiles`, `conflictFiles`, `deletedFiles`) listing remote paths this run saw changed but did
+  not write locally, because no configured `syncPaths` entry maps them back to a local destination
+  (e.g. a file committed to the remote's `repositorySubdir` outside of any `push` from a configured
+  machine). Such a path never appears in `appliedFiles`, which is otherwise a "files this run
+  actually wrote or deleted" list, not a "files this run noticed" list. `--output text` reflects
+  this as a `skipped=N` segment when non-empty (mirroring the existing `deleted=N` segment); the
+  full list of paths is only in `json`/`yaml` output
 - `--dry-run` previews the result without changing local files or the remote repository
 
 ## Project Structure

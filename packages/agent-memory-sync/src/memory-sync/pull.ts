@@ -51,6 +51,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       mergedFiles: [],
       conflictFiles: [],
       deletedFiles: [],
+      skippedFiles: [],
       notes: [`remote unreachable (${reachability.reason}); skipped pull, local files unchanged`]
     };
   }
@@ -81,6 +82,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
   const deletedFiles: string[] = [];
+  const skippedFiles: string[] = [];
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const mergeResult = mergeText({
@@ -102,11 +104,20 @@ async function performPull(config: PullConfig, options: PullOptions) {
       continue;
     }
 
-    changedFiles.push(remoteRelativePath);
     const localAbsolutePath = mapRemotePathToLocalAbsolute(config, remoteRelativePath);
     if (!localAbsolutePath) {
+      // No configured syncPaths entry maps this remote path back to a local
+      // destination, so nothing is ever written or deleted for it below.
+      // Reporting-honesty fix (agent-tasks e4b5552a): this used to land in
+      // changedFiles (surfaced as appliedFiles) BEFORE this guard skipped
+      // the write, so the payload claimed "applied" for a file that was
+      // never touched. Track it here instead, so appliedFiles stays an
+      // honest "files this run actually wrote or deleted" list.
+      skippedFiles.push(remoteRelativePath);
       continue;
     }
+
+    changedFiles.push(remoteRelativePath);
 
     if (options.dryRun) {
       if (mergeResult.content === null) {
@@ -143,6 +154,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       mergedFiles,
       conflictFiles,
       deletedFiles,
+      skippedFiles,
       notes: []
     };
   }
@@ -156,6 +168,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
     mergedFiles,
     conflictFiles,
     deletedFiles,
+    skippedFiles,
     notes: []
   };
 }

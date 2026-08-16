@@ -442,14 +442,16 @@ test("pull from a freshly initialized remote with no prior commits is a safe no-
 // local path). Here a file is committed directly to the remote's
 // repositorySubdir, outside of any push from this CLI, with a name that
 // createConfig's syncPaths (MEMORY.md, logs/) does not cover.
-// KNOWN REPORTING-HONESTY DISCREPANCY, characterized here, not endorsed:
-// pull.ts adds the remote path to changedFiles (surfaced as appliedFiles)
-// BEFORE the `if (!localAbsolutePath) continue;` guard skips the write, so
-// the payload claims "applied" for a file that was never written. A follow-up
-// task exists to either exclude unmapped paths from appliedFiles or surface
-// them separately (skippedFiles). If that fix lands, flip this test's
-// appliedFiles assertion accordingly.
-test("pull reports (but does not write) a remote file that no configured syncPath maps to a local path", () => {
+// FLIPPED (agent-tasks e4b5552a): this test used to characterize a
+// reporting-honesty discrepancy — pull.ts added the remote path to
+// changedFiles (surfaced as appliedFiles) BEFORE the
+// `if (!localAbsolutePath) continue;` guard skipped the write, so the
+// payload claimed "applied" for a file that was never written. pull.ts now
+// checks the mapping first and records an unmapped path in skippedFiles
+// instead of changedFiles, so appliedFiles only ever lists files this run
+// actually wrote or deleted. This test pins that fix: the unmapped remote
+// file must never appear in appliedFiles, and must appear in skippedFiles.
+test("pull reports an unmapped remote file as skipped, not applied, and does not write it", () => {
   const root = createSandbox("pull-unmapped");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -471,8 +473,12 @@ test("pull reports (but does not write) a remote file that no configured syncPat
 
   assert.equal(payload.runs[0].status, "applied");
   assert.ok(
-    payload.runs[0].appliedFiles.includes("unmapped-notes.md"),
-    `expected the unmapped remote file to be reported as applied: ${JSON.stringify(payload.runs[0].appliedFiles)}`
+    !payload.runs[0].appliedFiles.includes("unmapped-notes.md"),
+    `unmapped remote file must never be reported as applied: ${JSON.stringify(payload.runs[0].appliedFiles)}`
+  );
+  assert.ok(
+    payload.runs[0].skippedFiles.includes("unmapped-notes.md"),
+    `expected the unmapped remote file to be reported as skipped: ${JSON.stringify(payload.runs[0].skippedFiles)}`
   );
   assert.equal(
     fileExists(path.join(workspaceRoot, "unmapped-notes.md")),
