@@ -442,6 +442,13 @@ test("pull from a freshly initialized remote with no prior commits is a safe no-
 // local path). Here a file is committed directly to the remote's
 // repositorySubdir, outside of any push from this CLI, with a name that
 // createConfig's syncPaths (MEMORY.md, logs/) does not cover.
+// KNOWN REPORTING-HONESTY DISCREPANCY, characterized here, not endorsed:
+// pull.ts adds the remote path to changedFiles (surfaced as appliedFiles)
+// BEFORE the `if (!localAbsolutePath) continue;` guard skips the write, so
+// the payload claims "applied" for a file that was never written. A follow-up
+// task exists to either exclude unmapped paths from appliedFiles or surface
+// them separately (skippedFiles). If that fix lands, flip this test's
+// appliedFiles assertion accordingly.
 test("pull reports (but does not write) a remote file that no configured syncPath maps to a local path", () => {
   const root = createSandbox("pull-unmapped");
   const remoteDir = initBareRemote(root);

@@ -16,9 +16,18 @@ const assert = require("node:assert/strict");
 const { loadConfig, resolveRunConfig } = require("../../src/config/loader");
 
 async function resolveWithEnv(env: Record<string, string>): Promise<ReturnType<typeof resolveRunConfig>> {
+  // Hermetic baseline: clear every ambient AGENT_MEMORY_SYNC_* variable first,
+  // so the negative control ({}) and the positive cases measure against a
+  // clean env even on a machine where the operator exports overrides.
   const previous: Record<string, string | undefined> = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("AGENT_MEMORY_SYNC_")) {
+      previous[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
   for (const key of Object.keys(env)) {
-    previous[key] = process.env[key];
+    if (!(key in previous)) previous[key] = process.env[key];
     process.env[key] = env[key];
   }
 

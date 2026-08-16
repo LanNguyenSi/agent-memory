@@ -17,11 +17,16 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { mkdirSync, chmodSync, writeFileSync } = require("node:fs");
+const { mkdirSync, chmodSync, writeFileSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { GitClient } = require("../../src/memory-sync/git-client");
 const { RemoteUnavailableError } = require("../../src/errors");
+
+const createdSandboxes: string[] = [];
+test.after(() => {
+  for (const dir of createdSandboxes) rmSync(dir, { recursive: true, force: true });
+});
 
 function sandbox(name: string): string {
   const root = path.join(
@@ -29,17 +34,23 @@ function sandbox(name: string): string {
     `agent-memory-sync-git-client-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
   );
   mkdirSync(root, { recursive: true });
+  createdSandboxes.push(root);
   return root;
 }
 
 function writeStubGit(root: string, pushStderr: string, pushExitCode: number): string {
+  // The stderr text is written to a sidecar file and cat'ed, never
+  // interpolated into the shell script, so a future message containing
+  // shell metacharacters cannot execute during the test run.
   const stubPath = path.join(root, "stub-git.sh");
+  const stderrPath = path.join(root, "stub-git-stderr.txt");
+  writeFileSync(stderrPath, `${pushStderr}\n`, "utf8");
   writeFileSync(
     stubPath,
     [
       "#!/bin/sh",
       'if [ "$1" = "push" ]; then',
-      `  echo "${pushStderr}" >&2`,
+      `  cat "${stderrPath}" >&2`,
       `  exit ${pushExitCode}`,
       "fi",
       'exec git "$@"',

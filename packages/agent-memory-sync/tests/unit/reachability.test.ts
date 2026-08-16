@@ -26,12 +26,18 @@ const {
   deriveProbeCommand
 } = require("../../src/memory-sync/reachability");
 
+const createdSandboxes: string[] = [];
+test.after(() => {
+  for (const dir of createdSandboxes) rmSync(dir, { recursive: true, force: true });
+});
+
 function sandbox(name: string): string {
   const root = path.join(
     tmpdir(),
     `agent-memory-sync-reachability-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
   );
   mkdirSync(root, { recursive: true });
+  createdSandboxes.push(root);
   return root;
 }
 
