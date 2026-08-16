@@ -167,6 +167,10 @@ test('parseFrontmatterYaml: ok, no-delimiter, and yaml-error outcomes are pinned
     description: 'y',
     type: 'reference',
   });
+  // `body` is the raw, unprocessed capture (no trim/strip): applier.ts's
+  // planChange consumes this directly and applies its own normalization on
+  // top (see tests/applier.test.ts's body-normalization tests).
+  assert.equal((ok as { body: string }).body, 'body\n');
 
   const noDelimiter = parseFrontmatterYaml('# heading only, no frontmatter\n');
   assert.deepEqual(noDelimiter, { ok: false, kind: 'no-delimiter' });
@@ -178,6 +182,14 @@ test('parseFrontmatterYaml: ok, no-delimiter, and yaml-error outcomes are pinned
     (yamlError as { detail: string }).detail.length > 0,
     'yaml-error carries a non-empty detail message',
   );
+  // `error` carries the original caught exception (not just its message):
+  // applier.ts's planChange rethrows it verbatim to preserve the pre-dedup
+  // thrown-error identity (its `${String(err)}` starts with the class name,
+  // e.g. "YAMLParseError:", not a generic "Error:").
+  const rawError = (yamlError as { error: unknown }).error;
+  assert.ok(rawError instanceof Error, 'error is the original Error instance');
+  assert.match(String(rawError), /^YAMLParseError: /);
+  assert.equal((rawError as Error).message, (yamlError as { detail: string }).detail);
 });
 
 test('MEMORY.md is skipped by the loader', () => {

@@ -18,6 +18,43 @@ const VALID_TYPES: ReadonlySet<string> = new Set([
   'reference',
 ]);
 
+type FrontmatterYamlResult =
+  | { ok: true; raw: unknown; body: string }
+  | { ok: false; kind: 'no-delimiter' }
+  | { ok: false; kind: 'yaml-error'; detail: string; error: unknown };
+
+// The single frontmatter delimiter-match-plus-YAML-parse step, shared by
+// every consumer that needs it: parseMemoryFileWithReason below delegates
+// to this and layers its own field-requirement validation on top (read
+// path, hot loop); lint/drift.ts's scanMemories consumes it directly for
+// drift-specific field checks, including on shapes parseMemoryFileWithReason
+// itself would reject (e.g. unknown type; drift still needs signal on those
+// files); src/tag/applier.ts's planChange consumes it on the write path and
+// layers its own (different) body normalization on top.
+// `body` is the raw, unprocessed capture group 2 (whatever text follows the
+// closing `---` line, before any trim/strip): each consumer normalizes it
+// its own way (parseMemoryFileWithReason below `.trim()`s it,
+// applier.ts's planChange strips only a single leading newline so mid-body
+// blank lines and trailing whitespace survive the write-path round trip).
+// `error` on the yaml-error branch carries the original caught exception
+// (not just its stringified `.message`) so a consumer that must reproduce
+// the pre-dedup thrown-error identity verbatim (applier.ts's planChange,
+// whose YAML parse failures were previously an uncaught `parseYaml()`
+// throw propagating to cli.ts's per-file try/catch) can rethrow it as-is;
+// `detail` remains the string-only summary the original drift.ts consumer
+// uses.
+function parseFrontmatterYaml(source: string): FrontmatterYamlResult {
+  const match = FRONTMATTER_RE.exec(source);
+  if (!match) return { ok: false, kind: 'no-delimiter' };
+  try {
+    const raw = parseYaml(match[1]);
+    return { ok: true, raw, body: match[2] };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, kind: 'yaml-error', detail, error: err };
+  }
+}
+
 type ParseResult =
   | {
       ok: true;
@@ -35,21 +72,19 @@ type ParseResult =
   | { ok: false; reason: string };
 
 function parseMemoryFileWithReason(path: string, source: string): ParseResult {
-  const match = FRONTMATTER_RE.exec(source);
-  if (!match) {
-    return { ok: false, reason: 'no YAML frontmatter delimiter (`---`) found' };
+  const parsed = parseFrontmatterYaml(source);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      reason:
+        parsed.kind === 'no-delimiter'
+          ? 'no YAML frontmatter delimiter (`---`) found'
+          : `YAML parse error: ${parsed.detail}`,
+    };
   }
 
-  const frontmatterRaw = match[1];
-  const body = (match[2] ?? '').trim();
-
-  let fm: MemoryFrontmatter;
-  try {
-    fm = parseYaml(frontmatterRaw) as MemoryFrontmatter;
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: `YAML parse error: ${detail}` };
-  }
+  const fm = parsed.raw as MemoryFrontmatter;
+  const body = parsed.body.trim();
 
   if (!fm || typeof fm !== 'object') {
     return { ok: false, reason: 'frontmatter is not a YAML object' };
@@ -92,36 +127,6 @@ function parseMemoryFileWithReason(path: string, source: string): ParseResult {
 function parseMemoryFile(path: string, source: string): Memory | null {
   const result = parseMemoryFileWithReason(path, source);
   return result.ok ? result.memory : null;
-}
-
-type FrontmatterYamlResult =
-  | { ok: true; raw: unknown }
-  | { ok: false; kind: 'no-delimiter' }
-  | { ok: false; kind: 'yaml-error'; detail: string };
-
-// Additive, read-only-consumer export: extracts and YAML-parses ONLY the
-// frontmatter block (no field-requirement validation), reusing the exact
-// same FRONTMATTER_RE and parseYaml() call parseMemoryFileWithReason above
-// uses. Exists so lint/drift.ts's scanMemories can stop carrying its own
-// copy of that regex/parse step while still running its own
-// drift-specific field checks (description required, name/type must be
-// strings) on the raw parsed value, including for shapes
-// parseMemoryFileWithReason itself would reject (e.g. unknown type); drift
-// needs signal on those files, parseMemoryFileWithReason does not
-// expose the raw value on its own reject paths. Purely additive: does not
-// touch parseMemoryFileWithReason or loadMemoriesFromDir, both unchanged.
-// No `body` field: the only consumer (drift.ts) never reads the body, so it
-// is not part of this result shape.
-function parseFrontmatterYaml(source: string): FrontmatterYamlResult {
-  const match = FRONTMATTER_RE.exec(source);
-  if (!match) return { ok: false, kind: 'no-delimiter' };
-  try {
-    const raw = parseYaml(match[1]);
-    return { ok: true, raw };
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { ok: false, kind: 'yaml-error', detail };
-  }
 }
 
 // The sibling loadMemoriesFromDirWithRejects below mirrors this walk; keep file selection in sync.
