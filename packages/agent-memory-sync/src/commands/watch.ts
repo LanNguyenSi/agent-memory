@@ -287,11 +287,25 @@ function registerWatchCommand(program: import("commander").Command): void {
       // inotify-backed watcher (Linux) that scan is not instantaneous, and a
       // filesystem write issued before it completes can be silently missed —
       // chokidar has not finished wiring up inotify watch descriptors for
-      // every (possibly nested) watched path yet. A caller that treats this
-      // line as the "watch is now armed" signal (e.g. an integration test
-      // triggering an edit) is therefore safe on both fsevents (macOS) and
-      // inotify (Linux) once the line has actually printed, where a fixed
-      // sleep() before that point is not.
+      // every (possibly nested) watched path yet. This line is a large
+      // improvement over an unconditional sleep() before it, but is NOT a
+      // complete guarantee on macOS: this package's chokidar version (^4.0.3)
+      // depends on neither `fsevents` nor `usePolling` by default (v4 dropped
+      // the optional `fsevents` native dependency entirely and watches
+      // exclusively via Node's own fs.watch/fs.watchFile), and on macOS a
+      // freshly-created fs.watch() can still miss a write issued immediately
+      // after it returns — a currently-unfixed Node.js/libuv behavior
+      // (nodejs/node#52601, "Not possible to know when fs.watch has started
+      // on macOS"), independent of chokidar's own initial-scan/'ready'
+      // bookkeeping. Measured in tests/helpers/watch-process.ts's "ROOT
+      // CAUSE" comment (agent-tasks f876dff6): a write 0ms after the watch
+      // is reported armed is lost 100% of the time in isolation, on both a
+      // bare fs.watch() and this exact chokidar config, idle or under load;
+      // any real delay (>=5ms measured here) resolves it 100% of the time.
+      // The mitigation for that residual race lives entirely on the test
+      // side (retrying a stalled trigger edit rather than waiting longer),
+      // since Node exposes no stronger "truly armed" signal this line could
+      // wait for instead.
       watcher.on("ready", () => {
         writeInfo(
           `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,

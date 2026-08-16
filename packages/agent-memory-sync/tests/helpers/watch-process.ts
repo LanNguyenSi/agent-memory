@@ -134,14 +134,112 @@ const READY_TIMEOUT_MS = 10000;
 // delivery failure under CPU contention, pre-existing at the merge base
 // under the OLD fixed whole-tick budget — no inactivity-budget size and no
 // additional progress signal can fix it, because the signal this task added
-// never gets a chance to fire when the edit itself is never observed. This
-// failure class is therefore out of this task's scope; a follow-up task to
-// investigate chokidar's fs-event delivery under load will be filed by the
-// orchestrator. A SIGSTOP'd child (this file's original reason for
-// existing, see the module comment above) still fails reliably at this
-// budget and well under this package's CI job's 10-minute timeout: no
-// further progress signal is possible once the process itself is frozen, so
-// inactivity accumulates exactly as it did under the old whole-tick model.
+// never gets a chance to fire when the edit itself is never observed. A
+// SIGSTOP'd child (this file's original reason for existing, see the module
+// comment above) still fails reliably at this budget and well under this
+// package's CI job's 10-minute timeout: no further progress signal is
+// possible once the process itself is frozen, so inactivity accumulates
+// exactly as it did under the old whole-tick model.
+//
+// ROOT CAUSE (follow-up task agent-tasks f876dff6, closing the item above):
+// isolated outside chokidar entirely, in a standalone script with NO test
+// harness, NO tsx, NO child-process spawn — just `chokidar.watch(file,
+// { ignoreInitial: true, awaitWriteFinish: {...} })` (this package's exact
+// options) plus a BARE `fs.watch(file)` armed at the same moment, side by
+// side. Both miss a `fs.writeFileSync` issued 0ms after the watch is
+// reported armed, 0/10 trials, with or without 12 `yes`-worker synthetic CPU
+// load on this 12-core Mac; both catch it 100% of the time (10/10, idle AND
+// under load) once the write is delayed even 5ms past arming. This is not a
+// chokidar bug and not specific to this package: it is Node's own
+// documented, currently-unfixed macOS behavior — a watcher created with
+// `fs.watch()` does not necessarily start receiving events immediately, so a
+// write issued very soon after creation can be silently and PERMANENTLY
+// missed for that write, with no API to learn when the watch has actually
+// gone live (nodejs/node#52601, "Not possible to know when fs.watch has
+// started on macOS"; chokidar uses kqueue for files and FSEvents for
+// directories on macOS, both subject to the same class of race). Once lost,
+// the write's event never arrives — waiting longer never helps, matching
+// exactly why raising INACTIVITY_TIMEOUT_MS (90000ms -> 150000ms) made the
+// PR #102 load-scenario pass rate WORSE, not better (see above): a bigger
+// budget cannot recover an event that was never going to arrive.
+// waitForWatcherReady()'s own 25ms poll usually leaves enough incidental
+// margin past the moment chokidar's internal fs.watch() call for a given
+// path actually returns that this race rarely bites — the 30-40% figure
+// above is that margin occasionally collapsing under real contention
+// (competing processes' scheduling reordering the two sides closer
+// together), not the race itself getting wider: the delay-sweep above found
+// a clean, load-INDEPENDENT threshold (always lost at 0ms, always caught at
+// >=5-25ms, idle or under the 12-worker load scenario alike). That eliminates
+// the "chokidar polling vs fsevents" and "editor atomic-write visibility"
+// candidates from this task's brief: chokidar 4.x (this package's version)
+// depends on neither `fsevents` nor polling by default (its
+// package.json has no `fsevents` dependency at all — that optional native
+// module was dropped when v4 rewrote to use Node's own fs.watch/fs.watchFile
+// exclusively), and every trigger edit here already writes in place via
+// `fs.writeFileSync` on the SAME inode (tests/helpers/cli.ts's `writeText`),
+// never an atomic rename-over-write, so neither was ever actually in play on
+// this codepath.
+//
+// FIX: since Node exposes no "the watch is now truly live" signal to poll
+// (the linked issue is open, no upstream fix available) and this package's
+// own INACTIVITY_TIMEOUT_MS is explicitly out of scope, the mitigation lives
+// entirely on the test side, per this task's brief: applyTriggerWithRetry()
+// below applies a trigger edit, waits a short, fixed window
+// (TRIGGER_ARM_CONFIRM_MS, far shorter than INACTIVITY_TIMEOUT_MS) for ANY
+// new progress signal, and if none appears, re-applies the SAME edit — a
+// FRESH write, not a wait, is what actually recovers here, exactly as the
+// delay-sweep above demonstrates (a second write issued any real time after
+// the first is always observed). runWatchTick uses it for every one-shot
+// trigger edit; the two direct offline/online spawns in
+// watch-mirror-delete.test.ts's queue-replay test call it explicitly for the
+// same reason. A bare `fs.rmSync` retried this way is a silent no-op on its
+// second attempt (nothing left to delete), so the one delete-only trigger
+// edit (watch-restore.test.ts's "watch records deletions as remove entries")
+// and the one delete alongside a write (watch-mirror-delete.test.ts's
+// negative-control test) use cli.ts's `deleteRetrySafe` instead of a bare
+// `rmSync`, which recreates the file immediately before deleting it so a
+// retry always has a fresh delete to reissue — see that helper's own comment
+// for why this is equivalent to a bare delete from watch.ts's and
+// performPush's point of view.
+//
+// MEASURED RESULT AND A SECOND, DIFFERENT OPEN MECHANISM (still agent-tasks
+// f876dff6): applyTriggerWithRetry measurably fixes the mechanism above —
+// verified in isolation (a standalone repro with no test harness: 0/10 at
+// 0ms delay, 10/10 at >=5ms, idle or under 10-12 concurrent `yes` workers) —
+// but an interleaved matched-control run of this file's 3 watch integration
+// test files (both WITH extra synthetic `yes` load and, matching the
+// eb798875 review's actual methodology more closely, WITHOUT it — just this
+// suite's own natural node:test file-level concurrency) still failed on
+// BOTH arms, repeatedly landing on the SAME two tests ("watch tick queues
+// locally...", "watch tick with a missing required syncPaths entry...").
+// Branch: 0/4 green across those runs; the one control-arm run in the
+// series was also red. Digging into one such failure's raw output found
+// something that changes the diagnosis for at least part of this residual
+// class: the "stderr so far" text embedded in withTickDeadline's own
+// rejection message showed only the ready line (as expected for a lost
+// event), but MORE stderr — including "watch tick pushing snapshot" and
+// "watch tick queued locally instead of pushing" — appeared in the test
+// framework's own failure output immediately after that rejection fired.
+// That is only possible if the child's pipe write reached the OS before the
+// SIGKILL, and node's own 'data' event for it was simply not yet processed
+// by THIS (parent, test-runner) process's event loop at the moment
+// withTickDeadline's poll last checked — i.e. the tick had genuinely
+// progressed (possibly even finished), and it was the PARENT's own
+// stderr-pipe read, not the child's fs-event delivery, that was delayed
+// past the budget. Under the documented load scenario the parent
+// (node:test worker) process is itself one of many CPU-starved processes,
+// so this is plausible on its own terms, independent of the arming race
+// above. This is NOT something applyTriggerWithRetry can fix — retrying the
+// edit does nothing for a tick that already succeeded but whose own
+// completion signal the parent hasn't gotten around to reading yet — and it
+// was not distinguished from the arming race in this task's original brief
+// or its predecessor's measurements. Left open for a follow-up: confirm
+// this second mechanism with dedicated instrumentation (e.g. logging
+// wall-clock gaps between a child's own write() and this process's 'data'
+// handler firing for it under the same load), and decide whether the right
+// fix is observing tick completion a different way (e.g. the child's own
+// exit code/state-store side effects) rather than polling piped stderr text
+// at all.
 const INACTIVITY_TIMEOUT_MS = 90000;
 // Poll cadence for withTickDeadline's inactivity mode — cheap enough (a
 // regex match count over an in-memory string) to run this often without
@@ -163,6 +261,93 @@ const ABSOLUTE_CAP_MULTIPLIER = 2.5;
 // across polls.
 function countProgressSignals(text: string): number {
   return (text.match(PROGRESS_SIGNAL_PATTERN) || []).length;
+}
+
+// How long applyTriggerWithRetry waits, after applying a trigger edit, for
+// PROGRESS_SIGNAL_PATTERN's match count to increase before concluding the
+// edit's filesystem event was lost to the macOS fs.watch arming race
+// documented above and re-applying it. 3000ms comfortably covers every
+// debounceMs value used across this suite's watch-spawning tests (300-400ms)
+// plus normal performPush startup latency.
+const TRIGGER_ARM_CONFIRM_MS = 3000;
+// Total wall-clock budget applyTriggerWithRetry spends retrying before
+// giving up and handing off to withTickDeadline's own (unmodified) 90s
+// inactivity budget as the final safety net. NOT the same knob as
+// INACTIVITY_TIMEOUT_MS — this bounds only the retry loop below, leaving a
+// comfortable ~20s margin under it for whatever the final attempt's own
+// natural tick processing needs.
+//
+// Revised upward from an initial 3-attempts-of-3000ms design (max ~6-9s of
+// retrying) after that design measurably failed on its very first real
+// matched-control run (agent-tasks f876dff6, this task): 2 of the 3 watch
+// integration test files stalled the full 90000ms with zero progress signal
+// EVER, meaning every one of the 3 attempts' writes was lost, not just the
+// first. The isolated delay-sweep repro above (a single file, no concurrent
+// test-file load) found the race resolves within single-digit milliseconds
+// once ANY margin exists — but that repro did not include this suite's own
+// concurrency: node:test runs multiple test FILES concurrently by default,
+// so the documented load scenario is 10 `yes` workers ON TOP OF 3
+// simultaneously-running watch-spawning integration test files, each
+// spawning its own tree of tsx/node/git child processes. That additional,
+// self-inflicted concurrency (not present in the isolated repro) can
+// apparently keep the arming race's effective window open far longer than a
+// few milliseconds. Rather than assume a specific new number is "enough"
+// without measuring again, this budget is set generously (70000ms — roughly
+// 20-25 retry rounds at the default confirm window) and validated by the
+// same matched-control re-run this comment's own history is built from; see
+// this task's final report for the resulting pass rate at this setting.
+const TRIGGER_RETRY_BUDGET_MS = 70000;
+
+// Poll cadence for applyTriggerWithRetry's confirm wait. Cheap (same regex
+// match count as withTickDeadline's own poll), no measurable effect on tick
+// timing at this cadence, and small relative to the default
+// TRIGGER_ARM_CONFIRM_MS so a confirming signal is noticed promptly rather
+// than sitting unnoticed for most of the window.
+const TRIGGER_CONFIRM_POLL_INTERVAL_MS = 100;
+
+// Applies `triggerEdit`, then waits up to `confirmMs` (or whatever remains
+// of `retryBudgetMs`, if less) for PROGRESS_SIGNAL_PATTERN's match count in
+// `getStderr()` to rise above what it was right before this attempt's edit.
+// If it doesn't, re-applies `triggerEdit` (a FRESH filesystem write/delete,
+// not a wait — see the ROOT CAUSE / FIX comment above for why only a fresh
+// edit can recover from this) and repeats until either a signal is observed
+// or `retryBudgetMs` is exhausted, whichever comes first. The final attempt
+// inside the budget is applied without waiting on it here at all: at that
+// point withTickDeadline's own (unmodified) inactivity poll is already
+// running around this whole call and remains the final, independent safety
+// net regardless of what this function concludes. `confirmMs`/
+// `retryBudgetMs`/`pollIntervalMs` default to this file's calibrated
+// constants (real spawns always use the defaults); they are only
+// parameterized so unit tests can exercise the retry/give-up branches with
+// small numbers instead of the real multi-second windows (see
+// tests/unit/watch-process-trigger-retry.test.ts).
+async function applyTriggerWithRetry(
+  getStderr: () => string,
+  triggerEdit: () => void | Promise<void>,
+  confirmMs: number = TRIGGER_ARM_CONFIRM_MS,
+  retryBudgetMs: number = TRIGGER_RETRY_BUDGET_MS,
+  pollIntervalMs: number = TRIGGER_CONFIRM_POLL_INTERVAL_MS
+): Promise<void> {
+  const overallDeadline = Date.now() + retryBudgetMs;
+  for (;;) {
+    const beforeCount = countProgressSignals(getStderr());
+    await triggerEdit();
+    if (Date.now() >= overallDeadline) {
+      return;
+    }
+    const confirmDeadline = Math.min(Date.now() + confirmMs, overallDeadline);
+    let confirmed = false;
+    while (Date.now() < confirmDeadline) {
+      if (countProgressSignals(getStderr()) > beforeCount) {
+        confirmed = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+    if (confirmed) {
+      return;
+    }
+  }
 }
 
 // How long to wait for a graceful SIGINT/SIGTERM to a watch process group to
@@ -557,7 +742,7 @@ async function runWatchTick(
       child,
       async () => {
         await waitForWatcherReady(() => stderr);
-        await triggerEdit();
+        await applyTriggerWithRetry(() => stderr, triggerEdit);
 
         const exitCode: number = await new Promise((resolve) => {
           child.on("exit", (code: number | null) => resolve(code ?? -1));
@@ -580,6 +765,7 @@ module.exports = {
   waitForWatcherReady,
   withTickDeadline,
   runWatchTick,
+  applyTriggerWithRetry,
   stopWatchProcessGroup,
   INACTIVITY_TIMEOUT_MS,
   ABSOLUTE_CAP_MULTIPLIER
