@@ -66,6 +66,29 @@ declare global {
     body: string;
   }
 
+  /**
+   * One directory-walk entry from src/memory/loader.ts's
+   * loadMemoriesFromDirWithRejects (the read-only sibling walk documented
+   * in the comment above loadMemoriesFromDir): every file the walk visits,
+   * accepted or rejected. Declared globally and independently of loader.ts's
+   * own (narrower) internal ParseResult type, deliberately NOT derived
+   * from it via `Omit`/`Extract`, so a producer-side field rename in
+   * loader.ts must satisfy this contract directly instead of silently
+   * drifting in step with it. `ok` is a real discriminant: consumers
+   * (consolidate/schema-metrics.ts) narrow on `if (!entry.ok)` instead of
+   * asserting `entry.memory!`.
+   */
+  type MemoryScanEntry =
+    | {
+        path: string;
+        id: string;
+        ok: true;
+        memory: Memory;
+        hasTopLevelType: boolean;
+        hasMetadataType: boolean;
+      }
+    | { path: string; id: string; ok: false; reason: string };
+
   interface ToolCall {
     name: string;
     args: Record<string, unknown>;

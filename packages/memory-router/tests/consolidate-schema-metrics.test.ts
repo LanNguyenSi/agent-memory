@@ -16,8 +16,6 @@ interface RawScanEntryLike {
   reason?: string;
   hasTopLevelType?: boolean;
   hasMetadataType?: boolean;
-  hasTopLevelTopics?: boolean;
-  hasMetadataTopics?: boolean;
 }
 
 const STATIC_CORPUS = path.join(__dirname, 'fixtures', 'consolidate', 'corpus');
@@ -41,27 +39,62 @@ test('scanRawFrontmatter: classifies every fixture file ok/rejected with the exp
   const dupeA = byId.get('feedback_dupe_a')!;
   assert.equal(dupeA.ok, true);
   assert.equal(dupeA.hasTopLevelType, true);
-  assert.equal(dupeA.hasTopLevelTopics, true);
   assert.equal(dupeA.hasMetadataType, false);
-  assert.equal(dupeA.hasMetadataTopics, false);
 
   const legacyTagged = byId.get('reference_legacy_tagged')!;
   assert.equal(legacyTagged.ok, true);
   assert.equal(legacyTagged.hasTopLevelType, false);
   assert.equal(legacyTagged.hasMetadataType, true);
-  assert.equal(legacyTagged.hasTopLevelTopics, true);
 
   const legacyUntagged = byId.get('user_legacy_untagged')!;
   assert.equal(legacyUntagged.ok, true);
   assert.equal(legacyUntagged.hasTopLevelType, false);
   assert.equal(legacyUntagged.hasMetadataType, true);
-  assert.equal(legacyUntagged.hasTopLevelTopics, false);
-  assert.equal(legacyUntagged.hasMetadataTopics, false);
 });
 
 test('scanRawFrontmatter: an unreadable dir returns an empty list rather than throwing (mirrors loader.ts)', () => {
   const missing = path.join(os.tmpdir(), 'memory-router-schema-metrics-does-not-exist');
   assert.deepEqual(scanRawFrontmatter(missing), []);
+});
+
+// The walk's per-file stat/read failure branches (loader.ts's
+// loadMemoriesFromDirWithRejects) were otherwise inert in this suite:
+// nothing in the corpus ever failed stat() or readFileSync() for a file
+// that passed the .md filter, so those two catch blocks never ran under
+// test. A dangling symlink fails stat() (ENOENT on the target); an
+// unreadable file (mode 0) fails readFileSync() while stat() still
+// succeeds. Both must surface as loaderRejects entries with the
+// documented reason prefix.
+test('buildSchemaMetrics: stat and read failures on the walk surface as loaderRejects (dangling symlink, unreadable file)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-schema-metrics-errs-'));
+  const isRoot = process.getuid?.() === 0;
+  try {
+    fs.symlinkSync(path.join(dir, 'missing-target'), path.join(dir, 'zz.md'));
+    if (!isRoot) {
+      // root ignores file-mode read permission entirely, so this branch is
+      // unreachable when running as root: skip rather than false-negative.
+      fs.writeFileSync(
+        path.join(dir, 'unreadable.md'),
+        '---\nname: a\ntype: feedback\n---\nbody\n',
+      );
+      fs.chmodSync(path.join(dir, 'unreadable.md'), 0o000);
+    }
+
+    const metrics = buildSchemaMetrics(dir);
+    const reasonByName = new Map(
+      metrics.loaderRejects.map((r: { path: string; reason: string }) => [
+        path.basename(r.path),
+        r.reason,
+      ]),
+    );
+
+    assert.match(reasonByName.get('zz.md') as string, /^stat failed: /);
+    if (!isRoot) {
+      assert.match(reasonByName.get('unreadable.md') as string, /^read failed: /);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('buildSchemaMetrics: counts untagged/legacy-format/loader-rejects against the fixture corpus', () => {

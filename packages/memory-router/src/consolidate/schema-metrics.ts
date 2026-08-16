@@ -45,11 +45,6 @@ interface RawScanEntry {
   /** Only set when ok === true. */
   hasTopLevelType?: boolean;
   hasMetadataType?: boolean;
-  /** Non-empty-array presence checks, independent of precedence. Kept for
-   * their existing, narrower meaning; `topicsShape` below is what
-   * buildSchemaMetrics actually buckets on. */
-  hasTopLevelTopics?: boolean;
-  hasMetadataTopics?: boolean;
   /**
    * loader.ts-mirrored topics classification (see the file-level comment):
    *   'tagged'        the resolved value is a non-empty array
@@ -63,40 +58,30 @@ interface RawScanEntry {
 // Read-only directory walk built on loader.ts's own loadMemoriesFromDirWithRejects
 // (same file selection, same per-file parse/validation), reshaped into the
 // reject-reason-plus-topics-shape view this module's consumers expect.
+// The callback is annotated with the ambient MemoryScanEntry (types.d.ts),
+// not a local structural guess: `ok` is a real discriminant there, so
+// `if (!entry.ok)` narrows cleanly and the accepted branch's `entry.memory`
+// needs no non-null assertion.
 function scanRawFrontmatter(dir: string): RawScanEntry[] {
-  return loadMemoriesFromDirWithRejects(dir).map(
-    (entry: {
-      path: string;
-      id: string;
-      ok: boolean;
-      reason?: string;
-      memory?: Memory;
-      hasTopLevelType?: boolean;
-      hasMetadataType?: boolean;
-      hasTopLevelTopics?: boolean;
-      hasMetadataTopics?: boolean;
-    }): RawScanEntry => {
-      if (!entry.ok) {
-        return { path: entry.path, id: entry.id, ok: false, reason: entry.reason };
-      }
-      const resolvedTopics = entry.memory!.frontmatter.topics;
-      const topicsShape: 'tagged' | 'untagged' | 'invalid-shape' = !Array.isArray(resolvedTopics)
-        ? 'invalid-shape'
-        : resolvedTopics.length > 0
-          ? 'tagged'
-          : 'untagged';
-      return {
-        path: entry.path,
-        id: entry.id,
-        ok: true,
-        hasTopLevelType: entry.hasTopLevelType,
-        hasMetadataType: entry.hasMetadataType,
-        hasTopLevelTopics: entry.hasTopLevelTopics,
-        hasMetadataTopics: entry.hasMetadataTopics,
-        topicsShape,
-      };
-    },
-  );
+  return loadMemoriesFromDirWithRejects(dir).map((entry: MemoryScanEntry): RawScanEntry => {
+    if (!entry.ok) {
+      return { path: entry.path, id: entry.id, ok: false, reason: entry.reason };
+    }
+    const resolvedTopics = entry.memory.frontmatter.topics;
+    const topicsShape: 'tagged' | 'untagged' | 'invalid-shape' = !Array.isArray(resolvedTopics)
+      ? 'invalid-shape'
+      : resolvedTopics.length > 0
+        ? 'tagged'
+        : 'untagged';
+    return {
+      path: entry.path,
+      id: entry.id,
+      ok: true,
+      hasTopLevelType: entry.hasTopLevelType,
+      hasMetadataType: entry.hasMetadataType,
+      topicsShape,
+    };
+  });
 }
 
 interface SchemaMetrics {

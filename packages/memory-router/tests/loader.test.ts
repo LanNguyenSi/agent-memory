@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
-const { loadMemoriesFromDir } = require('../src/memory/loader');
+const { loadMemoriesFromDir, parseMemoryFileWithReason } = require('../src/memory/loader');
 
 const fixturesDir = path.join(__dirname, 'fixtures', 'memories');
 
@@ -113,6 +113,41 @@ test('unknown or non-string type is rejected with a debug warning', () => {
     delete process.env.MEMORY_ROUTER_DEBUG;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// Direct unit test for parseMemoryFileWithReason (required export, see
+// module.exports): pins the individual reject-reason strings in isolation,
+// independent of any directory walk.
+test('parseMemoryFileWithReason: reject reasons are pinned for each rejection cause', () => {
+  assert.deepEqual(parseMemoryFileWithReason('x.md', '# heading only, no frontmatter\n'), {
+    ok: false,
+    reason: 'no YAML frontmatter delimiter (`---`) found',
+  });
+
+  const brokenYaml = parseMemoryFileWithReason('x.md', '---\n: : :\nname: x\n---\nbody\n');
+  assert.equal(brokenYaml.ok, false);
+  assert.match((brokenYaml as { reason: string }).reason, /^YAML parse error: /);
+
+  assert.deepEqual(
+    parseMemoryFileWithReason('x.md', '---\ntype: reference\ndescription: x\n---\nbody\n'),
+    { ok: false, reason: "missing required field 'name'" },
+  );
+
+  assert.deepEqual(
+    parseMemoryFileWithReason('x.md', '---\nname: x\ndescription: x\n---\nbody\n'),
+    { ok: false, reason: "missing required field 'type'" },
+  );
+
+  assert.deepEqual(
+    parseMemoryFileWithReason(
+      'x.md',
+      '---\nname: x\ndescription: x\ntype: howto\n---\nbody\n',
+    ),
+    {
+      ok: false,
+      reason: 'unknown type "howto" (expected: user, feedback, project, reference)',
+    },
+  );
 });
 
 test('MEMORY.md is skipped by the loader', () => {

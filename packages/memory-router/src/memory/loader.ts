@@ -29,14 +29,8 @@ type ParseResult =
        */
       hasTopLevelType: boolean;
       hasMetadataType: boolean;
-      hasTopLevelTopics: boolean;
-      hasMetadataTopics: boolean;
     }
   | { ok: false; reason: string };
-
-function hasNonEmptyArray(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0;
-}
 
 function parseMemoryFileWithReason(path: string, source: string): ParseResult {
   const match = FRONTMATTER_RE.exec(source);
@@ -90,8 +84,6 @@ function parseMemoryFileWithReason(path: string, source: string): ParseResult {
     memory: { id, path, frontmatter, body },
     hasTopLevelType: Boolean(fm.type),
     hasMetadataType: Boolean(fm.metadata?.type),
-    hasTopLevelTopics: hasNonEmptyArray(fm.topics),
-    hasMetadataTopics: hasNonEmptyArray(fm.metadata?.topics),
   };
 }
 
@@ -100,6 +92,7 @@ function parseMemoryFile(path: string, source: string): Memory | null {
   return result.ok ? result.memory : null;
 }
 
+// The sibling loadMemoriesFromDirWithRejects below mirrors this walk; keep file selection in sync.
 function loadMemoriesFromDir(dir: string): Memory[] {
   const memories: Memory[] = [];
   let entries: string[];
@@ -154,19 +147,18 @@ function loadMemoriesFromDir(dir: string): Memory[] {
   return memories;
 }
 
-type ScanEntry =
-  | ({ path: string; id: string; ok: true } & Omit<Extract<ParseResult, { ok: true }>, 'ok'>)
-  | { path: string; id: string; ok: false; reason: string };
-
 // Same directory walk as loadMemoriesFromDir (readdir, sort, *.md filter,
 // MEMORY.md exclusion, stat, read, parse), but reports every file's outcome
 // instead of silently dropping rejects: for consumers (consolidate/
 // schema-metrics.ts) that need reject reasons and the raw-shape flags
 // alongside the accepted set. loadMemoriesFromDir itself is untouched and
 // keeps its own debugWarn-and-drop behavior; this is an additive sibling,
-// not a replacement.
-function loadMemoriesFromDirWithRejects(dir: string): ScanEntry[] {
-  const out: ScanEntry[] = [];
+// not a replacement. Returns the ambient MemoryScanEntry[] (types.d.ts)
+// rather than a type derived from this file's own ParseResult, so a
+// producer/consumer field-name drift is a typecheck error at construction
+// time here, not a silent structural pass at the consumer.
+function loadMemoriesFromDirWithRejects(dir: string): MemoryScanEntry[] {
+  const out: MemoryScanEntry[] = [];
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -190,7 +182,8 @@ function loadMemoriesFromDirWithRejects(dir: string): ScanEntry[] {
       stat = statSync(path);
     } catch (err) {
       const reason = `stat failed: ${String(err)}`;
-      debugWarn(`skipped ${path}: ${reason}`);
+      const detail = err instanceof Error ? err.message : String(err);
+      debugWarn(`skipped ${path}: stat failed: ${detail}`);
       out.push({ path, id, ok: false, reason });
       continue;
     }
@@ -201,7 +194,8 @@ function loadMemoriesFromDirWithRejects(dir: string): ScanEntry[] {
       source = readFileSync(path, 'utf8');
     } catch (err) {
       const reason = `read failed: ${String(err)}`;
-      debugWarn(`skipped ${path}: ${reason}`);
+      const detail = err instanceof Error ? err.message : String(err);
+      debugWarn(`skipped ${path}: read failed: ${detail}`);
       out.push({ path, id, ok: false, reason });
       continue;
     }
