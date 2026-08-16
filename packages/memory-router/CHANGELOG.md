@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `memory-router lint --semantic`'s missing-pair embed call now wraps errors with `describeEmbedError` (re-exported from `src/embed/indexer.ts`), the same provider/model/base-URL enrichment `rebuildIndex` and `semanticSearch` already had. Previously a raw fetch/HTTP failure (e.g. Node's literal `The operation was aborted due to timeout` when `AbortSignal.timeout` fires) reached the CLI with no indication of which provider/model/endpoint it came from (reviewer finding from PR #103, 372ed7ab). This failure stays fail-closed (`lint` exits 1), an intentional asymmetry with the fail-open "no provider configured" case (missing `OPENAI_API_KEY`, exit 0 on the regex-only report), now documented in `src/lint/conflicts.ts` and the README's `--semantic` section: a missing provider is a chosen configuration state, while an embed call that errors mid-flight signals a real failure in a provider the operator did configure. New test in `tests/lint-conflicts-embed-budget.test.ts` pins the enriched error text end-to-end through a mocked `AbortSignal.timeout` fetch abort.
+
 ## [0.7.0] - 2026-08-16
 
 **Upgrade note (behavior-changing default for every Ollama consumer):** the

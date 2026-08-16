@@ -39,7 +39,7 @@ const {
   INDEX_DEFAULT_TIMEOUT_MS,
 } = require('../embed/provider');
 const { openIndex } = require('../embed/index-store');
-const { indexPath, EMBED_DIMENSIONS } = require('../embed/indexer');
+const { indexPath, EMBED_DIMENSIONS, describeEmbedError } = require('../embed/indexer');
 
 export type ConflictSeverity = 'info' | 'high';
 
@@ -535,7 +535,38 @@ export async function lintMemoryDirForConflictsWithSemantic(
         const m = byMemoryId.get(id);
         return m ? buildPairEmbedInput(m) : '';
       });
-      const vectors = await embedFn(inputs);
+      let vectors: number[][];
+      try {
+        vectors = await embedFn(inputs);
+      } catch (err) {
+        // Parity with rebuildIndex's per-batch embedBatch calls
+        // (embed/indexer.ts): a raw fetch/HTTP failure (e.g. Node's literal
+        // "The operation was aborted due to timeout" when AbortSignal.timeout
+        // fires) used to reach the CLI with no indication of which
+        // provider/model/endpoint it came from (372ed7ab). Only enrich when
+        // this call actually went through our own embedBatch seam
+        // (opts.embedFn unset): a caller-supplied embedFn never contacts
+        // `cfg`'s provider/model/baseUrl, so attributing its error to that
+        // config would misattribute the failure even on a run where `cfg`
+        // itself is resolvable (the `!opts.embedFn && !cfg` guard above only
+        // rules out the no-provider case, not a caller-supplied embedFn
+        // alongside a resolvable cfg).
+        //
+        // Unlike rebuildIndex, this failure is fail-closed by design: it
+        // propagates out of lintMemoryDirForConflictsWithSemantic and the
+        // CLI (`runLint` in src/cli.ts) exits 1. That is a deliberate
+        // asymmetry with the *missing provider* case just above (no
+        // OPENAI_API_KEY, no --semantic embedFn override), which fails
+        // open with a stderr warning and exit 0 on the regex-only report.
+        // Missing provider is a configuration state the operator already
+        // chose (no key set, semantic path intentionally unavailable);
+        // an embed call that started and then errored (timeout, HTTP
+        // failure, malformed response) is a live signal something is
+        // actually broken for a provider the operator DID configure, and
+        // silently downgrading that to the regex-only report would hide a
+        // real failure behind a misleadingly clean CI run.
+        throw !opts.embedFn && cfg ? describeEmbedError(err, cfg) : err;
+      }
       if (vectors.length !== batchIds.length) {
         // Fail-open: embedder returned a malformed batch. Don't upgrade
         // anything; the regex pass already gave a useful signal.
