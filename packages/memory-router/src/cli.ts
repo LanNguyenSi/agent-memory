@@ -640,6 +640,10 @@ async function runLint(
     if (json && checks.drift) process.stderr.write(formatReportText(report));
     else process.stdout.write(formatReportText(report));
     if (report.hits.length > 0) exitCode = 1;
+    // An invalid topics.yml is a broken vocabulary, not just an unknown-topic
+    // hit; it must fail CI even when the built-in-default fallback happens to
+    // scan clean, otherwise a purely exit-code-driven caller never sees it.
+    if (report.vocabularyError) exitCode = 1;
   }
 
   if (checks.conflicts) {
