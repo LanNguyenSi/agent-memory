@@ -30,7 +30,33 @@ const path = require("node:path");
 // helper passes --verbose.
 const WATCH_READY_PATTERN = /watching \d+ path\(s\) under/;
 const READY_TIMEOUT_MS = 10000;
-const TICK_TIMEOUT_MS = 20000;
+// Root cause of the 2026-08-14 CI failure (run 31775406978, attempt 1, "watch
+// tick queues locally when the remote is unreachable, then replays the queue
+// once the remote is reachable again"): this was the fixed 20000ms budget
+// below, not a hang. A whole tick (process spawn, chokidar arming, the edit's
+// fs-event latency, and, when reached, git fetch/commit/push) is CPU-bound
+// throughout, so it inflates under the same CI contention this file's other
+// comments already document for watcher arming (concurrent watch-spawning
+// test files sharing a 2-core runner). Reproduced locally (agent-tasks
+// 90388c75) by racing the unmodified suite against `yes >/dev/null` CPU
+// hogs sharing this machine's cores with the test run, at a load level sized
+// to this machine's core count (12 extra `yes` workers on a 12-logical-core
+// Mac — roughly the same per-core oversubscription a 2-core CI runner sees
+// from this file's own concurrent watch-spawning test files). At this load
+// level a fixed budget is not just tight, it is structurally the wrong
+// mechanism: the unmodified 20000ms budget failed 1/8 runs (single failure
+// at 20900ms, 900ms over) and, when the budget was first raised 3x to
+// 60000ms as a trial, a 10-run rerun at the SAME load still failed 1/10
+// (60878ms, 878ms over) — the same ~900ms straggler recurring just past
+// whatever cutoff was in force. No fixed number can categorically rule this
+// out; it is sized here (see the value below) with enough margin over both
+// measured overshoots that this specific class of straggler passes 10/10 in
+// practice, while still failing a genuinely stuck child (this file's
+// original reason for existing, see the module comment above) in well under
+// this package's CI job's 10-minute timeout instead of hanging it. A CI
+// retry was considered and rejected: it would mask a real regression behind
+// a green rerun instead of fixing the false failure at its source.
+const TICK_TIMEOUT_MS = 90000;
 
 // How long to wait for a graceful SIGINT/SIGTERM to a watch process group to
 // take effect before escalating to SIGKILL — see stopWatchProcessGroup below.
