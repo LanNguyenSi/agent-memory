@@ -62,6 +62,38 @@ test.after(() => {
   fs.rmSync(NOVOCAB_DIR, { recursive: true, force: true });
 });
 
+// minSemanticScore's un-overridden default is now model/provider
+// CONDITIONAL (src/gates/confidence.ts's resolveDefaultMinSemanticScore),
+// not a flat 0.5 — it depends on the ambient embedding-provider env
+// (OPENAI_API_KEY, MEMORY_ROUTER_EMBED_PROVIDER,
+// MEMORY_ROUTER_OLLAMA_EMBED_MODEL) at test-run time, which this suite
+// does not control and which differs between a machine with a local Ollama
+// daemon and CI. Every test below predates that feature and pins concrete
+// floor-relative scores (0.5, 0.52, 0.6, 0.9, ...) against the OLD flat 0.5
+// default; without this pin, a runner with no OPENAI_API_KEY auto-detects
+// Ollama and resolves a 0.78 default instead, silently dropping most of
+// those scores before the blend and breaking dozens of unrelated
+// assertions. Pinning MEMORY_ROUTER_BLEND_MIN_SEMANTIC=0.5 for the whole
+// file keeps those numbers meaningful (this suite is about topic/recency/
+// type blend behavior, not about the floor-resolution feature itself) —
+// it now exercises the "explicit override always wins" path rather than a
+// literal default; the conditional-default RESOLUTION itself is pinned
+// separately in tests/confidence.test.ts. Tests below that manage
+// MEMORY_ROUTER_BLEND_MIN_SEMANTIC themselves (search this file) save and
+// restore relative to whatever this hook set, so they compose correctly.
+let prevMinSemanticScore: string | undefined;
+test.beforeEach(() => {
+  prevMinSemanticScore = process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
+  process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC = '0.5';
+});
+test.afterEach(() => {
+  if (prevMinSemanticScore === undefined) {
+    delete process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
+  } else {
+    process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC = prevMinSemanticScore;
+  }
+});
+
 function fakeMemory(
   id: string,
   overrides: Partial<MemoryFrontmatter> = {},
@@ -498,12 +530,16 @@ test('resolveBlended: without an index/provider (real semanticSearch, no deps ov
 
 // --- Relevance floor (mm-v1-T004 fix-round 2, HIGH #1) ---------------------
 //
-// MEMORY_ROUTER_BLEND_MIN_SEMANTIC (default 0.5, see BLEND_DEFAULTS in
+// MEMORY_ROUTER_BLEND_MIN_SEMANTIC (pinned to 0.5 for this whole file, see
+// the file-level beforeEach/afterEach above; 0.5 was the flat default
+// before the model-conditional default introduced in
 // src/gates/confidence.ts) drops a semantic-search hit BEFORE it can enter
 // the blend at all, applied before the degradation guard above: a
 // sub-floor cosine match is noise, not a real signal, so a prompt whose
 // only "matches" are all sub-floor must degrade to the deterministic
-// topic-only path rather than blend near-zero-relevance scores in.
+// topic-only path rather than blend near-zero-relevance scores in. The
+// tests below exercise floor-filtering MECHANICS against the pinned value;
+// the conditional-default RESOLUTION is covered in tests/confidence.test.ts.
 
 test('resolveBlended: relevance floor drops every sub-floor semantic hit (negative control, active stub, all scores under the default floor 0.5, no topic hits either)', async () => {
   const m0 = fakeMemory('m0');
@@ -570,6 +606,85 @@ test('resolveBlended: a candidate present only via a (floor-permitted) zero sema
   } finally {
     if (prev === undefined) delete process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
     else process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC = prev;
+  }
+});
+
+// --- Model-conditional relevance floor default, end-to-end through
+// resolveBlended() (agent-tasks 3ef3ded3) ----------------------------------
+//
+// The unit-level resolution (bge-m3 -> 0.78, provider fallback, openai ->
+// 0.5, explicit override always wins) is pinned directly against
+// loadBlendWeights()/resolveDefaultMinSemanticScore() in
+// tests/confidence.test.ts. These two tests instead prove the wiring: with
+// NO MEMORY_ROUTER_BLEND_MIN_SEMANTIC override and an ollama/bge-m3
+// provider config (the real hook default on a machine with a local Ollama
+// daemon and no OPENAI_API_KEY — see README "Calibration"), resolveBlended
+// itself actually applies the resolved 0.78 floor, not just the standalone
+// resolver function.
+
+test('resolveBlended: with no MEMORY_ROUTER_BLEND_MIN_SEMANTIC override and an ollama/bge-m3 provider config, a sub-0.78 semantic score is dropped (the pre-fix flat-0.5 default would have let it through)', async () => {
+  const mem = fakeMemory('mem'); // no topics field: only the semantic path can surface it
+  const ctx: RouterContext = { prompt: NO_TOPIC_PROMPT, memoryDir: NOVOCAB_DIR };
+  const prevFloor = process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
+  const prevProvider = process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+  const prevOllamaModel = process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL;
+  const prevOpenaiKey = process.env.OPENAI_API_KEY;
+  delete process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC; // no override: exercise the conditional default itself
+  delete process.env.MEMORY_ROUTER_EMBED_PROVIDER; // auto-detect path
+  delete process.env.OPENAI_API_KEY; // forces auto-detect onto ollama
+  process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL = 'bge-m3';
+  try {
+    const hits = await resolveBlended(ctx, [mem], '/fake/dir', {}, {
+      // 0.6 clears the OLD flat default (0.5) but not the bge-m3 conditional
+      // default (0.78): this is the exact "junk-prompt injects a memory"
+      // failure mode the calibration fixed (measured 0/4 negative controls
+      // at floor 0.5 on the bge-m3 reference corpus).
+      semanticSearch: fakeSemanticSearch({ mem: 0.6 }),
+    });
+    assert.deepEqual(
+      hits,
+      [],
+      'a 0.6 semantic score must be dropped by the resolved 0.78 default (no topic match to fall back on)',
+    );
+  } finally {
+    if (prevFloor === undefined) delete process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
+    else process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC = prevFloor;
+    if (prevProvider === undefined) delete process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+    else process.env.MEMORY_ROUTER_EMBED_PROVIDER = prevProvider;
+    if (prevOllamaModel === undefined) delete process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL;
+    else process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL = prevOllamaModel;
+    if (prevOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = prevOpenaiKey;
+  }
+});
+
+test('resolveBlended: with no MEMORY_ROUTER_BLEND_MIN_SEMANTIC override and an ollama/bge-m3 provider config, a score at/above 0.78 clears the floor and blends normally', async () => {
+  const mem = fakeMemory('mem');
+  const ctx: RouterContext = { prompt: NO_TOPIC_PROMPT, memoryDir: NOVOCAB_DIR };
+  const prevFloor = process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
+  const prevProvider = process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+  const prevOllamaModel = process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL;
+  const prevOpenaiKey = process.env.OPENAI_API_KEY;
+  delete process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
+  delete process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+  delete process.env.OPENAI_API_KEY;
+  process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL = 'bge-m3';
+  try {
+    const hits = await resolveBlended(ctx, [mem], '/fake/dir', {}, {
+      semanticSearch: fakeSemanticSearch({ mem: 0.8 }),
+    });
+    assert.equal(hits.length, 1, 'a 0.8 semantic score clears the resolved 0.78 default and must surface');
+    assert.equal(hits[0].memory.id, 'mem');
+    assert.equal(hits[0].gate, 'confidence');
+  } finally {
+    if (prevFloor === undefined) delete process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC;
+    else process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC = prevFloor;
+    if (prevProvider === undefined) delete process.env.MEMORY_ROUTER_EMBED_PROVIDER;
+    else process.env.MEMORY_ROUTER_EMBED_PROVIDER = prevProvider;
+    if (prevOllamaModel === undefined) delete process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL;
+    else process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL = prevOllamaModel;
+    if (prevOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = prevOpenaiKey;
   }
 });
 
