@@ -21,6 +21,17 @@
 // ACROSS the tests within it, exactly the "once per process" contract under
 // test. The "second call in the same process emits nothing" case therefore
 // makes both resolveBlended calls inside ONE test, not across two.
+//
+// Ordering within this file is deliberate, not incidental: once ANY test
+// trips floorDropHintEmitted, every later test in this same process can
+// never observe the hint firing again — that's the feature working as
+// designed, but it also means a test placed AFTER the trip can no longer
+// independently prove its own condition (a mutant on that condition would
+// stay masked by the already-tripped guard, not caught). Case 4 ("at least
+// one candidate passes" -> no hint) therefore runs BEFORE case 1 ("all
+// candidates below a fallback floor" -> exactly one hint, then none), which
+// is the only test that intentionally trips the flag; cases 2/3 (a "map"/
+// "env" source) never trip it regardless of position. Case 1 stays last.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -130,49 +141,6 @@ async function captureStd(
 
 const PROMPT = 'an unrelated prompt with no topic keywords at all';
 
-// --- Case 1: uncalibrated fallback floor, all N>0 candidates below it -----
-
-test('resolveBlended: uncalibrated fallback floor with all semantic candidates below it emits exactly one stderr hint; a second call in the same process emits none', async () => {
-  await withEnv(
-    { MEMORY_ROUTER_EMBED_PROVIDER: 'ollama', MEMORY_ROUTER_EMBED_MODEL: 'all-minilm' },
-    async () => {
-      const a = fakeMemory('a');
-      const b = fakeMemory('b');
-      const ctx: RouterContext = { prompt: PROMPT, memoryDir: NOVOCAB_DIR };
-
-      const first = await captureStd(async () => {
-        await resolveBlended(ctx, [a, b], '/fake/dir', {}, {
-          // 0.78 is the provider-level fallback for an un-calibrated Ollama
-          // model — both scores below it.
-          semanticSearch: fakeSemanticSearch({ a: 0.5, b: 0.6 }),
-        });
-      });
-      assert.equal(first.stdout.length, 0, 'resolveBlended must never write stdout');
-      assert.equal(first.stderr.length, 1, 'expected exactly one stderr write on the first call');
-      assert.match(
-        first.stderr[0],
-        /^memory-router: uncalibrated relevance floor 0\.78 for model "all-minilm" dropped all 2 semantic candidate\(s\) this run/,
-      );
-      assert.match(first.stderr[0], /MEMORY_ROUTER_BLEND_MIN_SEMANTIC/);
-      assert.match(first.stderr[0], /README "Calibration"/);
-
-      // Second call, same process, conditions still satisfied: the guard is
-      // "once per process", not "once per failing run".
-      const second = await captureStd(async () => {
-        await resolveBlended(ctx, [a, b], '/fake/dir', {}, {
-          semanticSearch: fakeSemanticSearch({ a: 0.4, b: 0.55 }),
-        });
-      });
-      assert.equal(second.stdout.length, 0);
-      assert.equal(
-        second.stderr.length,
-        0,
-        'expected no stderr write on a second call in the same process',
-      );
-    },
-  );
-});
-
 // --- Case 2: calibrated map-hit model (bge-m3), all below -> no hint ------
 
 test('resolveBlended: a calibrated map-hit model (bge-m3) with all candidates below the floor emits no stderr hint', async () => {
@@ -225,7 +193,10 @@ test('resolveBlended: an explicit MEMORY_ROUTER_BLEND_MIN_SEMANTIC override with
 });
 
 // --- Case 4: uncalibrated fallback floor, at least one candidate passes ---
-//     -> no hint ---------------------------------------------------------
+//     -> no hint. Runs BEFORE case 1 below: this is the only one of the
+//     three "no hint" cases whose own guard (semanticHits.length === 0)
+//     would be masked by case 1 tripping floorDropHintEmitted first — see
+//     the ordering note at the top of this file. --------------------------
 
 test('resolveBlended: uncalibrated fallback floor with at least one candidate passing emits no stderr hint', async () => {
   await withEnv(
@@ -244,6 +215,52 @@ test('resolveBlended: uncalibrated fallback floor with at least one candidate pa
         stderr.length,
         0,
         'a run with at least one surviving candidate is a live signal, not a total loss',
+      );
+    },
+  );
+});
+
+// --- Case 1: uncalibrated fallback floor, all N>0 candidates below it -----
+//     -> exactly one hint, then none again in this process. Runs LAST: it
+//     is the only test in this file that intentionally trips
+//     floorDropHintEmitted, which would otherwise mask case 4 above. ------
+
+test('resolveBlended: uncalibrated fallback floor with all semantic candidates below it emits exactly one stderr hint; a second call in the same process emits none', async () => {
+  await withEnv(
+    { MEMORY_ROUTER_EMBED_PROVIDER: 'ollama', MEMORY_ROUTER_EMBED_MODEL: 'all-minilm' },
+    async () => {
+      const a = fakeMemory('a');
+      const b = fakeMemory('b');
+      const ctx: RouterContext = { prompt: PROMPT, memoryDir: NOVOCAB_DIR };
+
+      const first = await captureStd(async () => {
+        await resolveBlended(ctx, [a, b], '/fake/dir', {}, {
+          // 0.78 is the provider-level fallback for an un-calibrated Ollama
+          // model — both scores below it.
+          semanticSearch: fakeSemanticSearch({ a: 0.5, b: 0.6 }),
+        });
+      });
+      assert.equal(first.stdout.length, 0, 'resolveBlended must never write stdout');
+      assert.equal(first.stderr.length, 1, 'expected exactly one stderr write on the first call');
+      assert.match(
+        first.stderr[0],
+        /^memory-router: uncalibrated relevance floor 0\.78 for model "all-minilm" dropped all 2 semantic candidate\(s\) this run/,
+      );
+      assert.match(first.stderr[0], /MEMORY_ROUTER_BLEND_MIN_SEMANTIC/);
+      assert.match(first.stderr[0], /README "Calibration"/);
+
+      // Second call, same process, conditions still satisfied: the guard is
+      // "once per process", not "once per failing run".
+      const second = await captureStd(async () => {
+        await resolveBlended(ctx, [a, b], '/fake/dir', {}, {
+          semanticSearch: fakeSemanticSearch({ a: 0.4, b: 0.55 }),
+        });
+      });
+      assert.equal(second.stdout.length, 0);
+      assert.equal(
+        second.stderr.length,
+        0,
+        'expected no stderr write on a second call in the same process',
       );
     },
   );
