@@ -4,7 +4,8 @@ const {
   collectLocalSyncFiles,
   filterUnmappedBaseMap,
   mapRemotePathToLocalAbsolute,
-  normalizeRemoteRelativePath
+  normalizeRemoteRelativePath,
+  resolveSyncPathEntries
 } = require("./config");
 const { GitClient } = require("./git-client");
 const { mergeText } = require("./merge");
@@ -85,6 +86,14 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const deletedFiles: string[] = [];
   const skippedFiles: string[] = [];
 
+  // Resolved once, outside the per-path loop below. See resolveSyncPathEntries'
+  // own comment in config.ts (agent-tasks 65380570, LOW): this loop calls
+  // mapRemotePathToLocalAbsolute once per path in targetPaths, so
+  // re-resolving every syncPaths entry (including its existsSync/statSync
+  // kind check) from scratch on every call is an O(paths x syncPaths) count
+  // of redundant stat calls per run.
+  const resolvedSyncPathEntries = resolveSyncPathEntries(config);
+
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const mergeResult = mergeText({
       base: readSnapshotValue(baseMap, remoteRelativePath),
@@ -98,7 +107,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       continue;
     }
 
-    const localAbsolutePath = mapRemotePathToLocalAbsolute(config, remoteRelativePath);
+    const localAbsolutePath = mapRemotePathToLocalAbsolute(config, remoteRelativePath, resolvedSyncPathEntries);
     if (!localAbsolutePath) {
       // No configured syncPaths entry maps this remote path back to a local
       // destination, so nothing is ever written or deleted for it below.
