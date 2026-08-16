@@ -365,6 +365,25 @@ Priority order (highest to lowest): CLI flags > environment variables > config f
   snapshot was queued than a genuinely stuck remote — a diagnostic note is emitted on that
   otherwise-silent "queued" outcome instead
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers
+- a `pull` result's JSON/YAML carries a `skippedFiles` array (alongside `appliedFiles`,
+  `mergedFiles`, `conflictFiles`, `deletedFiles`) listing remote paths that run saw changed but did
+  not write locally, because no configured `syncPaths` entry maps them back to a local destination
+  (e.g. a file committed to the remote's `repositorySubdir` outside of any `push` from a configured
+  machine). Within pull's own reporting such a path never appears in `appliedFiles`, which is
+  otherwise a "files this run actually wrote or deleted" list, not a "files this run noticed"
+  list; under the default `--mode sync`, though, the same path can also legitimately land in the
+  merged result's `appliedFiles`/`conflictFiles` if push's own remote-side handling touches it
+  independently, so `skippedFiles` on a sync result is pull's honest accounting, not a claim that
+  the path is absent everywhere else in that payload. Not every result carries the field at all:
+  like `deletedFiles`, `skippedFiles` comes from pull's own accounting, so a raw push result never
+  has it (the exit-code-4 remote-unavailable-during-pull fallback inside `run`'s `executeMode`, and
+  the synthetic result a scheduled tick produces on queue escalation, are both push-only payloads
+  without a `skippedFiles` key). `--output text` reflects a present, non-empty `skippedFiles` as a
+  `skipped=N` segment (mirroring the existing `deleted=N` segment); the full list of paths is only
+  in `json`/`yaml` output. This per-path list is a different thing from a run's own top-level
+  `status: "skipped"` (the reachability precheck above skipping the whole run because the remote
+  itself was unreachable): a completed run can list entries in `skippedFiles` for individual paths
+  while its own `status` is `applied`
 - `--dry-run` previews the result without changing local files or the remote repository
 
 ## Project Structure

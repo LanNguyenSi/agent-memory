@@ -220,6 +220,7 @@ async function executeMode(
       mergedFiles: unique([...pullResult.mergedFiles, ...pushResult.mergedFiles]),
       conflictFiles: unique([...pullResult.conflictFiles, ...pushResult.conflictFiles]),
       deletedFiles: unique([...(pullResult.deletedFiles || []), ...(pushResult.deletedFiles || [])]),
+      skippedFiles: unique([...(pullResult.skippedFiles || []), ...(pushResult.skippedFiles || [])]),
       queuedSnapshotId: pushResult.queuedSnapshotId || null,
       notes: [...(pullResult.notes || []), ...(pushResult.notes || [])]
     };
