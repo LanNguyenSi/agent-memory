@@ -212,3 +212,70 @@ test("mergeText: remote-wins strategy is upgraded to conflict:true when the remo
   assert.equal(result.content, markerRemote, "payload must not be rewritten, only the conflict flag");
   assert.equal(result.conflict, true);
 });
+
+// The two tests above only ever exercise the marker-carrying (conflict:true)
+// side of local-wins/remote-wins; the clean (no inherited markers) side —
+// which must stay conflict:false — was untested for both strategies.
+
+test("mergeText: local-wins strategy picks local and stays conflict:false when neither side carries markers", () => {
+  const result = mergeText({
+    base: "base\n",
+    local: "local replaced\n",
+    remote: "remote replaced\n",
+    strategy: "local-wins"
+  });
+  assert.equal(result.status, "conflict");
+  assert.equal(result.content, "local replaced\n");
+  assert.equal(result.conflict, false);
+});
+
+test("mergeText: remote-wins strategy picks remote and stays conflict:false when neither side carries markers", () => {
+  const result = mergeText({
+    base: "base\n",
+    local: "local replaced\n",
+    remote: "remote replaced\n",
+    strategy: "remote-wins"
+  });
+  assert.equal(result.status, "conflict");
+  assert.equal(result.content, "remote replaced\n");
+  assert.equal(result.conflict, false);
+});
+
+// ─── mergeAppendOnly: sub-branches not exercised by the "two clean,
+//     non-overlapping suffixes" success-path test above ────────────────────
+//
+// mergeAppendOnly's own `!localSuffix || !remoteSuffix` and `localSuffix ===
+// remoteSuffix` branches are NOT covered here — they are structurally
+// unreachable through the public mergeText() API: reaching mergeAppendOnly
+// at all requires local !== base AND remote !== base (mergeText's own fast
+// paths intercept both equal-to-base cases first), and mergeAppendOnly
+// itself requires local.startsWith(base) && remote.startsWith(base). Given
+// all of that, an empty suffix on either side, or two equal suffixes, would
+// force local === remote as full strings — which mergeText's very first
+// check (`if (local === remote)`) already intercepts before mergeAppendOnly
+// is ever called. Flagged as a discrepancy in the implementation report
+// rather than worked around with a fabricated caller.
+
+test("mergeText: appendOnly — local's suffix already contains remote's suffix (local is further ahead) returns local unchanged", () => {
+  const result = mergeText({
+    base: "base\n",
+    local: "base\nremote bit\nmore local text\n",
+    remote: "base\nremote bit\n",
+    strategy: "inline-markers"
+  });
+  assert.equal(result.status, "merged");
+  assert.equal(result.content, "base\nremote bit\nmore local text\n");
+  assert.equal(result.conflict, false);
+});
+
+test("mergeText: appendOnly — remote's suffix already contains local's suffix (remote is further ahead) returns remote unchanged", () => {
+  const result = mergeText({
+    base: "base\n",
+    local: "base\nlocal bit\n",
+    remote: "base\nlocal bit\nmore remote text\n",
+    strategy: "inline-markers"
+  });
+  assert.equal(result.status, "merged");
+  assert.equal(result.content, "base\nlocal bit\nmore remote text\n");
+  assert.equal(result.conflict, false);
+});

@@ -16,7 +16,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { existsSync, mkdirSync, rmSync } = require("node:fs");
+const { existsSync, mkdirSync, rmSync, writeFileSync, chmodSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const {
@@ -26,12 +26,18 @@ const {
   deriveProbeCommand
 } = require("../../src/memory-sync/reachability");
 
+const createdSandboxes: string[] = [];
+test.after(() => {
+  for (const dir of createdSandboxes) rmSync(dir, { recursive: true, force: true });
+});
+
 function sandbox(name: string): string {
   const root = path.join(
     tmpdir(),
     `agent-memory-sync-reachability-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
   );
   mkdirSync(root, { recursive: true });
+  createdSandboxes.push(root);
   return root;
 }
 
@@ -70,6 +76,28 @@ test("classifyRemote: file:// URL is classified as local with the scheme strippe
 test("classifyRemote: https:// URL has no dedicated probe and is classified unsupported", () => {
   const result = classifyRemote("https://github.com/example/agent-memory.git");
   assert.deepEqual(result, { kind: "unsupported" });
+});
+
+// classifyRemote's ssh:// branch is `!host || isUnsafeSshHost(host)` — the
+// dash-prefixed-host tests below exercise the isUnsafeSshHost side of that
+// OR. This pins the other side: an ssh:// URL with no hostname at all
+// (extractSshUrlHost returns "" -> falsy), which must be rejected the same
+// way, not treated as ssh with an empty host.
+test("classifyRemote: ssh:// URL with no hostname (empty host) is unsupported, not ssh", () => {
+  const result = classifyRemote("ssh:///repo.git");
+  assert.deepEqual(result, { kind: "unsupported" });
+});
+
+// extractScpLikeHost's Windows-drive-path guard: "C:\repo" / "C:/repo" must
+// not be misread as scp-like "host:path" syntax with an ssh host named "C".
+test("classifyRemote: a Windows drive path with a backslash is local, not scp-like ssh", () => {
+  const result = classifyRemote("C:\\repo\\memory.git");
+  assert.deepEqual(result, { kind: "local", path: "C:\\repo\\memory.git" });
+});
+
+test("classifyRemote: a Windows drive path with a forward slash is local, not scp-like ssh", () => {
+  const result = classifyRemote("C:/repo/memory.git");
+  assert.deepEqual(result, { kind: "local", path: "C:/repo/memory.git" });
 });
 
 // ─── classifyRemote / deriveProbeCommand: dash-prefixed host guard ──────────
@@ -258,6 +286,39 @@ test("checkRemoteReachable: an empty injected command array falls back to the de
   assert.equal(result.reachable, true);
 });
 
+// checkRemoteReachable's own timeout resolution is `config.reachabilityTimeoutMs
+// && config.reachabilityTimeoutMs > 0 ? config.reachabilityTimeoutMs :
+// DEFAULT_REACHABILITY_TIMEOUT_MS` — every other test in this file passes an
+// explicit positive timeout, so the DEFAULT fallback branch itself was never
+// exercised. Pinning the constant's value first, then confirming an
+// undefined timeout still produces a correct, real result (not just that no
+// exception is thrown).
+test("DEFAULT_REACHABILITY_TIMEOUT_MS is 4000ms", () => {
+  assert.equal(DEFAULT_REACHABILITY_TIMEOUT_MS, 4000);
+});
+
+test("checkRemoteReachable: omitting reachabilityTimeoutMs falls back to the default timeout and still evaluates the probe", () => {
+  const result = checkRemoteReachable({
+    remoteUrl: "mini:~/memory-sync/pandora-memory.git",
+    reachabilityTimeoutMs: undefined,
+    reachabilityCheckCommand: [process.execPath, "-e", "process.exit(0)"]
+  });
+  assert.equal(result.reachable, true);
+});
+
+// runProbeCommand's `if (!bin) return {reachable:false, reason: "...is
+// empty."}` guard is reachable even though the `.length > 0` check above it
+// passed, if the array's first element is itself an empty string.
+test("checkRemoteReachable: an injected command whose first element is an empty string reports the empty-command reason", () => {
+  const result = checkRemoteReachable({
+    remoteUrl: "mini:~/memory-sync/pandora-memory.git",
+    reachabilityTimeoutMs: 2000,
+    reachabilityCheckCommand: [""]
+  });
+  assert.equal(result.reachable, false);
+  assert.match(result.reason, /reachability check command is empty/);
+});
+
 test("checkRemoteReachable: an unresolvable probe binary reports unreachable instead of throwing", () => {
   const result = checkRemoteReachable({
     remoteUrl: "mini:~/memory-sync/pandora-memory.git",
@@ -269,6 +330,62 @@ test("checkRemoteReachable: an unresolvable probe binary reports unreachable ins
 });
 
 // ─── checkRemoteReachable: unsupported scheme skips the precheck ────────────
+
+// ─── checkRemoteReachable: default ssh probe (no override) ──────────────────
+//
+// Every checkRemoteReachable test above either overrides
+// reachabilityCheckCommand (bypassing deriveProbeCommand entirely) or uses a
+// non-ssh remote. The default probe path for an ssh-classified remote
+// (deriveProbeCommand's `ssh -o BatchMode=yes -o ConnectTimeout=<n> <host>
+// true` actually being spawned by runProbeCommand) was therefore never
+// exercised end-to-end. Hermetic: a stub `ssh` executable is prepended onto
+// PATH for the duration of the test (restored in `finally`), the same
+// spawn-a-real-controlled-process approach this file's header describes —
+// no real ssh binary or network access involved.
+
+function withStubSshOnPath<T>(root: string, script: string, fn: () => T): T {
+  const stubDir = path.join(root, "bin");
+  mkdirSync(stubDir, { recursive: true });
+  const stubSshPath = path.join(stubDir, "ssh");
+  writeFileSync(stubSshPath, script, "utf8");
+  chmodSync(stubSshPath, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${stubDir}:${originalPath || ""}`;
+  try {
+    return fn();
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
+
+test("checkRemoteReachable: an ssh-classified remote with no override spawns the default ssh probe, and a successful probe is reachable", () => {
+  const root = sandbox("ssh-default-probe-ok");
+  const result = withStubSshOnPath(root, "#!/bin/sh\nexit 0\n", () =>
+    checkRemoteReachable({
+      remoteUrl: "mini:~/memory-sync/pandora-memory.git",
+      reachabilityTimeoutMs: 2000,
+      reachabilityCheckCommand: null
+    })
+  );
+
+  assert.equal(result.reachable, true);
+  assert.match(result.reason, /ssh -o BatchMode=yes -o ConnectTimeout=2 mini true/);
+});
+
+test("checkRemoteReachable: an ssh-classified remote with no override is unreachable when the default ssh probe exits non-zero", () => {
+  const root = sandbox("ssh-default-probe-fail");
+  const result = withStubSshOnPath(root, "#!/bin/sh\nexit 255\n", () =>
+    checkRemoteReachable({
+      remoteUrl: "mini:~/memory-sync/pandora-memory.git",
+      reachabilityTimeoutMs: 2000,
+      reachabilityCheckCommand: null
+    })
+  );
+
+  assert.equal(result.reachable, false);
+  assert.match(result.reason, /exited with code 255/);
+});
 
 test("checkRemoteReachable: https remotes have no dedicated probe and are assumed reachable", () => {
   const result = checkRemoteReachable({
