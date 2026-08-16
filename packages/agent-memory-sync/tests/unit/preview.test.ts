@@ -7,9 +7,9 @@
 // operation shapes instead of spawning a CLI process just to reach text
 // mode.
 //
-// Each optional section (deletedFiles, queuedSnapshotId, notes) is tested
-// both present and absent/empty, since summarizeOperation only appends its
-// segment when the field is truthy and non-empty.
+// Each optional section (deletedFiles, skippedFiles, queuedSnapshotId,
+// notes) is tested both present and absent/empty, since summarizeOperation
+// only appends its segment when the field is truthy and non-empty.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -52,6 +52,16 @@ test("summarizeOperation: an empty deletedFiles array omits the deleted= segment
   assert.equal(summary, "operation=push applied=1 merged=0 conflicts=0");
 });
 
+test("summarizeOperation: a non-empty skippedFiles array appends a skipped= segment", () => {
+  const summary = summarizeOperation(baseOperation({ skippedFiles: ["orphan.md"] }));
+  assert.equal(summary, "operation=push applied=1 merged=0 conflicts=0 skipped=1");
+});
+
+test("summarizeOperation: an empty skippedFiles array omits the skipped= segment", () => {
+  const summary = summarizeOperation(baseOperation({ skippedFiles: [] }));
+  assert.equal(summary, "operation=push applied=1 merged=0 conflicts=0");
+});
+
 test("summarizeOperation: a truthy queuedSnapshotId appends a queued= segment", () => {
   const summary = summarizeOperation(baseOperation({ queuedSnapshotId: "1755300000-abcd1234" }));
   assert.equal(summary, "operation=push applied=1 merged=0 conflicts=0 queued=1755300000-abcd1234");
@@ -82,12 +92,13 @@ test("summarizeOperation: all optional segments combined appear in declaration o
     baseOperation({
       kind: "sync",
       deletedFiles: ["gone.md"],
+      skippedFiles: ["orphan.md"],
       queuedSnapshotId: "snap-1",
       notes: ["replayed 1 queued snapshot(s)"]
     })
   );
   assert.equal(
     summary,
-    "operation=sync applied=1 merged=0 conflicts=0 deleted=1 queued=snap-1 notes=replayed 1 queued snapshot(s)"
+    "operation=sync applied=1 merged=0 conflicts=0 deleted=1 skipped=1 queued=snap-1 notes=replayed 1 queued snapshot(s)"
   );
 });

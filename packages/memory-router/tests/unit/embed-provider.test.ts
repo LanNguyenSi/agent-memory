@@ -13,6 +13,7 @@ const {
   embedBatch,
   resolveProviderConfig,
   resolveEmbedTimeoutMs,
+  resolveHookEmbedTimeoutMs,
   DEFAULT_TIMEOUT_MS,
   INDEX_DEFAULT_TIMEOUT_MS,
 } = require('../../src/embed/provider');
@@ -29,6 +30,19 @@ function withEmbedTimeoutEnv<T>(value: string | undefined, fn: () => T): T {
   } finally {
     if (orig === undefined) delete process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS;
     else process.env.MEMORY_ROUTER_EMBED_TIMEOUT_MS = orig;
+  }
+}
+
+// Same shape as withEmbedTimeoutEnv above, for the hook-specific knob.
+function withHookEmbedTimeoutEnv<T>(value: string | undefined, fn: () => T): T {
+  const orig = process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+  if (value === undefined) delete process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+  else process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS = value;
+  try {
+    return fn();
+  } finally {
+    if (orig === undefined) delete process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS;
+    else process.env.MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS = orig;
   }
 }
 
@@ -386,6 +400,81 @@ for (const bad of [
     withEmbedTimeoutEnv(bad, () => {
       assert.equal(resolveEmbedTimeoutMs(DEFAULT_TIMEOUT_MS), DEFAULT_TIMEOUT_MS);
       assert.equal(resolveEmbedTimeoutMs(INDEX_DEFAULT_TIMEOUT_MS), INDEX_DEFAULT_TIMEOUT_MS);
+    });
+  });
+}
+
+// ─── resolveHookEmbedTimeoutMs / MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS ────────
+// b1bbbf68: MEMORY_ROUTER_EMBED_TIMEOUT_MS overrides both the hook
+// (semanticSearch) and index-rebuild paths at once, so a persistent shell
+// export meant to give `index` more headroom also raises the hook's
+// per-prompt budget. MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS decouples the hook
+// path: hook knob, then the shared knob, then the 5s hook default.
+
+test('resolveHookEmbedTimeoutMs: no env vars set → returns DEFAULT_TIMEOUT_MS', () => {
+  withHookEmbedTimeoutEnv(undefined, () => {
+    withEmbedTimeoutEnv(undefined, () => {
+      assert.equal(resolveHookEmbedTimeoutMs(), DEFAULT_TIMEOUT_MS);
+    });
+  });
+});
+
+test('resolveHookEmbedTimeoutMs: only the shared knob set → falls back to it (unchanged pre-existing behavior)', () => {
+  withHookEmbedTimeoutEnv(undefined, () => {
+    withEmbedTimeoutEnv('7777', () => {
+      assert.equal(resolveHookEmbedTimeoutMs(), 7777);
+    });
+  });
+});
+
+test('resolveHookEmbedTimeoutMs: hook knob set → wins over both the shared knob and the default (precedence)', () => {
+  withHookEmbedTimeoutEnv('42', () => {
+    withEmbedTimeoutEnv('7777', () => {
+      assert.equal(resolveHookEmbedTimeoutMs(), 42, 'hook knob must win over the shared knob');
+    });
+    withEmbedTimeoutEnv(undefined, () => {
+      assert.equal(resolveHookEmbedTimeoutMs(), 42, 'hook knob must win over the default');
+    });
+  });
+});
+
+// b1bbbf68 fix-round: pins the accepted upper boundary. Its rejected
+// neighbor '3000000000' is already covered by the invalid table below;
+// this confirms parseTimeoutOverride's `<= 2147483647` check is inclusive,
+// not off-by-one.
+test('resolveHookEmbedTimeoutMs: the upper boundary value 2147483647 is accepted', () => {
+  withHookEmbedTimeoutEnv('2147483647', () => {
+    assert.equal(resolveHookEmbedTimeoutMs(), 2147483647);
+  });
+});
+
+// Same invalid-value table as resolveEmbedTimeoutMs above (PR #96).
+for (const bad of [
+  '',
+  '   ',
+  'not-a-number',
+  'NaN',
+  '-1',
+  '-500',
+  '0',
+  '1500.7',
+  '5e9',
+  '3000000000',
+  'Infinity',
+]) {
+  test(`resolveHookEmbedTimeoutMs: invalid hook override ${JSON.stringify(bad)}, no shared knob → falls back to DEFAULT_TIMEOUT_MS`, () => {
+    withHookEmbedTimeoutEnv(bad, () => {
+      withEmbedTimeoutEnv(undefined, () => {
+        assert.equal(resolveHookEmbedTimeoutMs(), DEFAULT_TIMEOUT_MS);
+      });
+    });
+  });
+
+  test(`resolveHookEmbedTimeoutMs: invalid hook override ${JSON.stringify(bad)}, shared knob set → falls back to the shared knob, not straight to the default`, () => {
+    withHookEmbedTimeoutEnv(bad, () => {
+      withEmbedTimeoutEnv('7777', () => {
+        assert.equal(resolveHookEmbedTimeoutMs(), 7777);
+      });
     });
   });
 }
