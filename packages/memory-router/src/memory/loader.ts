@@ -18,11 +18,14 @@ const VALID_TYPES: ReadonlySet<string> = new Set([
   'reference',
 ]);
 
-type FrontmatterYamlResult =
-  | { ok: true; raw: unknown; body: string }
-  | { ok: false; kind: 'no-delimiter' }
-  | { ok: false; kind: 'yaml-error'; detail: string; error: unknown };
-
+// FrontmatterYamlResult is declared globally in types.d.ts (ambient,
+// alongside MemoryScanEntry): every consumer that needs to type this
+// function's return shape (lint/drift.ts's require()d import, most
+// notably, since a plain `require()` resolves to `any` and TypeScript
+// never checks a hand-copied annotation against this file's real export)
+// references that one name instead of carrying its own copy that can go
+// stale without a compile error.
+//
 // The single frontmatter delimiter-match-plus-YAML-parse step, shared by
 // every consumer that needs it: parseMemoryFileWithReason below delegates
 // to this and layers its own field-requirement validation on top (read

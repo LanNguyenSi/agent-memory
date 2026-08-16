@@ -89,6 +89,26 @@ declare global {
       }
     | { path: string; id: string; ok: false; reason: string };
 
+  /**
+   * Return shape of src/memory/loader.ts's parseFrontmatterYaml: the single
+   * frontmatter delimiter-match-plus-YAML-parse step shared by
+   * parseMemoryFileWithReason (read path), lint/drift.ts's scanMemories,
+   * and src/tag/applier.ts's planChange (write path). Declared globally,
+   * ONE definition, so every consumer that types its `require()`d import
+   * (a `require()` call itself resolves to `any`, so TypeScript never
+   * checks that annotation against loader.ts's real export) references the
+   * same name instead of hand-copying a structurally-similar type that can
+   * go stale without a compile error: a field rename here forces
+   * loader.ts's own `parseFrontmatterYaml` return statement to keep
+   * matching (its return type annotation is this type), and forces every
+   * other consumer's property access on the renamed field to fail too,
+   * since they all resolve the same name rather than an independent copy.
+   */
+  type FrontmatterYamlResult =
+    | { ok: true; raw: unknown; body: string }
+    | { ok: false; kind: 'no-delimiter' }
+    | { ok: false; kind: 'yaml-error'; detail: string; error: unknown };
+
   interface ToolCall {
     name: string;
     args: Record<string, unknown>;

@@ -92,10 +92,23 @@ test('apply preserves CRLF line endings', () => {
   try {
     const change = planChange(file);
     assert.equal(change.eol, '\r\n');
+    // `eol` is detected independently of the frontmatter regex (a plain
+    // /\r\n/.test(source) on the raw file), so it alone does not prove the
+    // regex matched CRLF frontmatter correctly. Pin that the delimiter was
+    // actually recognized (skipped: false) and that a field was actually
+    // proposed and merged in (topics), so a CRLF-blind FRONTMATTER_RE that
+    // fails to match and falls through to the no-delimiter skip path
+    // cannot pass this test by leaving the already-CRLF file untouched.
+    assert.equal(change.skipped, false);
+    assert.ok(
+      Array.isArray(change.merged.topics) && change.merged.topics.length > 0,
+      'topics should have been proposed and merged from the CRLF frontmatter',
+    );
     applyChange(change);
     const after = fs.readFileSync(file, 'utf8');
     assert.ok(after.includes('\r\n'), 'should still contain CRLF');
     assert.ok(!/[^\r]\n/.test(after), 'should not introduce lone LFs');
+    assert.match(after, /topics:\s*\r\n\s*-\s*deployment/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

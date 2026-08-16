@@ -213,6 +213,24 @@ test('invalid frontmatter: broken YAML', () => {
   const bad = findHits(report.hits, 'invalid_frontmatter');
   assert.equal(bad.length, 1);
   assert.match(bad[0].detail, /parse error/);
+  // scanMemories types its require()d parseFrontmatterYaml import against
+  // the shared, globally-declared FrontmatterYamlResult (types.d.ts) rather
+  // than a hand-copied structural type. A field rename on that shared
+  // `detail` property degrades silently to `${undefined}` (the string
+  // "undefined") when drift.ts's own copy of the type goes stale relative
+  // to loader.ts's real return shape. Pin that the detail text is
+  // non-empty and carries the YAML parser's OWN message, not the literal
+  // string "undefined", so that regression ships red here even if it were
+  // somehow missed at the type level.
+  assert.ok(
+    !bad[0].detail.includes('undefined'),
+    `detail should not be the literal string "undefined", got: ${bad[0].detail}`,
+  );
+  assert.match(
+    bad[0].detail,
+    /Flow map in block collection must be sufficiently indented/,
+    "detail should carry the yaml package's own parser message",
+  );
 });
 
 test('invalid frontmatter: no frontmatter block at all', () => {

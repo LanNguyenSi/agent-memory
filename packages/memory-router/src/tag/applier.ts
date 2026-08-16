@@ -12,7 +12,7 @@ const { proposeFrontmatter } = require('./heuristics');
 // on parseFrontmatterYaml in loader.ts for the full rationale. This file
 // used to carry its own byte-identical FRONTMATTER_RE + parseYaml() copy
 // (the last write-path holdout after lint/drift.ts moved onto the shared
-// export; see loader.ts's parseFrontmatterYaml comment).
+// export).
 const { parseFrontmatterYaml } = require('../memory/loader');
 
 interface FileChange {
