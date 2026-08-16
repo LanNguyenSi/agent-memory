@@ -25,6 +25,7 @@ const {
   rebuildIndex,
   semanticSearch,
   EMBED_DIMENSIONS,
+  describeEmbedError,
 } = require('../src/embed/indexer');
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'memories');
@@ -409,6 +410,17 @@ function stubFetchWithDimensions(dim: number): {
 
 test('EMBED_DIMENSIONS stays exported at 1536 for src/lint/conflicts.ts backward compat', () => {
   assert.equal(EMBED_DIMENSIONS, 1536);
+});
+
+// 372ed7ab: src/lint/conflicts.ts also imports describeEmbedError from this
+// module (same backward-compat re-export shape as EMBED_DIMENSIONS above).
+// Dropping the re-export typechecks clean (conflicts.ts's own import would
+// fail loudly at build time, catching that) but a require()-based drop
+// would swallow the original embed error at runtime instead of enriching
+// it, so this pins the export directly rather than relying on typecheck
+// alone.
+test('describeEmbedError stays exported from src/embed/indexer.ts for src/lint/conflicts.ts backward compat', () => {
+  assert.equal(typeof describeEmbedError, 'function');
 });
 
 test('rebuildIndex + semanticSearch: dimension is derived from the first embed response, not hardcoded', async () => {

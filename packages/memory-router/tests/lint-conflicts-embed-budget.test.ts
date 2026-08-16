@@ -324,7 +324,7 @@ test('lint --semantic: a missing-pair embed error is enriched with describeEmbed
   const origFetch = (globalThis as { fetch?: typeof fetch }).fetch;
 
   (globalThis as { fetch: typeof fetch }).fetch = (async () => {
-    // Node's literal message for a fetch aborted via AbortSignal.timeout —
+    // Node's literal message for a fetch aborted via AbortSignal.timeout,
     // see tests/unit/embed-provider.test.ts's "AbortError from fetch
     // propagates unchanged" test for the same DOMException shape.
     throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
@@ -333,18 +333,31 @@ test('lint --semantic: a missing-pair embed error is enriched with describeEmbed
   try {
     await withOpenAiKey(async () => {
       await withEmbedTimeoutEnv(undefined, async () => {
-        await withEnvVar('MEMORY_ROUTER_EMBED_MODEL', 'text-embedding-3-small', async () => {
-          await withEnvVar('OPENAI_BASE_URL', undefined, async () => {
-            await assert.rejects(
-              () => lintMemoryDirForConflictsWithSemantic(dir, { semantic: true }),
-              (err: Error) => {
-                assert.equal(
-                  err.message,
-                  'embedding call failed (provider=openai baseUrl=default model=text-embedding-3-small): The operation was aborted due to timeout',
-                );
-                return true;
-              },
-            );
+        // Hermeticity: an ambient MEMORY_ROUTER_EMBED_PROVIDER=ollama export
+        // (e.g. a persistent local-model default in the shell) would make
+        // resolveProviderConfig() pick the ollama branch regardless of
+        // OPENAI_API_KEY, silently changing which provider/model/baseUrl
+        // this test's pinned message asserts against. The other two guard
+        // the ollama-only knobs for the same reason, even though the openai
+        // branch never reads them.
+        await withEnvVar('MEMORY_ROUTER_EMBED_PROVIDER', undefined, async () => {
+          await withEnvVar('MEMORY_ROUTER_OLLAMA_BASE_URL', undefined, async () => {
+            await withEnvVar('MEMORY_ROUTER_OLLAMA_EMBED_MODEL', undefined, async () => {
+              await withEnvVar('MEMORY_ROUTER_EMBED_MODEL', 'text-embedding-3-small', async () => {
+                await withEnvVar('OPENAI_BASE_URL', undefined, async () => {
+                  await assert.rejects(
+                    () => lintMemoryDirForConflictsWithSemantic(dir, { semantic: true }),
+                    (err: Error) => {
+                      assert.equal(
+                        err.message,
+                        'embedding call failed (provider=openai baseUrl=default model=text-embedding-3-small): The operation was aborted due to timeout',
+                      );
+                      return true;
+                    },
+                  );
+                });
+              });
+            });
           });
         });
       });
@@ -352,6 +365,86 @@ test('lint --semantic: a missing-pair embed error is enriched with describeEmbed
   } finally {
     if (origFetch) (globalThis as { fetch: typeof fetch }).fetch = origFetch;
     else delete (globalThis as { fetch?: typeof fetch }).fetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 372ed7ab: the README documented an ollama-shaped enriched error message
+// that describeEmbedError can never actually produce ("baseUrl=default"
+// with no hint sentence): buildOllamaConfig always resolves a concrete
+// baseUrl, and describeEmbedError always appends the "If this is a local
+// Ollama daemon" hint when provider=ollama. Only the openai branch above
+// was pinned end-to-end through the lint path; this closes that gap for
+// the ollama branch so the README's example stays honest about what the
+// code actually emits.
+test('lint --semantic: a missing-pair embed error against ollama is enriched with a concrete baseUrl and the Ollama hint', async () => {
+  const dir = tmpDir();
+  writePairs(dir, 1); // one opposite-polarity pair -> exactly one missing-embed request
+  const origFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+
+  (globalThis as { fetch: typeof fetch }).fetch = (async () => {
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  }) as unknown as typeof fetch;
+
+  try {
+    await withEmbedTimeoutEnv(undefined, async () => {
+      await withEnvVar('MEMORY_ROUTER_EMBED_PROVIDER', 'ollama', async () => {
+        await withEnvVar('MEMORY_ROUTER_EMBED_MODEL', 'bge-m3', async () => {
+          await withEnvVar('MEMORY_ROUTER_OLLAMA_BASE_URL', undefined, async () => {
+            await withEnvVar('MEMORY_ROUTER_OLLAMA_EMBED_MODEL', undefined, async () => {
+              await assert.rejects(
+                () => lintMemoryDirForConflictsWithSemantic(dir, { semantic: true }),
+                (err: Error) => {
+                  assert.equal(
+                    err.message,
+                    "embedding call failed (provider=ollama baseUrl=http://localhost:11434 model=bge-m3): The operation was aborted due to timeout If this is a local Ollama daemon: run `ollama serve` (or start the app) and `ollama pull bge-m3` if the model isn't downloaded yet.",
+                  );
+                  return true;
+                },
+              );
+            });
+          });
+        });
+      });
+    });
+  } finally {
+    if (origFetch) (globalThis as { fetch: typeof fetch }).fetch = origFetch;
+    else delete (globalThis as { fetch?: typeof fetch }).fetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 372ed7ab: the enrichment above is only correct for the real embedBatch
+// seam. When the caller supplies its own embedFn (the test seam every
+// other test in this file uses), that function never contacts `cfg`'s
+// provider/model/baseUrl, so wrapping its error with describeEmbedError
+// would attribute the failure to a provider the seam never touched. Pins
+// that a caller-supplied embedFn's error passes through unchanged even
+// when a real provider config is resolvable (OPENAI_API_KEY set) — the
+// exact condition that used to trigger the misattribution.
+test('lint --semantic: a throwing custom embedFn error passes through unenriched, not attributed to a provider it never contacted', async () => {
+  const dir = tmpDir();
+  writePairs(dir, 1);
+  const boom = new Error('custom embedFn exploded');
+  const embedFn = async (): Promise<number[][]> => {
+    throw boom;
+  };
+
+  try {
+    await withOpenAiKey(async () => {
+      await assert.rejects(
+        () => lintMemoryDirForConflictsWithSemantic(dir, { semantic: true, embedFn }),
+        (err: Error) => {
+          assert.equal(
+            err,
+            boom,
+            'a caller-supplied embedFn error must pass through unchanged, not wrapped by describeEmbedError',
+          );
+          return true;
+        },
+      );
+    });
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

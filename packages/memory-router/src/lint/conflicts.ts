@@ -543,12 +543,14 @@ export async function lintMemoryDirForConflictsWithSemantic(
         // (embed/indexer.ts): a raw fetch/HTTP failure (e.g. Node's literal
         // "The operation was aborted due to timeout" when AbortSignal.timeout
         // fires) used to reach the CLI with no indication of which
-        // provider/model/endpoint it came from (372ed7ab). `cfg` is only
-        // null here when a caller supplied its own `embedFn` test seam
-        // without a resolvable provider config; every real run reaches this
-        // line with `cfg` set (the `!opts.embedFn && !cfg` guard above
-        // returns early otherwise), so the raw error only passes through
-        // unenriched in that test-seam case, never in production.
+        // provider/model/endpoint it came from (372ed7ab). Only enrich when
+        // this call actually went through our own embedBatch seam
+        // (opts.embedFn unset): a caller-supplied embedFn never contacts
+        // `cfg`'s provider/model/baseUrl, so attributing its error to that
+        // config would misattribute the failure even on a run where `cfg`
+        // itself is resolvable (the `!opts.embedFn && !cfg` guard above only
+        // rules out the no-provider case, not a caller-supplied embedFn
+        // alongside a resolvable cfg).
         //
         // Unlike rebuildIndex, this failure is fail-closed by design: it
         // propagates out of lintMemoryDirForConflictsWithSemantic and the
@@ -563,7 +565,7 @@ export async function lintMemoryDirForConflictsWithSemantic(
         // actually broken for a provider the operator DID configure, and
         // silently downgrading that to the regex-only report would hide a
         // real failure behind a misleadingly clean CI run.
-        throw cfg ? describeEmbedError(err, cfg) : err;
+        throw !opts.embedFn && cfg ? describeEmbedError(err, cfg) : err;
       }
       if (vectors.length !== batchIds.length) {
         // Fail-open: embedder returned a malformed batch. Don't upgrade
