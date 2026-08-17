@@ -287,11 +287,23 @@ function registerWatchCommand(program: import("commander").Command): void {
       // inotify-backed watcher (Linux) that scan is not instantaneous, and a
       // filesystem write issued before it completes can be silently missed —
       // chokidar has not finished wiring up inotify watch descriptors for
-      // every (possibly nested) watched path yet. A caller that treats this
-      // line as the "watch is now armed" signal (e.g. an integration test
-      // triggering an edit) is therefore safe on both fsevents (macOS) and
-      // inotify (Linux) once the line has actually printed, where a fixed
-      // sleep() before that point is not.
+      // every (possibly nested) watched path yet. This line is a large
+      // improvement over an unconditional sleep() before it, but is NOT a
+      // complete guarantee on macOS: this package's chokidar version (^4.0.3)
+      // depends on neither `fsevents` nor `usePolling` by default (v4 dropped
+      // the optional `fsevents` native dependency entirely and watches
+      // exclusively via Node's own fs.watch/fs.watchFile), and on macOS a
+      // freshly-created fs.watch() can still miss a write issued immediately
+      // after it returns — a currently-unfixed Node.js/libuv behavior
+      // (nodejs/node#52601, "Not possible to know when fs.watch has started
+      // on macOS"), independent of chokidar's own initial-scan/'ready'
+      // bookkeeping. Measured in isolation (agent-tasks f876dff6): a write
+      // issued 0ms after the watch is reported armed was lost 10/10 times,
+      // while a write issued >=1ms after was caught 10/10 times, both idle
+      // and under load. In practice this package's own waitForWatcherReady
+      // test helper (tests/helpers/watch-process.ts) polls at a 25ms
+      // cadence, which leaves comfortable margin above that threshold; see
+      // that file's header comment for the full measurement notes.
       watcher.on("ready", () => {
         writeInfo(
           `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,

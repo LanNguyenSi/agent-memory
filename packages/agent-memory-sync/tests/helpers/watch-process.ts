@@ -24,6 +24,27 @@
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 
+// ROOT CAUSE and follow-up findings (agent-tasks f876dff6):
+// - Mechanism: on macOS, chokidar 4.x uses raw fs.watch() (no fsevents, no
+//   polling by default) and a freshly-armed fs.watch() can permanently miss
+//   a write issued <1ms after arming — a currently-unfixed Node.js/libuv
+//   behavior (nodejs/node#52601). Measured 0/10 caught at 0ms, 10/10 caught
+//   at >=1ms, both idle and under load. waitForWatcherReady's 25ms poll
+//   cadence leaves comfortable margin above that threshold.
+// - Measured 2026-08-16/17: this file's documented 10-worker load scenario
+//   ran 5/5 green on the merge base, idle and under load; the historical
+//   30-40% stall symptom did not reproduce. No retry/workaround is carried
+//   in this file as a result.
+// - Ruled out: a parent-side delay reading the child's stderr
+//   pipe as a stall cause. Measured p99 9ms / max 11ms across 600 samples
+//   under load — cannot account for missing a 90s budget.
+// - Ordering constraint for future changes to this file: any child.on(
+//   "exit", ...) listener MUST be registered before the first longer await
+//   after spawn() returns. Node does not replay a missed "exit" event to a
+//   listener attached after the fact (measured 0/15 caught at >=100ms
+//   delay), so a late listener can make an already-finished child look like
+//   a 90s stall.
+//
 // Matches watch.ts's "watching N path(s) under ..." ready line. --verbose is
 // required for it to print at all: writeInfo (src/output.ts) is a no-op
 // unless verbose is set, which is why every watch invocation through this
@@ -201,7 +222,12 @@ function spawnWatch(args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(
     path.resolve(process.cwd(), "node_modules", ".bin", "tsx"),
     ["src/main.ts", ...args],
-    { env, stdio: ["ignore", "pipe", "pipe"], detached: true }
+    // stdout is "ignore", not "pipe": nothing below ever reads child.stdout
+    // (only child.stderr is drained, see the "data" listener further down),
+    // and an unread "pipe" backs up once the child writes more than the OS
+    // pipe buffer (64KB) — which would block the child's own write() call
+    // and look exactly like an unexplained stall from the test's side.
+    { env, stdio: ["ignore", "ignore", "pipe"], detached: true }
   );
   if (typeof child.pid === "number") {
     liveGroupPids.add(child.pid);
