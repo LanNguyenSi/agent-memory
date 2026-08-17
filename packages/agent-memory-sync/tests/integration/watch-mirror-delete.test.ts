@@ -29,7 +29,6 @@ const path = require("node:path");
 const {
   cloneRemote,
   createSandbox,
-  deleteRetrySafe,
   fileExists,
   git,
   initBareRemote,
@@ -39,7 +38,6 @@ const {
   writeText
 } = require("../helpers/cli.ts");
 const {
-  applyTriggerWithRetry,
   spawnWatch,
   waitForWatcherReady,
   withTickDeadline,
@@ -149,11 +147,7 @@ test("watch tick still deletes locally-removed files and pushes local edits, wit
 
   const { exitCode, stderr } = await runWatchTick(configPath, () => {
     writeText(path.join(workspaceRoot, "MEMORY.md"), "base\nupdated\n");
-    // deleteRetrySafe, not a bare fs.rmSync — runWatchTick retries a stalled
-    // trigger edit verbatim (see watch-process.ts's applyTriggerWithRetry),
-    // and a bare rmSync would throw ENOENT on a retry once this path is
-    // already gone.
-    deleteRetrySafe(path.join(workspaceRoot, "logs", "mine.md"));
+    fs.rmSync(path.join(workspaceRoot, "logs", "mine.md"));
   });
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
 
@@ -215,13 +209,7 @@ test("watch tick queues locally when the remote is unreachable, then replays the
     offlineChild,
     async () => {
       await waitForWatcherReady(() => offlineStderr);
-      // applyTriggerWithRetry, not a bare write — see watch-process.ts's
-      // ROOT CAUSE / FIX comment for why a one-shot write after "ready" can
-      // silently and permanently miss the watch (a macOS fs.watch arming
-      // race, not specific to this test).
-      await applyTriggerWithRetry(() => offlineStderr, () => {
-        writeText(path.join(workspaceRoot, "MEMORY.md"), "queued change\n");
-      });
+      writeText(path.join(workspaceRoot, "MEMORY.md"), "queued change\n");
 
       return new Promise<number>((resolve) => {
         offlineChild.on("exit", (code: number | null) => resolve(code ?? -1));
@@ -272,9 +260,7 @@ test("watch tick queues locally when the remote is unreachable, then replays the
     onlineChild,
     async () => {
       await waitForWatcherReady(() => onlineStderr);
-      await applyTriggerWithRetry(() => onlineStderr, () => {
-        writeText(path.join(workspaceRoot, "logs", "trigger.md"), "trigger\n");
-      });
+      writeText(path.join(workspaceRoot, "logs", "trigger.md"), "trigger\n");
 
       return new Promise<number>((resolve) => {
         onlineChild.on("exit", (code: number | null) => resolve(code ?? -1));

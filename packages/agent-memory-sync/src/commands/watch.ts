@@ -297,15 +297,13 @@ function registerWatchCommand(program: import("commander").Command): void {
       // after it returns — a currently-unfixed Node.js/libuv behavior
       // (nodejs/node#52601, "Not possible to know when fs.watch has started
       // on macOS"), independent of chokidar's own initial-scan/'ready'
-      // bookkeeping. Measured in tests/helpers/watch-process.ts's "ROOT
-      // CAUSE" comment (agent-tasks f876dff6): a write 0ms after the watch
-      // is reported armed is lost 100% of the time in isolation, on both a
-      // bare fs.watch() and this exact chokidar config, idle or under load;
-      // any real delay (>=5ms measured here) resolves it 100% of the time.
-      // The mitigation for that residual race lives entirely on the test
-      // side (retrying a stalled trigger edit rather than waiting longer),
-      // since Node exposes no stronger "truly armed" signal this line could
-      // wait for instead.
+      // bookkeeping. Measured in isolation (agent-tasks f876dff6): a write
+      // issued 0ms after the watch is reported armed was lost 10/10 times,
+      // while a write issued >=1ms after was caught 10/10 times, both idle
+      // and under load. In practice this package's own waitForWatcherReady
+      // test helper (tests/helpers/watch-process.ts) polls at a 25ms
+      // cadence, which leaves comfortable margin above that threshold; see
+      // that file's header comment for the full measurement notes.
       watcher.on("ready", () => {
         writeInfo(
           `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,

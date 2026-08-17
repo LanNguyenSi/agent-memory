@@ -1,5 +1,5 @@
 const { execFileSync, spawnSync } = require("node:child_process");
-const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 
@@ -71,26 +71,6 @@ function fileExists(filePath: string): boolean {
   return existsSync(filePath);
 }
 
-// Recreates `filePath` with placeholder content immediately before deleting
-// it, instead of a bare `rmSync`. The net effect on disk and in watch.ts's
-// own pendingChanges/pendingDeletes bookkeeping is identical to a plain
-// delete: only the FINAL absence matters to performPush's diff, and
-// watch.ts's unlink handler unconditionally does both
-// `pendingDeletes.add(filePath)` and `pendingChanges.delete(filePath)`, so an
-// add-then-unlink of the SAME path collapses down to just "deleted" either
-// way (src/commands/watch.ts). What this buys over a bare `rmSync`: it makes
-// the edit safe to invoke more than once. A repeated `rmSync` on an
-// already-deleted path either throws ENOENT or (with `{ force: true }`) is a
-// silent no-op — either way it produces no fresh filesystem event, so it
-// cannot help a caller recover from watch-process.ts's applyTriggerWithRetry
-// re-issuing a trigger edit whose first attempt's underlying fs-event was
-// lost to the arming race documented there (tests/helpers/watch-process.ts).
-// Recreating first always gives the retry something real to delete again.
-function deleteRetrySafe(filePath: string): void {
-  writeText(filePath, "(retry-safe placeholder before delete)\n");
-  rmSync(filePath);
-}
-
 module.exports = {
   createSandbox,
   runCli,
@@ -100,6 +80,5 @@ module.exports = {
   writeProjectConfig,
   readText,
   writeText,
-  fileExists,
-  deleteRetrySafe
+  fileExists
 };

@@ -13,11 +13,11 @@
 // matches on stderr content — every other assertion below still does not.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const {
   cloneRemote,
   createSandbox,
-  deleteRetrySafe,
   fileExists,
   git,
   initBareRemote,
@@ -235,11 +235,7 @@ test("watch records deletions as remove entries", async () => {
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
   const { exitCode } = await runWatchTick(configPath, () => {
-    // deleteRetrySafe, not a bare fs.rmSync — runWatchTick retries a stalled
-    // trigger edit verbatim (see watch-process.ts's applyTriggerWithRetry),
-    // and a bare rmSync would throw ENOENT on a retry once this path is
-    // already gone.
-    deleteRetrySafe(path.join(workspaceRoot, "logs", "2026-05-01.md"));
+    fs.rmSync(path.join(workspaceRoot, "logs", "2026-05-01.md"));
   });
   assert.equal(exitCode, 0);
 
