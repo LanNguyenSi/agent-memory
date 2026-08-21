@@ -20,7 +20,7 @@ npm install
 npm run build
 ```
 
-This produces `dist/main.js`. Run it with `node dist/main.js`, or put `agent-memory-sync` on your `PATH` with `npm link`.
+This produces `dist/src/main.js`. Run it with `node dist/src/main.js`, or put `agent-memory-sync` on your `PATH` with `npm link`.
 
 ## Quick Start
 
@@ -265,16 +265,13 @@ agent-memory-sync config get KEY           # Get a config value
 agent-memory-sync config reset             # Remove persisted config
 ```
 
-#### `agent-memory-sync version`
+#### `agent-memory-sync --version`
 
-Show detailed version information.
+Print the installed version.
 
 ```bash
-agent-memory-sync version
-# agent-memory-sync v0.1.0
-# Language: typescript
-# Framework: commander
-# Build: (commit hash)
+agent-memory-sync --version
+# 0.1.0
 ```
 
 ## Configuration
