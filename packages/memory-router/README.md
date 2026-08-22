@@ -165,7 +165,7 @@ verify:                             # stale-marker check on recall
 body markdown here
 ```
 
-All new fields are optional. Legacy memories still load and can fire via the Confidence Gate or via semantic match.
+All new fields are optional. Legacy memories still load and can fire via semantic match.
 
 The loader reads the memory directory in deterministic lexicographic order (plain code-unit `Array#sort` over the directory listing, locale-independent), not in the filesystem's `readdir` order, so hook injection and `eval` see the same corpus order on every machine and filesystem. This holds for byte-identical filenames; a memory file whose name differs in Unicode normalization between machines (NFD vs NFC) can still sort differently.
 

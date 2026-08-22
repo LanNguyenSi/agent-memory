@@ -58,14 +58,15 @@ agent-memory-sync run --help
 
 ### Common per-subcommand options
 
-These are registered on individual subcommands, not on the program itself, so they must come after the subcommand (for example `agent-memory-sync run --config x`, not `agent-memory-sync --config x run`):
+`run`, `watch`, and `restore` register these options; they are not on the program itself, so they must come after the subcommand (for example `agent-memory-sync run --config x`, not `agent-memory-sync --config x run`). `config`'s subcommands only register `--config` (and `config show` also registers `-o, --output`):
 
-| Option | Description |
-|--------|-------------|
-| `--config PATH` | Path to config file (default: `~/.config/agent-memory-sync/config.json`) |
-| `--verbose` | Enable verbose output |
-| `--quiet` | Suppress non-error output |
-| `--no-color` | Disable colored output |
+| Option                  | Description                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `--config PATH`         | Path to config file (default: `$XDG_CONFIG_HOME/agent-memory-sync/config.json`, else `~/.config/agent-memory-sync/config.json`) |
+| `-o, --output <format>` | Output format: text, json, yaml (default: text)                                                                                 |
+| `-v, --verbose`         | Enable verbose output                                                                                                           |
+| `-q, --quiet`           | Suppress non-error output                                                                                                       |
+| `--no-color`            | Disable colored output                                                                                                          |
 
 ### Commands
 
@@ -521,9 +522,10 @@ npm run format
 
 Continuous integration runs on every pull request and push to `master`:
 
-- Lint and format check
-- Unit tests
-- Build verification
+- Typecheck
+- Build
+- Lint (typecheck)
+- Test + coverage gate
 
 See `.github/workflows/` for pipeline definitions.
 
