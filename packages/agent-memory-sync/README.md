@@ -55,6 +55,13 @@ agent-memory-sync run --help
 |--------|-------------|
 | `--help` | Show help and exit |
 | `--version` | Show version and exit |
+
+### Common per-subcommand options
+
+These are registered on individual subcommands, not on the program itself, so they must come after the subcommand (for example `agent-memory-sync run --config x`, not `agent-memory-sync --config x run`):
+
+| Option | Description |
+|--------|-------------|
 | `--config PATH` | Path to config file (default: `~/.config/agent-memory-sync/config.json`) |
 | `--verbose` | Enable verbose output |
 | `--quiet` | Suppress non-error output |
@@ -278,8 +285,7 @@ agent-memory-sync --version
 
 agent-memory-sync stores configuration at:
 
-- **Linux/macOS**: `~/.config/agent-memory-sync/config.json`
-- **Windows**: `%APPDATA%\agent-memory-sync\config.json`
+- `$XDG_CONFIG_HOME/agent-memory-sync/config.json`, falling back to `~/.config/agent-memory-sync/config.json` when `XDG_CONFIG_HOME` is unset. This resolution is the same on every platform; there is no Windows-specific path.
 
 The `--config` flag overrides the default path.
 
@@ -513,12 +519,11 @@ npm run format
 
 ## CI/CD
 
-Continuous integration runs on every pull request and push to `main`:
+Continuous integration runs on every pull request and push to `master`:
 
 - Lint and format check
 - Unit tests
 - Build verification
-- Cross-platform build (Linux, macOS, Windows)
 
 See `.github/workflows/` for pipeline definitions.
 
@@ -541,7 +546,7 @@ See [ways-of-working](docs/ways-of-working.md) for full contribution guidelines.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](../../LICENSE) for details.
 
 ---
 

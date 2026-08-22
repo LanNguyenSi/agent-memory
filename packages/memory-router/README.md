@@ -50,7 +50,7 @@ echo '{"prompt":"rename foo to bar"}' \
 The positive prompt prints one line of JSON on stdout (plus a stderr line; see below):
 
 ```json
-{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"**memory-router**: 1 relevant memory applies:\n\n### No force-push to shared branches  _(topic · 1.00)_\nNEVER force-push to master or main. The history is shared; rewriting\nit costs every collaborator a hard reset and loses uncommitted work.\nFor local-branch fixes, prefer a fixup commit + interactive rebase\nbefore push."}}
+{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"**memory-router** — 1 relevant memory applies:\n\n### No force-push to shared branches  _(topic · 1.00)_\nNEVER force-push to master or main. The history is shared; rewriting\nit costs every collaborator a hard reset and loses uncommitted work.\nFor local-branch fixes, prefer a fixup commit + interactive rebase\nbefore push."}}
 ```
 
 `1.00` is the flat pre-blend topic score for this demo (no embedding index, see below, so the semantic path contributes nothing and the blend degrades to exactly the old topic-only sync path, see "How it works" below), not a blended value. This scratch corpus has no embedding index, so **both** commands above also print one line on stderr: `memory-router: embedding index missing; run 'memory-router index <dir>' to build it.`; the score-blend resolver (mm-v1-T004) attempts the semantic path on every prompt, not only when the deterministic gates stay silent, so this warning surfaces even on the positive prompt the Topic Gate already matched. It's informational, not a failure: stdout still carries the hit above (and stays empty for the negative prompt, exit 0 either way).
@@ -79,7 +79,7 @@ The `bin/` entries land in `node_modules/.bin/` (and on `PATH` for a global inst
 
 | Bin | Purpose |
 |-----|---------|
-| `memory-router` | CLI: `tag`, `index`, `lint`, `stale` |
+| `memory-router` | CLI: `tag`, `index`, `lint`, `stale`, `test`, `eval`, `migrate`, `consolidate` |
 | `memory-router-user-prompt-submit` | Claude Code `UserPromptSubmit` hook |
 | `memory-router-pre-tool-use` | Claude Code `PreToolUse` hook |
 | `memory-router-mcp` | MCP server for explicit `memory_search` / `memory_resolve` calls |
@@ -165,7 +165,7 @@ verify:                             # stale-marker check on recall
 body markdown here
 ```
 
-All new fields are optional. Legacy memories still load and can fire via the Confidence Gate (once wired) or via semantic match.
+All new fields are optional. Legacy memories still load and can fire via the Confidence Gate or via semantic match.
 
 The loader reads the memory directory in deterministic lexicographic order (plain code-unit `Array#sort` over the directory listing, locale-independent), not in the filesystem's `readdir` order, so hook injection and `eval` see the same corpus order on every machine and filesystem. This holds for byte-identical filenames; a memory file whose name differs in Unicode normalization between machines (NFD vs NFC) can still sort differently.
 
@@ -650,9 +650,7 @@ Exits 1 on any STALE / no-matches / malformed finding, 0 otherwise. `possibly-st
 
 **Limitations:**
 
-- Single-repo only. v1 resolves every ref against one `--repo-root`; memories that legitimately reference sibling repos in a workspace will surface as STALE under that one root.
 - Symbol checks require a git repo root. Non-git directories degrade to "skipped" rather than reporting STALE.
-- Date-based and URL-based staleness checks are not yet implemented (filed as follow-ups).
 - `git grep` is not AST-aware: a symbol that survives only in a comment or generated file counts as found.
 
 ### Programmatically
