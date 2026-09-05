@@ -63,7 +63,7 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Native-dep smoke
         # better-sqlite3 + sqlite-vec ship prebuilt binaries that can

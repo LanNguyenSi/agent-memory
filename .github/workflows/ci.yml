@@ -38,7 +38,7 @@ jobs:
           cache-dependency-path: packages/${{ matrix.package }}/package-lock.json
 
       - name: Install
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       # Native-dep smoke: fail fast on CI when a native addon's ABI doesn't
       # match this runner's Node. memory-router ships better-sqlite3 +
