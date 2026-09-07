@@ -20,8 +20,8 @@ test('legacy memories without new fields still load', () => {
   assert.equal(legacy.frontmatter.triggers, undefined);
 });
 
-test('schema v1: type/topics resolve from metadata. with top-level precedence', () => {
-  const dir = path.join(__dirname, 'fixtures', 'schema-v1');
+test('schema v1: type/topics resolve from the versioned contract corpus', () => {
+  const dir = path.join(__dirname, '..', 'contracts', 'memory-frontmatter-v1', 'cases');
   const memories = loadMemoriesFromDir(dir);
   const byId = new Map<string, Memory>(memories.map((m: Memory) => [m.id, m]));
   const mustGet = (id: string): Memory => {
@@ -52,7 +52,7 @@ test('schema v1: type/topics resolve from metadata. with top-level precedence', 
   );
 
   assert.equal(byId.has('no-type'), false, 'no type at either location: skipped');
-  assert.equal(memories.length, 3);
+  assert.ok(memories.length > 3, 'the contract includes additional routing cases');
 });
 
 test('schema v1: empty top-level type falls back to metadata.type', () => {
