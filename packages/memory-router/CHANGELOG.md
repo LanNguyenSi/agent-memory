@@ -6,6 +6,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-10
+
 ### Changed
 
 - `src/tag/applier.ts`'s `planChange` now reuses the loader's shared `parseFrontmatterYaml` (`src/memory/loader.ts`) for the frontmatter delimiter-match-plus-YAML-parse step, instead of carrying its own byte-identical `FRONTMATTER_RE` + `parseYaml()` copy, the last write-path holdout after `lint/drift.ts` moved onto the shared export (PR #99). `parseMemoryFileWithReason` itself now delegates to `parseFrontmatterYaml` instead of carrying its own duplicate delimiter-match-plus-parse step.
