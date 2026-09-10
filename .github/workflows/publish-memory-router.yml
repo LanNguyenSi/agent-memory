@@ -21,7 +21,10 @@ on:
 permissions:
   contents: read
   # id-token is required for `npm publish --provenance` to mint
-  # signed attestations.
+  # signed attestations, and is also what npm Trusted Publishing (OIDC)
+  # matches against the package's Trusted Publisher entry on npmjs.com
+  # (repo LanNguyenSi/agent-memory, workflow publish-memory-router.yml)
+  # instead of an NPM_TOKEN secret.
   id-token: write
 
 jobs:
@@ -52,15 +55,6 @@ jobs:
           cache: npm
           cache-dependency-path: packages/memory-router/package-lock.json
           registry-url: "https://registry.npmjs.org"
-
-      - name: Preflight, verify NPM_TOKEN secret is set
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN secret is not configured. Add it under Settings -> Secrets and variables -> Actions before tagging a release." >&2
-            exit 1
-          fi
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
@@ -103,7 +97,56 @@ jobs:
         # exact commit being published.
         run: npm test
 
+      - name: Upgrade npm for trusted publishing
+        # npm Trusted Publishing (OIDC) needs npm >= 11.5.1; node 22 bundles
+        # npm 10, so upgrade first. Auth comes from the GitHub OIDC token
+        # (permissions.id-token: write above) matched against the package's
+        # Trusted Publisher entry on npmjs.com (repo LanNguyenSi/agent-memory,
+        # workflow publish-memory-router.yml), not an NPM_TOKEN secret.
+        run: npm install -g npm@11 --no-audit --no-fund
+
       - name: Publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+          TAG_VERSION: ${{ steps.parse.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="${TAG_VERSION}"
+          pkg=$(node -p "require('./package.json').name")
+
+          # Idempotency: re-running the failed job (Actions -> the failed run ->
+          # Re-run failed jobs) can land on a version a prior attempt already
+          # published.
+          if npm view "${pkg}@${version}" version > /dev/null 2>&1; then
+            echo "::notice::${pkg}@${version} is already on the registry; nothing to publish."
+            exit 0
+          fi
+
+          # Sigstore Rekor occasionally returns a transient TLOG_CREATE_ENTRY
+          # 409 (npm/cli#6892) that fails --provenance even though the tarball
+          # is fine. Retry up to 3 times with exponential backoff, and treat
+          # "already published" as success in case a failed attempt actually
+          # reached the registry.
+          max=3
+          attempt=1
+          while true; do
+            echo "npm publish attempt ${attempt}/${max}"
+            if npm publish --access public --provenance; then
+              echo "::notice::Published ${pkg}@${version} on attempt ${attempt}."
+              exit 0
+            fi
+            # A failed --provenance publish can still have landed the tarball;
+            # give the registry a moment to settle before checking.
+            sleep 5
+            if npm view "${pkg}@${version}" version > /dev/null 2>&1; then
+              echo "::notice::${pkg}@${version} reached the registry despite a non-zero publish exit; treating as success."
+              exit 0
+            fi
+            if [ "${attempt}" -ge "${max}" ]; then
+              echo "::error::npm publish failed after ${max} attempts. If the failure is a Sigstore TLog 409, re-run the failed job on this run (Actions -> the failed run -> Re-run failed jobs) once the Rekor service recovers. A persistent 403/404 instead likely means the npmjs.com Trusted Publisher entry for this repo/workflow is missing or misconfigured; retrying will not fix that." >&2
+              exit 1
+            fi
+            backoff=$((2 ** attempt * 5))
+            echo "publish failed; retrying in ${backoff}s"
+            sleep "${backoff}"
+            attempt=$((attempt + 1))
+          done

@@ -64,4 +64,4 @@ Each package is published independently under the `@lannguyensi/...` scope. The 
    GitHub coalesces a multi-tag push into a single push event, so pushing `t1 t2 t3` in one command fires the workflow only once. Tag pushes must be one-at-a-time.
 5. The `Publish memory-router to npm` workflow runs version + name + native-dep checks, builds, tests, and publishes with `--provenance`. `Release` runs in parallel and creates a GitHub Release using the matching CHANGELOG section.
 
-`NPM_TOKEN` must be configured as a repository secret before the first publish. The publish workflow's preflight step fails loudly if it is missing.
+Publishing uses npm Trusted Publishing (OIDC): the workflow authenticates with a short-lived GitHub Actions OIDC token matched against the `@lannguyensi/memory-router` Trusted Publisher entry on npmjs.com (repo `LanNguyenSi/agent-memory`, workflow `publish-memory-router.yml`). No `NPM_TOKEN` secret is needed for this workflow.
