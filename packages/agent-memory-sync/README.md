@@ -489,6 +489,7 @@ change.
   snapshot was queued than a genuinely stuck remote — a diagnostic note is emitted on that
   otherwise-silent "queued" outcome instead
 - append-only concurrent edits are merged automatically; other conflicts default to inline conflict markers
+- for an `ownerScoped` directory destination (see [docs/machine-setup.md](docs/machine-setup.md) section e), `pull` mirrors every file other than this machine's own `<profile>.json` from the remote unconditionally instead of 3-way merging it, since a peer's file is never this machine's content to reconcile or write conflict markers into. A local file left with stale `<<<<<<< ` conflict markers by a run, own file or peer, is named once per file in that run's `notes` (`stale conflict markers in <path>; resolve by editing the file`) instead of sitting unresolved behind a misleadingly clean `conflicts=0` summary
 - a `pull` result's JSON/YAML carries a `skippedFiles` array (alongside `appliedFiles`,
   `mergedFiles`, `conflictFiles`, `deletedFiles`) listing remote paths that run saw changed but did
   not write locally, because no configured `syncPaths` entry maps them back to a local destination

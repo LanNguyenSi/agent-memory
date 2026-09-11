@@ -10,6 +10,7 @@ is dated instead. The format is loosely based on
 
 ### Fixed
 
+- **A peer's ownerScoped file could never converge on `pull`.** A file inside an `ownerScoped` directory destination that is not this machine's own `<profile>.json` is now mirrored from the remote unconditionally instead of 3-way merged, and a local file left with stale inline conflict markers is now named in the run's `notes`. Incident record and diagnosis: pandora run `.ai/runs/2026-09-11-sync-peer-file-conflict` (agent-tasks e104c9f2).
 - **The 2026-09-11 memory-corpus wipe.** A periodic `run --mode sync` tick and a `watch` tick shared one state directory with nothing serialising them. The watch tick's cleanup removed the sync tick's freshly checked out working copy under `stateDir/tmp` after git had already reported success, so the pull read an empty tree, resolved every path to a deletion and removed the local corpus (about 400 files) from disk; the follow-up push published the deletion, and the Linux peer mirrored it one tick later. Incident record, including the measured counts and the recovery: pandora run `.ai/runs/2026-09-11-memory-sync-wipe` (agent-tasks cda5b12c).
   - `run`'s pull-failure fallback no longer treats every git failure as "the remote is unavailable", which is what turned a broken pull into a push-only retry of an emptied workspace.
   - A pull never deletes a local file whose base snapshot is missing; such files are local-only and the run reports how many it protected.

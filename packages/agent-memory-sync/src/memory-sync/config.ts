@@ -237,6 +237,12 @@ interface ResolvedSyncPathEntry {
   absoluteSource: string;
   destination: string;
   kind: "file" | "directory";
+  // Carried through from SyncPathConfig.ownerScoped so a caller that only
+  // has the resolved entries (e.g. pull.ts's peer-file mirror rule, task
+  // e104c9f2 / pandora run .ai/runs/2026-09-11-sync-peer-file-conflict) can
+  // find an ownerScoped directory destination without re-reading
+  // config.syncPaths and re-deriving kind itself.
+  ownerScoped: boolean;
 }
 
 // Resolves every syncPaths entry's absoluteSource/destination/kind exactly
@@ -255,7 +261,8 @@ function resolveSyncPathEntries(config: RunConfig): ResolvedSyncPathEntry[] {
     return {
       absoluteSource,
       destination: normalizeRemoteRelativePath(entry.destination || entry.source),
-      kind: resolveSyncPathKind(absoluteSource, entry)
+      kind: resolveSyncPathKind(absoluteSource, entry),
+      ownerScoped: entry.ownerScoped === true
     };
   });
 }
