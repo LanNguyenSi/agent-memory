@@ -104,8 +104,9 @@ async function performPull(config: PullConfig, options: PullOptions) {
   // pandora run .ai/runs/2026-09-11-memory-sync-wipe) the fetched copy under
   // stateDir/tmp/pull had been removed by a concurrent tick AFTER git
   // reported a successful checkout, so every remote path read as null and
-  // the merge below deleted 404 real local files. This throws before the
-  // loop, so no local file is touched and no base snapshot is rewritten.
+  // the merge below deleted every local file the merge visited. This throws
+  // before the loop, so no local file is touched and no base snapshot is
+  // rewritten.
   //
   // It sits here rather than inside the loop because this is pull's only
   // deletion path, and it must refuse BEFORE the first deletion instead of

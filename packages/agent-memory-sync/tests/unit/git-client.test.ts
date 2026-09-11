@@ -276,3 +276,30 @@ test("GitClient.commitStaged: creates the first commit on an unborn branch", () 
   assert.ok(sha);
   assert.equal(client.revParseHead(repoDir), sha);
 });
+
+// GitClient.listTreePaths (agent-tasks cda5b12c, D-022): the restore paths'
+// idea of "what the commit holds". Without -z, git C-quotes a path carrying
+// a byte above 0x7F, a double quote, a backslash or a control character, and
+// the quoted form fails every caller's `startsWith(subdir/)` filter, so the
+// file reads as absent from the commit: the destination restore then removes
+// the local copy and the whole-snapshot restore skips it.
+test("GitClient.listTreePaths: a path git would C-quote is returned verbatim", () => {
+  const root = sandbox("tree-quoting");
+  const repoDir = initRepoWithFiles(root, {
+    "shared/logs/spéc \"quoted\".md": "content\n",
+    "shared/plain.md": "plain\n",
+    "outside/other.md": "other\n"
+  });
+
+  const client = new GitClient("git");
+  assert.deepEqual(client.listTreePaths(repoDir, "HEAD", "shared").sort(), [
+    "shared/logs/spéc \"quoted\".md",
+    "shared/plain.md"
+  ]);
+  // No subdir: the whole tree, still verbatim.
+  assert.deepEqual(client.listTreePaths(repoDir, "HEAD", "").sort(), [
+    "outside/other.md",
+    "shared/logs/spéc \"quoted\".md",
+    "shared/plain.md"
+  ]);
+});

@@ -490,3 +490,95 @@ test("restore exits 10 when the named source has nothing to restore (AC-007)", (
   ]);
   assert.equal(JSON.parse(found.stdout).restored.length, 2);
 });
+
+// R4 high (D-022): without `-z`, `git ls-tree --name-only` C-quotes a path
+// that carries a byte above 0x7F, a double quote, a backslash or a control
+// character ("shared/logs/\303\274mlaut.md"). listTreePaths handed that quoted
+// form to the `startsWith('shared/')` filter, which the leading quote defeats,
+// so the commit read as not holding the file, the dry run listed the local
+// copy under `would remove`, and `--yes` deleted a file the commit holds; the
+// next sync then published that deletion, one file being below every
+// threshold. The older `restore <sha> --yes` form filtered the same list and
+// silently skipped the file instead of restoring it.
+test("restore --from-commit keeps and restores a path git would C-quote (AC-007)", () => {
+  const root = createSandbox("restore-quoted-paths");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  const fixture: Record<string, string> = {
+    "logs/plain.md": "plain entry\n",
+    "logs/ümlaut.md": "umlaut entry äöü\r\nno trailing newline",
+    'logs/quo"te.md': 'a "quoted" name\n'
+  };
+  const expectedPaths = Object.keys(fixture).sort();
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  for (const [relativePath, content] of Object.entries(fixture)) {
+    writeText(path.join(workspaceRoot, relativePath), content);
+  }
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const goodSha = git(["rev-parse", "HEAD"], cloneRemote(remoteDir, root, "good")).trim();
+  const originalBytes = new Map<string, Buffer>();
+  for (const relativePath of expectedPaths) {
+    originalBytes.set(relativePath, fs.readFileSync(path.join(workspaceRoot, relativePath)));
+  }
+
+  // The commit holds all three, so the preview has nothing to remove.
+  const previewed = runCli([
+    "restore",
+    "default",
+    "logs",
+    "--config",
+    configPath,
+    "--from-commit",
+    goodSha,
+    "--dry-run",
+    "--output",
+    "json"
+  ]);
+  const previewPayload = JSON.parse(previewed.stdout);
+  assert.deepEqual(previewPayload.restored, expectedPaths);
+  assert.deepEqual(previewPayload.removed, []);
+  assert.doesNotMatch(previewed.stdout + previewed.stderr, /would remove/);
+
+  const restored = runCli([
+    "restore",
+    "default",
+    "logs",
+    "--config",
+    configPath,
+    "--from-commit",
+    goodSha,
+    "--yes",
+    "--output",
+    "json"
+  ]);
+  const payload = JSON.parse(restored.stdout);
+  assert.deepEqual(payload.restored, expectedPaths);
+  assert.deepEqual(payload.removed, []);
+  assert.doesNotMatch(restored.stderr, /\bremoved\b/);
+  for (const relativePath of expectedPaths) {
+    const absolutePath = path.join(workspaceRoot, relativePath);
+    assert.equal(fileExists(absolutePath), true, `${relativePath} was removed`);
+    assert.deepEqual(fs.readFileSync(absolutePath), originalBytes.get(relativePath), relativePath);
+  }
+
+  // The older form, `restore <sha> --yes`, walks the same listing: a file the
+  // workspace lost has to come back from it rather than be skipped.
+  fs.rmSync(path.join(workspaceRoot, "logs", "ümlaut.md"));
+  const older = runCli(["restore", goodSha, "--config", configPath, "--yes", "--output", "json"]);
+  const olderPayload = JSON.parse(older.stdout);
+  assert.ok(
+    olderPayload.restored.some(
+      (file: { remoteRelativePath: string }) => file.remoteRelativePath === "logs/ümlaut.md"
+    ),
+    `restore <sha> --yes skipped the umlaut path: ${JSON.stringify(olderPayload.restored)}`
+  );
+  assert.deepEqual(
+    fs.readFileSync(path.join(workspaceRoot, "logs", "ümlaut.md")),
+    originalBytes.get("logs/ümlaut.md")
+  );
+});

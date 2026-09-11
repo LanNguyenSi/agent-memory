@@ -1276,6 +1276,31 @@ test("push: a refusal after an accepted adoption counts what the run started wit
     gitBinary: writeStubGitWipingWorkTree(root)
   });
 
+  // The preview first (R4 low, D-023): previewPush measures the adopted
+  // plan against the same denominator the real run uses (guardBaseFiles,
+  // the base the run started with), not against the base map the adoption
+  // just emptied. A dry run of the acceptance refuses with the same count
+  // and changes nothing.
+  const previewed = runCli(
+    [
+      "run",
+      "default",
+      "--config",
+      stubConfigPath,
+      "--mode",
+      "push",
+      "--dry-run",
+      "--accept-mass-delete",
+      "--output",
+      "json"
+    ],
+    { expectFailure: true }
+  );
+  assert.equal(previewed.status, 5, `expected the preview's mass-delete refusal. stderr: ${previewed.stderr}`);
+  assert.match(previewed.stderr, /50 file\(s\) under 'logs' \(50 of 50 tracked\)/);
+  assert.doesNotMatch(previewed.stderr, /of 0 tracked/);
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-post-accept-preview"), 50);
+
   // The wiped working copy is adopted by consent (the local copies go, with
   // a snapshot taken first), and the staged deletions of everything HEAD
   // holds are then refused by the plan guard, which --accept-mass-delete

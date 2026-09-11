@@ -31,8 +31,8 @@ test("json output keeps the top-level run schema stable", () => {
   // snapshots from the same task: the ids of the copies a run took before
   // touching a destination, empty on the runs that touched none. Both are
   // additive, so an existing consumer reading the keys above is unaffected;
-  // pull additionally carries `skippedFiles` and `protectedFiles`, which
-  // this push-shaped assertion does not cover.
+  // pull additionally carries `skippedFiles` and `protectedFiles`, pinned
+  // by the pull-shaped assertion further down.
   const run = payload.runs[0];
   assert.deepEqual(
     Object.keys(run).sort(),
@@ -50,4 +50,25 @@ test("json output keeps the top-level run schema stable", () => {
       "status"
     ]
   );
+
+  // The pull-shaped run: the same keys plus `protectedFiles` (local files
+  // kept because their base snapshot is missing, AC-002) and `skippedFiles`.
+  const pulled = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  const pullPayload = JSON.parse(pulled.stdout);
+  assert.deepEqual(Object.keys(pullPayload).sort(), ["command", "dryRun", "mode", "profile", "runs", "schedule"]);
+  assert.equal(pullPayload.mode, "pull");
+  assert.deepEqual(Object.keys(pullPayload.runs[0]).sort(), [
+    "appliedFiles",
+    "conflictFiles",
+    "deletedFiles",
+    "kind",
+    "mergedFiles",
+    "notes",
+    "protectedFiles",
+    "remoteHeadAfter",
+    "remoteHeadBefore",
+    "skippedFiles",
+    "snapshots",
+    "status"
+  ]);
 });

@@ -177,10 +177,11 @@ and the lock are described under [Deletion guards](#deletion-guards).
 | Code | Meaning | What to do |
 |---|---|---|
 | `0` | Success, including a tick that queued locally because the remote was unreachable. | Nothing. |
-| `2` | Usage error: a flag or argument this command does not accept. | Fix the invocation. |
+| `1` | An unrecognized flag or argument, or another commander-level usage error (the parser exits before any command code runs). | Fix the invocation; `--help` on the subcommand lists what it accepts. |
+| `2` | A flag combination or value this command rejects: `--accept-mass-delete` together with `--allow-mass-delete`, an invalid `--mode`, a destination `restore` without `--yes`, a malformed sha or cron expression. | Fix the invocation. |
 | `3` | Configuration error: a missing or invalid config value. | Fix the config file or the flag. |
 | `4` | A git or remote operation failed. | Read the message; a push/fetch failure is queued instead of exiting, so this is usually a local git problem. |
-| `5` | A push plan was refused by the mass-delete guard: it would remove more of a destination, or of the plan as a whole, than the thresholds allow. | Check whether the local workspace was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. |
+| `5` | A push plan was refused by the mass-delete guard: it would remove more of a destination, or of the plan as a whole, than the thresholds allow. `config get` of a key that is not set currently exits `5` as well (tracked separately as agent-tasks 0d5e693a). | Check whether the local workspace was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. For `config get`, set the key or check the config path. |
 | `6` | The replay queue has been failing to drain for longer than `queueEscalationThresholdMs`. | The remote is probably misconfigured rather than temporarily offline; check `remoteUrl`, `branch` and `repositorySubdir`. |
 | `7` | The fetched working copy is missing too much of what the base snapshot tracks, so it cannot be trusted to represent the remote. | Re-run once nothing else is touching `stateDir/tmp`. If the remote really did drop those files, run `run` once with `--accept-mass-delete`, or bring them back with `restore --from-commit <sha> --yes`. |
 | `8` | Another agent-memory-sync process holds the lock on this state directory. | Wait for it and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically. |

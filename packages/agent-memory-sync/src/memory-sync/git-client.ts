@@ -311,8 +311,16 @@ class GitClient {
     );
   }
 
+  // Repository-relative paths the tree at `ref` holds under `subdir`,
+  // verbatim. `-z` (NUL-terminated, unquoted), as in listStagedDeletions:
+  // without it git C-quotes a path carrying a byte above 0x7F, a double
+  // quote, a backslash or a control character ("shared/logs/\303\274mlaut.md"),
+  // and that quoted form fails every caller's `startsWith(subdir/)` filter,
+  // so the file read as absent from the commit. For the destination restore
+  // that meant removing a local file the commit holds, which the next sync
+  // published as a deletion (agent-tasks cda5b12c, D-022).
   listTreePaths(repoDir: string, ref: string, subdir: string): string[] {
-    const args = ["ls-tree", "-r", "--name-only", ref];
+    const args = ["ls-tree", "-r", "--name-only", "-z", ref];
     if (subdir) {
       args.push("--", `${subdir}/`);
     }
@@ -324,10 +332,7 @@ class GitClient {
       );
     }
 
-    return result.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    return result.stdout.split("\0").filter(Boolean);
   }
 
   run(args: string[], cwd: string, allowFailure = false): GitCommandResult {
