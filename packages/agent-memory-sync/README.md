@@ -89,6 +89,16 @@ Options:
   --conflict-strategy <strategy>         inline-markers, local-wins, remote-wins
   --reachability-timeout-ms <ms>         Timeout for the remote reachability precheck before
                                          pull/push  [default: 4000]
+  --allow-mass-delete                    Push a plan the mass-delete guard would refuse (see
+                                         massDeleteGuard in the config). It does not override an
+                                         unreliable checkout: a working copy that came back
+                                         missing files is still refused
+  --accept-mass-delete                   Apply a remote change that deletes more of a destination
+                                         than the guard allows, and adopt a checkout the run would
+                                         otherwise call unreliable. The destination is copied into
+                                         stateDir/snapshots first. Use it only once the remote
+                                         deletion is known to be genuine, for one run; it cannot
+                                         be combined with --allow-mass-delete
   --dry-run                              Show what would happen without making changes
   --output <text|json|yaml>              Output format  [default: text]
   --verbose                              Enable verbose diagnostics
@@ -96,6 +106,11 @@ Options:
   --no-color                             Disable colored diagnostics
   --help                                 Show this message and exit
 ```
+
+`--dry-run` honours both flags without changing anything: with `--accept-mass-delete` it
+reports the paths the real run would adopt (under `deletedFiles`, with a `would adopt N remote
+deletion(s)` note) instead of refusing the checkout, and takes no snapshot, removes no local
+file and moves no base snapshot.
 
 #### `agent-memory-sync watch [profile]`
 
@@ -110,6 +125,10 @@ Options:
   --max-runs <count>             Exit after this many watch ticks complete — pushed or
                                  queued locally when the remote is unreachable
                                  (primarily for tests)
+  --allow-mass-delete            Push a plan the mass-delete guard would refuse (see
+                                 massDeleteGuard in the config). It does not override
+                                 an unreliable checkout: a working copy that came back
+                                 missing files is still refused
   --remote <url>                 Override remote Git repository URL
   --branch <name>                Override branch
   --repository-subdir <path>     Override remote subdirectory
@@ -149,6 +168,25 @@ WantedBy=multi-user.target
 ```
 
 The `StartLimitIntervalSec` / `StartLimitBurst` pair caps systemd's restart loop for the failures that still exit non-zero — a config/data error raised before the remote working copy is prepared (e.g. a required `syncPaths` entry missing), or any other git-level failure while preparing/committing that working copy (a full disk, a corrupted git config, a broken commit hook, ...) — so a persistently broken cause does not crashloop forever; a remote that is merely unreachable or rejecting the push (see below) no longer exits at all, so it never spends this budget. The one exception is [queue escalation](#queue-escalation-a-permanently-broken-remote-does-not-queue-forever): once the queue has been failing to drain past `queueEscalationThresholdMs` (default 24h), a tick DOES exit non-zero again — but only on a real local edit (`watch` is edge-triggered), so it does not spend this budget any faster than this machine's memory actually changes while the remote stays broken. Inspect `journalctl -u agent-memory-sync-watch.service` for the `snapshot push failed: ...` line `watch` writes to stderr before exiting on one of those failures.
+
+#### Exit codes
+
+Every non-zero exit a supervisor can see, and what it means. The deletion guards
+and the lock are described under [Deletion guards](#deletion-guards).
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `0` | Success, including a tick that queued locally because the remote was unreachable. | Nothing. |
+| `1` | An unrecognized flag or argument, or another commander-level usage error (the parser exits before any command code runs). | Fix the invocation; `--help` on the subcommand lists what it accepts. |
+| `2` | A flag combination or value this command rejects: `--accept-mass-delete` together with `--allow-mass-delete`, an invalid `--mode`, a destination `restore` without `--yes`, a malformed sha or cron expression. | Fix the invocation. |
+| `3` | Configuration error: a missing or invalid config value. | Fix the config file or the flag. |
+| `4` | A git or remote operation failed. | Read the message; a push/fetch failure is queued instead of exiting, so this is usually a local git problem. |
+| `5` | A push plan was refused by the mass-delete guard: it would remove more of a destination, or of the plan as a whole, than the thresholds allow. `config get` of a key that is not set currently exits `5` as well. | Check whether the local workspace was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. For `config get`, set the key or check the config path. |
+| `6` | The replay queue has been failing to drain for longer than `queueEscalationThresholdMs`. | The remote is probably misconfigured rather than temporarily offline; check `remoteUrl`, `branch` and `repositorySubdir`. |
+| `7` | The fetched working copy is missing too much of what the base snapshot tracks, so it cannot be trusted to represent the remote. | Re-run once nothing else is touching `stateDir/tmp`. If the remote really did drop those files, run `run` once with `--accept-mass-delete`, or bring them back with `restore --from-commit <sha> --yes`. |
+| `8` | Another agent-memory-sync process holds the lock on this state directory. | Wait for it and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically. |
+| `9` | A remote change would delete more of a destination, or of the plan as a whole, than the thresholds allow. | Confirm the remote deletion is genuine, then run `run` once with `--accept-mass-delete`. |
+| `10` | A restore source was not found: no such pre-apply snapshot, or the commit holds nothing to restore under the requested path or destination. | List `<stateDir>/snapshots/<destination>/` for the available generations, or pick a commit that still had the files (`git log` on the remote). |
 
 Honest arithmetic, measured: one crash-restart cycle (a failed start plus `RestartSec`) is ~11s. Under the original `StartLimitBurst=10` / `StartLimitIntervalSec=300` pairing shown in earlier revisions of this doc, 10 crashes exhausted the budget in ~110s — well inside a single ordinary "edit the config, restart, still broken, edit again" debugging session. Once the burst is exhausted, systemd does not just pause the restart loop, it marks the unit `failed` and **stops trying entirely**, even after the underlying cause is fixed, until the failure counter is explicitly cleared:
 
@@ -227,18 +265,27 @@ can hide to about a day.
 
 If you mint short-lived GitHub App installation tokens via a `gh-token.sh`-style helper, point `remoteUrl` at a wrapper script that refreshes the URL before each invocation, or wire it through a credential helper. agent-memory-sync intentionally does not embed token-minting logic.
 
-#### `agent-memory-sync restore <sha> [OPTIONS]`
+#### `agent-memory-sync restore [OPTIONS]`
 
-Restore memory files from a specific snapshot commit. Useful for rolling back a bad edit when paired with `watch` or scheduled `run --mode push`.
+Restore memory files from a specific snapshot commit, or a whole sync
+destination from a commit or from a local pre-apply snapshot. Useful for rolling
+back a bad edit when paired with `watch` or scheduled `run --mode push`, and for
+recovering a destination a remote change removed.
 
 ```bash
 agent-memory-sync restore <sha> [OPTIONS]
+agent-memory-sync restore <profile> <destination> --from-commit <sha> [OPTIONS]
+agent-memory-sync restore <profile> <destination> --from-snapshot [<id>|latest] [OPTIONS]
 
 Options:
+  --from-commit <sha>            Restore a whole sync destination from this commit
+  --from-snapshot [id]           Restore a whole sync destination from a local
+                                 pre-apply snapshot  [default: latest]
   --path <relative>              Restore only this remote-relative path
                                  (relative to repositorySubdir)
   --dry-run                      List what would be restored without writing
-  --yes                          Confirm a full-snapshot restore without prompting
+  --yes                          Confirm a full-snapshot restore, or a whole-destination
+                                 restore (--from-commit/--from-snapshot), without prompting
   --remote <url>                 Override remote Git repository URL
   --branch <name>                Override branch
   --repository-subdir <path>     Override remote subdirectory
@@ -249,7 +296,7 @@ Options:
   --help
 ```
 
-A full-tree restore requires `--yes` (or `--dry-run` to preview); a single file via `--path MEMORY.md` does not. Files are written byte-identical to their contents at `<sha>`. The command refuses to map a remote path that does not match an entry in `syncPaths`, so a restore cannot scatter files outside the configured workspace. An unknown SHA or a path that did not exist at that commit fails loudly. `<sha>` may be abbreviated as long as the commit is reachable from the configured branch — it resolves locally against the branch history the command already fetches, no extra network round-trip; a short sha that is not reachable that way fails loudly with an explicit "use the full 40-character sha" message, since a plain `git fetch <remote> <ref>` only ever accepts a full object id from a remote.
+A full-tree restore requires `--yes` (or `--dry-run` to preview), and so do both destination-shaped forms; a single file via `--path MEMORY.md` does not. Files are written byte-identical to their contents at `<sha>`. The command refuses to map a remote path that does not match an entry in `syncPaths`, so a restore cannot scatter files outside the configured workspace. An unknown SHA or a path that did not exist at that commit fails loudly. `<sha>` may be abbreviated as long as the commit is reachable from the configured branch: it resolves locally against the branch history the command already fetches, no extra network round-trip; a short sha that is not reachable that way fails loudly with an explicit "use the full 40-character sha" message, since a plain `git fetch <remote> <ref>` only ever accepts a full object id from a remote.
 
 ```bash
 # Roll back MEMORY.md to a specific commit
@@ -260,7 +307,28 @@ agent-memory-sync restore 7c4d2e1 --yes
 
 # Preview a restore
 agent-memory-sync restore 7c4d2e1 --yes --dry-run
+
+# Bring one destination back to what a commit held, then publish it again
+agent-memory-sync restore default logs --from-commit 7c4d2e1 --yes
+agent-memory-sync run default --mode sync
+
+# Undo what the last run applied to a destination
+agent-memory-sync restore default logs --from-snapshot latest --yes
 ```
+
+The two destination-shaped forms replace the destination rather than merging into
+it: files the source has are written, files it does not are removed, and the
+destination's current tree is copied into `<stateDir>/snapshots` first, so a
+restore aimed at the wrong source is itself undoable. Because they remove files,
+both require `--yes`; `--dry-run` previews without it. A source that is not there
+(no snapshot for the destination, or a commit holding nothing under it) exits `10`.
+
+`--from-commit` also moves the base snapshot for that destination to the CURRENT
+remote tree, not to the restored one. That is what makes the recovered files
+publish as additions on the next push instead of being deleted again, and it is
+what clears an exit-`7` refusal caused by a base snapshot that still claims files
+the remote no longer has. `--from-snapshot` leaves the base snapshot alone and
+needs no remote at all.
 
 #### `agent-memory-sync config`
 
@@ -305,6 +373,9 @@ The `--config` flag overrides the default path.
   "verbose": false,
   "reachabilityTimeoutMs": 4000,
   "queueEscalationThresholdMs": 86400000,
+  "massDeleteGuard": { "maxRatio": 0.1, "maxFiles": 20 },
+  "snapshotGenerations": 3,
+  "lockStaleMs": 1800000,
   "syncPaths": [
     { "source": "MEMORY.md", "destination": "MEMORY.md", "kind": "file" },
     { "source": "logs", "destination": "logs", "kind": "directory" }
@@ -319,7 +390,7 @@ config file from scratch.
 
 ### Environment Variables
 
-All config keys can be overridden via environment variables prefixed with `AGENT_MEMORY_SYNC_`:
+Config keys can be overridden via environment variables prefixed with `AGENT_MEMORY_SYNC_`, with one exception: `massDeleteGuard` is file-only and has no environment override.
 
 ```bash
 export AGENT_MEMORY_SYNC_REMOTE_URL=/srv/git/agent-memory.git
@@ -328,6 +399,53 @@ export AGENT_MEMORY_SYNC_VERBOSE=true
 ```
 
 Priority order (highest to lowest): CLI flags > environment variables > config file > defaults.
+
+### Deletion guards
+
+A pull, a push and a watch tick all ask whether the deletions they are about to
+make are plausible before making them, and a pull copies what it is about to
+change.
+
+- **Thresholds** (`massDeleteGuard`): a plan that deletes more than `maxFiles`
+  files (default 20), or more than `maxRatio` of a destination (default `0.1`,
+  i.e. 10 percent), is refused. The proportional rule needs at least two
+  deletions in one plan before it applies, so ordinary single-file housekeeping
+  on a small destination never needs an override. The absolute rule is also
+  checked plan-wide, across destinations and including paths outside
+  `repositorySubdir` that the commit would carry.
+- **Untrustworthy working copies**: a fetched working copy that is missing that
+  much of what the base snapshot tracks is refused before any merge runs
+  (exit `7`), on both the pull and the push side. Nothing at the file level
+  tells a working copy that was wiped underneath the process from a remote that
+  genuinely dropped the files, which is why this one has its own escape rather
+  than sharing the push flag's.
+- **Pre-apply snapshots**: before a pull deletes or overwrites anything in a
+  destination, the destination's current tree is copied to
+  `<stateDir>/snapshots/<destination>/<timestamp>/`. The newest
+  `snapshotGenerations` copies (default 3) are kept. A run with nothing to apply
+  writes nothing. `restore --from-snapshot` reads them back.
+- **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
+  thresholds refuse: "yes, publish these deletions". It does not override an
+  untrustworthy working copy.
+- **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the
+  thresholds refuse, and is the one override of the untrustworthy-working-copy
+  refusal: "yes, the remote really did drop those files". The destination is
+  copied into `<stateDir>/snapshots` first, the remote's state is then applied
+  locally (on the push side, that means removing the local copies the remote no
+  longer has), and the base snapshot moves with it, so the next run is clean
+  instead of republishing what was just accepted as deleted. It is a one-shot
+  decision about one observed remote state, which is why `watch` does not take
+  it: on a process that runs for weeks it would be consent for every future
+  tick, including one that fetches a wiped working copy. It cannot be combined
+  with `--allow-mass-delete` (usage error, exit `2`): after the adoption there
+  is nothing left for the other flag to publish except a deletion the guard
+  would refuse. `--dry-run --accept-mass-delete` reports what would be adopted
+  and changes nothing.
+- **The state-directory lock**: `run`, `watch` and `restore` take an advisory
+  lock on the state directory (`<stateDir>/lock.json`) so the periodic job and
+  the watcher cannot work on one state directory at the same time. A run that
+  cannot have it exits `8` without reading or writing anything; a watch tick
+  defers and retries with its pending changes intact.
 
 ### Sync behavior
 

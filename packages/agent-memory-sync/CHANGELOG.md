@@ -8,6 +8,19 @@ is dated instead. The format is loosely based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **The 2026-09-11 memory-corpus wipe.** A periodic `run --mode sync` tick and a `watch` tick shared one state directory with nothing serialising them. The watch tick's cleanup removed the sync tick's freshly checked out working copy under `stateDir/tmp` after git had already reported success, so the pull read an empty tree, resolved every path to a deletion and removed the local corpus (about 400 files) from disk; the follow-up push published the deletion, and the Linux peer mirrored it one tick later. Incident record, including the measured counts and the recovery: pandora run `.ai/runs/2026-09-11-memory-sync-wipe` (agent-tasks cda5b12c).
+  - `run`'s pull-failure fallback no longer treats every git failure as "the remote is unavailable", which is what turned a broken pull into a push-only retry of an emptied workspace.
+  - A pull never deletes a local file whose base snapshot is missing; such files are local-only and the run reports how many it protected.
+  - A push whose plan deletes more than `massDeleteGuard.maxFiles` (default 20) or more than `massDeleteGuard.maxRatio` (default 10 percent) of a destination is refused (exit `5`) unless `--allow-mass-delete` is given, counted on the deletions the commit actually carries rather than on the ones the merge intended, plan-wide as well as per destination, and including paths outside `repositorySubdir`. The watcher's push obeys the same guard. The commit then carries the index exactly as measured (`GitClient.commitStaged`) instead of staging a second time on its way in, so a working copy wiped between the measurement and the commit can no longer be published.
+  - A fetched working copy missing that much of what the base snapshot tracks is refused before any merge runs (exit `7`), on both the pull and the push side.
+  - `run`, `watch` and `restore` take an advisory lock on the state directory (exit `8` when it is held), and `StateStore.clearTemp` clears only the caller's own working copy instead of the whole `tmp` root.
+  - Before a pull deletes or overwrites anything in a destination, the destination's current tree is copied to `<stateDir>/snapshots/<destination>/<timestamp>/`, keeping `snapshotGenerations` (default 3).
+  - A remote change that would delete more of a destination than the thresholds allow is not applied (exit `9`). `--accept-mass-delete` (on `run` only, one run at a time) applies it after the copy, and is the one override of the exit-`7` refusal: nothing at the file level tells a wiped working copy from a remote that genuinely dropped the files, and without an escape a legitimate large deletion wedges every mode permanently. `watch` does not take the flag, since on a long-running process it would be consent for every future tick. It cannot be combined with `--allow-mass-delete` (usage error, exit `2`), and `--dry-run --accept-mass-delete` reports the paths the real run would adopt without changing anything.
+  - `restore <profile> <destination> --from-commit <sha>` and `--from-snapshot [<id>|latest]` bring a whole destination back and require `--yes` (`--dry-run` previews without it). A commit restore moves the base snapshot for that destination to the current remote tree, so the next push publishes the recovered files as additions. A restore source that is not there exits `10`, its own code, instead of sharing the refused-push code `5`.
+  - New config keys: `massDeleteGuard`, `snapshotGenerations`, `lockStaleMs`.
+
 ### Changed
 
 - `watch --verbose` now prints `watch tick pushing snapshot` to stderr the instant a tick starts the git push work, instead of staying silent until the tick's result is known.

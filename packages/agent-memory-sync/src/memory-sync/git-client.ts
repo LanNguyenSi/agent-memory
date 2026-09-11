@@ -106,10 +106,110 @@ class GitClient {
     return Boolean(result.stdout.trim());
   }
 
-  commitAll(repoDir: string, message: string): string | null {
+  // Stages the whole working copy. Split out as its own method so a caller
+  // can stage FIRST, inspect what the commit would actually contain (see
+  // listStagedDeletions below), and then commit exactly that index with
+  // commitStaged, without staging a second time.
+  stageAll(repoDir: string): void {
     this.run(["add", "-A"], repoDir);
+  }
+
+  // Repository-relative paths the INDEX currently records as deletions
+  // against HEAD, i.e. the deletions the next commit would actually carry.
+  //
+  // Origin (agent-tasks cda5b12c, pandora run
+  // .ai/runs/2026-09-11-memory-sync-wipe): the push-side mass-delete
+  // guard used to count the deletions its own 3-way merge plan intended,
+  // which is not the same set as the deletions `git add -A` commits. A path
+  // the working copy was already missing (a temp checkout wiped underneath
+  // the process) is not something the plan "deletes": it never reads as a
+  // deletion at all, and yet `git add -A` stages and publishes it. Measuring
+  // the index instead makes the guard's numerator the plan that is really
+  // about to be committed.
+  //
+  // `--no-renames`: with rename detection on (git's default for `git diff`),
+  // a delete-plus-add pair of identical content is reported as a single R
+  // entry and would vanish from a --diff-filter=D listing. For a deletion
+  // guard the conservative reading is the right one, so rename detection is
+  // turned off and such a pair counts as the deletion it physically is.
+  //
+  // `-z`: NUL-separated, so a path carrying a space, a quote or a non-ASCII
+  // byte is returned verbatim instead of being C-quoted by core.quotePath.
+  // The stream is a flat run of `D\0<path>\0` fields; every second field is
+  // the path.
+  //
+  // A working copy with no HEAD commit at all (prepareWorkingCopy's orphan
+  // branch, used for a remote that has never been pushed to) has nothing a
+  // deletion could be measured against, and `git diff --cached HEAD` would
+  // fail there rather than report "no deletions". Checked explicitly instead
+  // of being swallowed by an allowFailure, so a genuine git failure in this
+  // call still raises rather than silently reporting an empty, permissive
+  // deletion set to the guard.
+  listStagedDeletions(repoDir: string): string[] {
+    const head = this.run(["rev-parse", "--verify", "--quiet", "HEAD"], repoDir, true);
+    if (head.exitCode !== 0) {
+      return [];
+    }
+
+    const result = this.run(
+      ["diff", "--cached", "--name-status", "--no-renames", "-z", "--diff-filter=D"],
+      repoDir
+    );
+
+    const fields = result.stdout.split("\0");
+    const deletions: string[] = [];
+    for (let index = 0; index + 1 < fields.length; index += 2) {
+      const repoRelativePath = fields[index + 1];
+      if (repoRelativePath) {
+        deletions.push(repoRelativePath);
+      }
+    }
+
+    return deletions;
+  }
+
+  // Stage-and-commit in one step. Not used by the push path, which has to
+  // separate the two (see commitStaged); kept for a caller that has nothing
+  // to measure in between.
+  commitAll(repoDir: string, message: string): string | null {
+    this.stageAll(repoDir);
     if (!this.hasChanges(repoDir)) {
       return null;
+    }
+
+    this.run(["commit", "-m", message], repoDir);
+    return this.revParseHead(repoDir);
+  }
+
+  // Commits the index exactly as it stands, staging nothing on the way.
+  //
+  // The push path stages once, reads the deletions out of the index
+  // (listStagedDeletions), gates the mass-delete guard on that reading, and
+  // then commits. A commit that re-ran `git add -A` on its way in would
+  // commit a DIFFERENT tree from the one that was measured whenever the
+  // working copy changed in between, and that window is real: a temporary
+  // checkout wiped underneath this process after the measurement was staged
+  // by the second add and published as a total deletion at exit 0, with the
+  // guard reporting no deletions at all (agent-tasks cda5b12c, pandora run
+  // .ai/runs/2026-09-11-memory-sync-wipe, review round 3). The state-dir
+  // lock keeps other processes out of stateDir; it cannot close a window
+  // inside one process. So the commit takes the index as measured and
+  // nothing else: a wipe after the stage never reaches it, and a wipe before
+  // the stage is what the staged guard already refuses.
+  //
+  // `git diff --cached --quiet` is the emptiness check: exit 0 means the
+  // index matches HEAD (or is empty on an unborn branch, where git diffs
+  // against the empty tree), exit 1 means something is staged, anything
+  // else is a git failure. `git status --porcelain`, which commitAll uses,
+  // would also count untracked files, which are exactly what this method
+  // must not pick up.
+  commitStaged(repoDir: string, message: string): string | null {
+    const staged = this.run(["diff", "--cached", "--quiet"], repoDir, true);
+    if (staged.exitCode === 0) {
+      return null;
+    }
+    if (staged.exitCode !== 1) {
+      throw new CliError(`git command failed: ${this.gitBinary} diff --cached --quiet.`, 4);
     }
 
     this.run(["commit", "-m", message], repoDir);
@@ -211,8 +311,16 @@ class GitClient {
     );
   }
 
+  // Repository-relative paths the tree at `ref` holds under `subdir`,
+  // verbatim. `-z` (NUL-terminated, unquoted), as in listStagedDeletions:
+  // without it git C-quotes a path carrying a byte above 0x7F, a double
+  // quote, a backslash or a control character ("shared/logs/\303\274mlaut.md"),
+  // and that quoted form fails every caller's `startsWith(subdir/)` filter,
+  // so the file read as absent from the commit. For the destination restore
+  // that meant removing a local file the commit holds, which the next sync
+  // published as a deletion (see the origin note above).
   listTreePaths(repoDir: string, ref: string, subdir: string): string[] {
-    const args = ["ls-tree", "-r", "--name-only", ref];
+    const args = ["ls-tree", "-r", "--name-only", "-z", ref];
     if (subdir) {
       args.push("--", `${subdir}/`);
     }
@@ -224,10 +332,7 @@ class GitClient {
       );
     }
 
-    return result.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    return result.stdout.split("\0").filter(Boolean);
   }
 
   run(args: string[], cwd: string, allowFailure = false): GitCommandResult {

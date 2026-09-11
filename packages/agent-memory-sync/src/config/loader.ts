@@ -4,6 +4,9 @@ const path = require("node:path");
 const { CliError } = require("../errors");
 const { DEFAULT_REACHABILITY_TIMEOUT_MS } = require("../memory-sync/reachability");
 const { DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("../memory-sync/state-store");
+const { DEFAULT_MASS_DELETE_GUARD } = require("../memory-sync/guards");
+const { DEFAULT_LOCK_STALE_MS } = require("../memory-sync/lock");
+const { DEFAULT_SNAPSHOT_GENERATIONS } = require("../memory-sync/pre-apply-snapshot");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -43,6 +46,24 @@ interface UserConfig {
   // null-is-a-real-value convention. See validateQueueEscalationThresholdMs
   // and push.ts's resolveQueueEscalationThresholdMs.
   queueEscalationThresholdMs?: number | null;
+  // Thresholds for the push-side mass-delete guard
+  // (src/memory-sync/guards.ts). Absent falls through to
+  // DEFAULT_MASS_DELETE_GUARD; a partial object keeps the default for the
+  // key it omits, so a profile can tighten one rule without restating the
+  // other.
+  massDeleteGuard?: MassDeleteGuardConfig | null;
+  // How long the stateDir advisory lock (src/memory-sync/lock.ts) may sit
+  // before a later run treats it as abandoned and takes it over. See
+  // DEFAULT_LOCK_STALE_MS for how the default is sized.
+  lockStaleMs?: number;
+  // How many pre-apply snapshots per sync destination are kept
+  // (src/memory-sync/pre-apply-snapshot.ts).
+  snapshotGenerations?: number;
+}
+
+interface MassDeleteGuardConfig {
+  maxRatio?: number;
+  maxFiles?: number;
 }
 
 interface LoadedConfig {
@@ -69,6 +90,9 @@ interface RunConfig extends UserConfig {
   reachabilityTimeoutMs: number;
   reachabilityCheckCommand: string[] | null;
   queueEscalationThresholdMs: number | null;
+  massDeleteGuard: Required<MassDeleteGuardConfig>;
+  lockStaleMs: number;
+  snapshotGenerations: number;
 }
 
 interface RunConfigOverrides {
@@ -90,6 +114,9 @@ interface RunConfigOverrides {
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
   queueEscalationThresholdMs?: number | null;
+  massDeleteGuard?: MassDeleteGuardConfig | null;
+  lockStaleMs?: number;
+  snapshotGenerations?: number;
 }
 
 const DEFAULT_SYNC_PATHS: SyncPathConfig[] = [
@@ -112,7 +139,10 @@ const DEFAULTS: Omit<RunConfig, "repositorySubdir" | "stateDir" | "remoteUrl" | 
   gitBinary: "git",
   reachabilityTimeoutMs: DEFAULT_REACHABILITY_TIMEOUT_MS,
   reachabilityCheckCommand: null,
-  queueEscalationThresholdMs: DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+  queueEscalationThresholdMs: DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS,
+  massDeleteGuard: DEFAULT_MASS_DELETE_GUARD,
+  lockStaleMs: DEFAULT_LOCK_STALE_MS,
+  snapshotGenerations: DEFAULT_SNAPSHOT_GENERATIONS
 };
 
 function defaultConfigPath(): string {
@@ -177,7 +207,15 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
       DEFAULT_REACHABILITY_TIMEOUT_MS
     ),
     reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand),
-    queueEscalationThresholdMs: validateQueueEscalationThresholdMs(merged.queueEscalationThresholdMs)
+    queueEscalationThresholdMs: validateQueueEscalationThresholdMs(merged.queueEscalationThresholdMs),
+    massDeleteGuard: normalizeMassDeleteGuard(merged.massDeleteGuard),
+    lockStaleMs: validatePositiveInteger(merged.lockStaleMs, "lockStaleMs", DEFAULT_LOCK_STALE_MS),
+    snapshotGenerations: validatePositiveInteger(
+      merged.snapshotGenerations,
+      "snapshotGenerations",
+      DEFAULT_SNAPSHOT_GENERATIONS,
+      "generations"
+    )
   };
 }
 
@@ -250,7 +288,10 @@ function listConfigKeys(): string[] {
     "gitBinary",
     "reachabilityTimeoutMs",
     "reachabilityCheckCommand",
-    "queueEscalationThresholdMs"
+    "queueEscalationThresholdMs",
+    "massDeleteGuard",
+    "lockStaleMs",
+    "snapshotGenerations"
   ];
 }
 
@@ -325,6 +366,21 @@ function readEnvConfig(): UserConfig {
       Number(env.AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS),
       "AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS",
       DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+    );
+  }
+  if (env.AGENT_MEMORY_SYNC_SNAPSHOT_GENERATIONS) {
+    config.snapshotGenerations = validatePositiveInteger(
+      Number(env.AGENT_MEMORY_SYNC_SNAPSHOT_GENERATIONS),
+      "AGENT_MEMORY_SYNC_SNAPSHOT_GENERATIONS",
+      DEFAULT_SNAPSHOT_GENERATIONS,
+      "generations"
+    );
+  }
+  if (env.AGENT_MEMORY_SYNC_LOCK_STALE_MS) {
+    config.lockStaleMs = validatePositiveInteger(
+      Number(env.AGENT_MEMORY_SYNC_LOCK_STALE_MS),
+      "AGENT_MEMORY_SYNC_LOCK_STALE_MS",
+      DEFAULT_LOCK_STALE_MS
     );
   }
   if (env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND) {
@@ -414,7 +470,13 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
     reachability_check_command: "reachabilityCheckCommand",
     reachabilityCheckCommand: "reachabilityCheckCommand",
     queue_escalation_threshold_ms: "queueEscalationThresholdMs",
-    queueEscalationThresholdMs: "queueEscalationThresholdMs"
+    queueEscalationThresholdMs: "queueEscalationThresholdMs",
+    mass_delete_guard: "massDeleteGuard",
+    massDeleteGuard: "massDeleteGuard",
+    lock_stale_ms: "lockStaleMs",
+    lockStaleMs: "lockStaleMs",
+    snapshot_generations: "snapshotGenerations",
+    snapshotGenerations: "snapshotGenerations"
   };
 
   for (const [key, value] of Object.entries(raw)) {
@@ -425,6 +487,11 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
 
     if (normalizedKey === "reachabilityCheckCommand") {
       normalized.reachabilityCheckCommand = normalizeReachabilityCheckCommand(value as string[] | null);
+      continue;
+    }
+
+    if (normalizedKey === "massDeleteGuard") {
+      normalized.massDeleteGuard = normalizeMassDeleteGuard(value as MassDeleteGuardConfig | null);
       continue;
     }
 
@@ -496,13 +563,21 @@ function validateConflictStrategy(value?: ConflictStrategy): ConflictStrategy {
   );
 }
 
-function validatePositiveInteger(value: number | undefined, key: string, fallback: number): number {
+// `unit` names what the number counts, so the message a misconfigured key
+// produces says what a valid value would look like. Milliseconds by default,
+// since every caller but one measures a duration.
+function validatePositiveInteger(
+  value: number | undefined,
+  key: string,
+  fallback: number,
+  unit = "milliseconds"
+): number {
   if (typeof value === "undefined") {
     return fallback;
   }
 
   if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
-    throw new CliError(`config key '${key}' must be a positive integer (milliseconds).`, 3);
+    throw new CliError(`config key '${key}' must be a positive integer (${unit}).`, 3);
   }
 
   return value;
@@ -518,6 +593,43 @@ function validateQueueEscalationThresholdMs(value: number | null | undefined): n
   }
 
   return validatePositiveInteger(value, "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
+}
+
+// Explicit `null` (or an absent key) means "use the defaults" rather than
+// "no guard": a mass-delete guard that can be turned off from a config file
+// would reintroduce the exact failure mode this package just closed, and the
+// per-run escape hatch is the --allow-mass-delete flag, which is visible in
+// the invocation that used it. Each key is validated independently so a
+// profile can tighten one rule and inherit the other.
+function normalizeMassDeleteGuard(value?: MassDeleteGuardConfig | null): Required<MassDeleteGuardConfig> {
+  if (!value) {
+    return { ...DEFAULT_MASS_DELETE_GUARD };
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new CliError(
+      "config key 'massDeleteGuard' must be an object with optional 'maxRatio' and 'maxFiles' keys.",
+      3
+    );
+  }
+
+  const maxRatio =
+    typeof value.maxRatio === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxRatio : value.maxRatio;
+  const maxFiles =
+    typeof value.maxFiles === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxFiles : value.maxFiles;
+
+  if (typeof maxRatio !== "number" || !Number.isFinite(maxRatio) || maxRatio <= 0 || maxRatio > 1) {
+    throw new CliError(
+      "config key 'massDeleteGuard.maxRatio' must be a number greater than 0 and at most 1.",
+      3
+    );
+  }
+
+  if (!Number.isInteger(maxFiles) || maxFiles <= 0) {
+    throw new CliError("config key 'massDeleteGuard.maxFiles' must be a positive integer.", 3);
+  }
+
+  return { maxRatio, maxFiles };
 }
 
 function normalizeReachabilityCheckCommand(value?: string[] | null): string[] | null {
@@ -560,10 +672,23 @@ function parseConfigValue(key: string, value: string): unknown {
       return validateConflictStrategy(value as ConflictStrategy);
     case "reachabilityTimeoutMs":
       return validatePositiveInteger(Number(value), "reachabilityTimeoutMs", DEFAULT_REACHABILITY_TIMEOUT_MS);
+    case "lockStaleMs":
+      return validatePositiveInteger(Number(value), "lockStaleMs", DEFAULT_LOCK_STALE_MS);
+    case "snapshotGenerations":
+      return validatePositiveInteger(
+        Number(value),
+        "snapshotGenerations",
+        DEFAULT_SNAPSHOT_GENERATIONS,
+        "generations"
+      );
     case "queueEscalationThresholdMs":
       return value === "null"
         ? null
         : validatePositiveInteger(Number(value), "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
+    case "massDeleteGuard":
+      return value === "null"
+        ? null
+        : normalizeMassDeleteGuard(JSON.parse(value) as MassDeleteGuardConfig);
     case "reachabilityCheckCommand":
       return value === "null"
         ? null

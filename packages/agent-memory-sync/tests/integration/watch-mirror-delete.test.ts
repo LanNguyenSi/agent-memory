@@ -517,3 +517,84 @@ test("watch tick updates the local base snapshot to the post-merge remote conten
   assert.equal(readText(baseFile), "seed\nupdated\n");
   assert.equal(baseMeta.deleted, false);
 });
+
+// R2 medium: a tick whose only outcome is a deletion reported "watch tick
+// produced no remote changes" while the remote really did shrink, because
+// the report gated on appliedFiles alone and a deletion is never an applied
+// file. An operator reading a launchd log had no signal at all that the tick
+// removed anything.
+test("watch tick reports a delete-only tick as a deletion, not as no remote changes", async () => {
+  const root = createSandbox("watch-delete-only-report");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "base\n");
+  writeText(path.join(workspaceRoot, "logs", "mine.md"), "mine v1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const { exitCode, stderr } = await runWatchTick(configPath, () => {
+    fs.rmSync(path.join(workspaceRoot, "logs", "mine.md"));
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+
+  assert.doesNotMatch(stderr, /produced no remote changes/);
+  assert.match(stderr, /pushed snapshot [0-9a-f]{7} \(0 file\(s\) applied, 1 deletion\(s\)\)/);
+
+  const inspection = cloneRemote(remoteDir, root, "inspect-delete-only");
+  assert.equal(fileExists(path.join(inspection, "shared", "logs", "mine.md")), false);
+  assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "base\n");
+});
+
+// AC-004: the watch job and the sync job may not operate on one stateDir at
+// the same time. A tick that finds the lock held defers instead of failing:
+// the watcher is the process that has to survive (the 2026-09-11 incident
+// was noticed at all only because watch was still running), and its pending
+// changes must survive with it rather than being consumed by a tick that
+// could not push them.
+test("watch tick defers while another process holds the stateDir lock, then pushes", async () => {
+  const root = createSandbox("watch-lock-deferral");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const lockFile = path.join(workspaceRoot, ".agent-memory-sync", "default", "lock.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  fs.writeFileSync(
+    lockFile,
+    `${JSON.stringify({
+      pid: process.pid,
+      host: require("node:os").hostname(),
+      command: "run --mode sync",
+      acquiredAt: new Date().toISOString()
+    })}\n`,
+    "utf8"
+  );
+
+  const { exitCode, stderr } = await runWatchTick(
+    configPath,
+    async () => {
+      writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\nedited\n");
+      // Long enough for at least one debounce window to fire against the
+      // held lock before it is dropped again.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      fs.rmSync(lockFile);
+    },
+    { debounceMs: 300 }
+  );
+
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.match(stderr, /watch tick deferred/);
+  assert.match(stderr, new RegExp(`pid ${process.pid}`));
+
+  // The deferred tick did not consume the pending change: it is on the
+  // remote once the lock is gone.
+  const inspection = cloneRemote(remoteDir, root, "inspect-lock-deferral");
+  assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "seed\nedited\n");
+});

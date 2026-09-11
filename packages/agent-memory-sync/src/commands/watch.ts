@@ -5,7 +5,13 @@ const {
   requireRemoteUrl,
   resolveRunConfig
 } = require("../config/loader");
-const { CliError } = require("../errors");
+const {
+  CliError,
+  MassDeleteRefusedError,
+  StateDirLockedError,
+  UnreliableCheckoutError
+} = require("../errors");
+const { acquireStateDirLock } = require("../memory-sync/lock");
 const { buildCommitMessage } = require("../memory-sync/snapshot");
 const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
@@ -25,6 +31,13 @@ interface WatchOptions {
   stateDir?: string;
   debounceMs?: string;
   maxRuns?: string;
+  allowMassDelete: boolean;
+  // No acceptMassDelete here, deliberately: `watch` runs for as long as the
+  // machine is up, so a flag on its command line would be consent for every
+  // future tick, including the one that fetches a wiped checkout next week
+  // (measured in review: with the flag, a wiped checkout deleted every local
+  // file the remote still held, watcher exit 0). Accepting a remote deletion
+  // is a one-shot decision about one observed state, and it lives on `run`.
 }
 
 const DEFAULT_DEBOUNCE_MS = 5000;
@@ -50,6 +63,12 @@ function registerWatchCommand(program: import("commander").Command): void {
       "--max-runs <count>",
       "Exit after this many watch ticks complete — pushed or queued locally when the remote " +
         "is unreachable (primarily for tests)"
+    )
+    .option(
+      "--allow-mass-delete",
+      "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
+        "override an unreliable checkout: a working copy that came back missing files is still refused",
+      false
     )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
     .option("-v, --verbose", "Enable verbose diagnostics", false)
@@ -155,7 +174,8 @@ function registerWatchCommand(program: import("commander").Command): void {
         const result = await performPush(runConfig, {
           dryRun: false,
           commitMessage: message,
-          tempDirLabel: "watch"
+          tempDirLabel: "watch",
+          allowMassDelete: options.allowMassDelete
         });
 
         if (result.status === "queued") {
@@ -166,7 +186,12 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
 
-        if (result.appliedFiles.length === 0) {
+        // Gated on writes AND deletions, not on writes alone: a tick whose
+        // whole outcome is a deletion has no applied file to count, and used
+        // to report "no remote changes" while the remote really did shrink.
+        // The count is in the result line for the same reason.
+        const deletedCount = (result.deletedFiles || []).length;
+        if (result.appliedFiles.length === 0 && deletedCount === 0) {
           writeInfo("watch tick produced no remote changes", outputOptions);
           return;
         }
@@ -174,6 +199,7 @@ function registerWatchCommand(program: import("commander").Command): void {
         writeInfo(
           `pushed snapshot ${result.remoteHeadAfter ? result.remoteHeadAfter.slice(0, 7) : "?"} ` +
             `(${result.appliedFiles.length} file(s) applied` +
+            `${deletedCount ? `, ${deletedCount} deletion(s)` : ""}` +
             `${result.conflictFiles.length ? `, ${result.conflictFiles.length} conflict(s)` : ""})`,
           outputOptions
         );
@@ -183,26 +209,77 @@ function registerWatchCommand(program: import("commander").Command): void {
         if (shouldExit) {
           return;
         }
-        const message = takePendingMessage();
-        if (!message) {
+        if (pendingChanges.size === 0 && pendingDeletes.size === 0) {
           return;
         }
+
+        // Taken BEFORE the pending changes are consumed, so a tick that
+        // cannot have the lock leaves them pending and reschedules instead
+        // of swallowing them: they would otherwise sit unpushed until the
+        // next unrelated edit. The whole tick runs under the lock, including
+        // the push's own commit, which is the window the sync job used to be
+        // free to wipe (see src/memory-sync/lock.ts).
+        let lock: { release: () => void };
         try {
-          // Counts every tick that completed a pushSnapshot() call, whether
-          // performPush actually pushed or queued the snapshot locally
-          // (unreachable/failed remote) — matching run.ts's own --max-runs,
-          // which counts scheduled invocations rather than only ones that
-          // pushed something. This also keeps --max-runs usable as a
-          // deterministic test-termination mechanism for an offline tick,
-          // which never throws (see pushSnapshot above) and so would
-          // otherwise never increment a "successful pushes only" counter.
-          await pushSnapshot(message);
-          runsCompleted += 1;
-          if (maxRuns && runsCompleted >= maxRuns) {
-            shouldExit = true;
-          }
+          lock = acquireStateDirLock({
+            stateDir: runConfig.stateDir,
+            command: "watch",
+            staleMs: runConfig.lockStaleMs
+          });
         } catch (error) {
-          handleSnapshotError(error);
+          if (!(error instanceof StateDirLockedError)) {
+            handleSnapshotError(error);
+            await maybeShutdown();
+            return;
+          }
+
+          writeWarning(`watch tick deferred: ${(error as Error).message}`, outputOptions);
+          scheduleFlush();
+          return;
+        }
+
+        try {
+          const message = takePendingMessage();
+          if (!message) {
+            return;
+          }
+          await pushSnapshot(message);
+        } catch (error) {
+          // A refused deletion plan or an unreliable working copy
+          // (agent-tasks cda5b12c, pandora run
+          // .ai/runs/2026-09-11-memory-sync-wipe; see
+          // src/memory-sync/guards.ts) is a
+          // decision about THIS tick, not a broken watcher: the snapshot was
+          // not pushed, nothing was lost, and the next tick is free to try
+          // again once the workspace or the working copy looks sane. Log it
+          // loudly and keep watching, instead of routing it through
+          // handleSnapshotError, which sets a non-zero exit code and shuts
+          // the watcher down. A wedged watcher would be its own outage: the
+          // 2026-09-11 incident was noticed only because the watch job was
+          // still running and still pushing.
+          if (!isGuardRefusal(error)) {
+            handleSnapshotError(error);
+            await maybeShutdown();
+            return;
+          }
+
+          writeWarning(`watch tick refused: ${(error as Error).message}`, outputOptions);
+        } finally {
+          lock.release();
+        }
+
+        // Counts every tick that completed a pushSnapshot() call, whether
+        // performPush actually pushed, queued the snapshot locally
+        // (unreachable/failed remote) or had its plan refused by a guard.
+        // This matches run.ts's own --max-runs, which counts scheduled
+        // invocations rather than only ones that pushed something. This also
+        // keeps --max-runs usable as a deterministic test-termination
+        // mechanism for an offline tick, which never throws (see
+        // pushSnapshot above) and so would otherwise never increment a
+        // "successful pushes only" counter.
+        runsCompleted += 1;
+        if (maxRuns && runsCompleted >= maxRuns) {
+          shouldExit = true;
         }
         await maybeShutdown();
       }
@@ -245,13 +322,46 @@ function registerWatchCommand(program: import("commander").Command): void {
         }
         workChain = workChain
           .then(async () => {
-            const finalMessage = takePendingMessage();
-            if (finalMessage) {
-              try {
-                await pushSnapshot(finalMessage);
-              } catch (error) {
+            // The shutdown flush is a tick like any other and takes the same
+            // lock. A lock it cannot have leaves the pending edits on disk,
+            // where the next watch start or the next periodic run picks them
+            // up: it is never a reason to fail a clean shutdown.
+            let lock: { release: () => void };
+            try {
+              lock = acquireStateDirLock({
+                stateDir: runConfig.stateDir,
+                command: "watch (shutdown flush)",
+                staleMs: runConfig.lockStaleMs
+              });
+            } catch (error) {
+              if (error instanceof StateDirLockedError) {
+                writeWarning(`watch shutdown flush deferred: ${(error as Error).message}`, outputOptions);
+              } else {
                 handleSnapshotError(error);
               }
+              await maybeShutdown();
+              return;
+            }
+
+            try {
+              const finalMessage = takePendingMessage();
+              if (finalMessage) {
+                try {
+                  await pushSnapshot(finalMessage);
+                } catch (error) {
+                  // Same treatment as a refused tick above: a guard refusal on
+                  // the final flush is a decision about the pending snapshot,
+                  // not a watcher failure, so it must not turn a clean
+                  // SIGINT/SIGTERM shutdown into a non-zero exit.
+                  if (isGuardRefusal(error)) {
+                    writeWarning(`watch tick refused: ${(error as Error).message}`, outputOptions);
+                  } else {
+                    handleSnapshotError(error);
+                  }
+                }
+              }
+            } finally {
+              lock.release();
             }
             await maybeShutdown();
           })
@@ -320,6 +430,14 @@ function registerWatchCommand(program: import("commander").Command): void {
       process.off("SIGINT", sigintHandler);
       process.off("SIGTERM", sigtermHandler);
     });
+}
+
+// A deletion guard's refusal (src/memory-sync/guards.ts): the tick decided
+// not to push, which leaves the local workspace, the remote and the queue
+// exactly as they were. Distinguished from every other error so the watch
+// loop survives it. See runTick's own comment for why that matters.
+function isGuardRefusal(error: unknown): boolean {
+  return error instanceof MassDeleteRefusedError || error instanceof UnreliableCheckoutError;
 }
 
 function resolveDebounceMs(override?: string): number {

@@ -163,7 +163,42 @@ const READY_TIMEOUT_MS = 10000;
 // budget and well under this package's CI job's 10-minute timeout: no
 // further progress signal is possible once the process itself is frozen, so
 // inactivity accumulates exactly as it did under the old whole-tick model.
-const INACTIVITY_TIMEOUT_MS = 90000;
+//
+// Follow-up (agent-tasks cda5b12c, D-009): adding a fifth watcher-spawning
+// integration file measurably moved the FULL suite's pass rate under load
+// (8/8 before, 6/8 after, same machine) without any change to this file.
+// Two things follow from the evidence above, and this is the shape they
+// take here:
+//
+// - The number itself is not the lever. Every measurement recorded above
+//   shows failures landing near whatever budget is in force rather than
+//   comfortably inside a larger one. The default is raised to 120000ms as
+//   ordinary headroom for the added concurrency, not as a fix.
+// - Which budget an environment needs is a property of that environment,
+//   not of this source file, so it is now an environment variable:
+//   AGENT_MEMORY_SYNC_TEST_INACTIVITY_MS. A CI job on a small runner can
+//   raise it without a code change, and a developer chasing a genuine hang
+//   can lower it to fail fast. An unset, empty, non-numeric or non-positive
+//   value falls back to the default rather than silently disabling the
+//   deadline, which would turn every stuck child back into a hung job.
+const DEFAULT_INACTIVITY_TIMEOUT_MS = 120000;
+const INACTIVITY_TIMEOUT_ENV_VAR = "AGENT_MEMORY_SYNC_TEST_INACTIVITY_MS";
+
+function resolveInactivityTimeoutMs(): number {
+  const raw = process.env[INACTIVITY_TIMEOUT_ENV_VAR];
+  if (!raw) {
+    return DEFAULT_INACTIVITY_TIMEOUT_MS;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_INACTIVITY_TIMEOUT_MS;
+  }
+
+  return parsed;
+}
+
+const INACTIVITY_TIMEOUT_MS = resolveInactivityTimeoutMs();
 // Poll cadence for withTickDeadline's inactivity mode — cheap enough (a
 // regex match count over an in-memory string) to run this often without
 // measurably perturbing tick timing.
@@ -607,6 +642,9 @@ module.exports = {
   withTickDeadline,
   runWatchTick,
   stopWatchProcessGroup,
+  resolveInactivityTimeoutMs,
+  DEFAULT_INACTIVITY_TIMEOUT_MS,
+  INACTIVITY_TIMEOUT_ENV_VAR,
   INACTIVITY_TIMEOUT_MS,
   ABSOLUTE_CAP_MULTIPLIER
 };

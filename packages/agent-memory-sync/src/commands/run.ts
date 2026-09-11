@@ -3,12 +3,18 @@ const {
   requireRemoteUrl,
   resolveRunConfig
 } = require("../config/loader");
-const { CliError, RemoteQueueEscalationError, formatErrorMessage, isCliError } = require("../errors");
+const {
+  CliError,
+  RemoteQueueEscalationError,
+  RemoteUnavailableError,
+  formatErrorMessage
+} = require("../errors");
+const { acquireStateDirLock } = require("../memory-sync/lock");
 const { performPull } = require("../memory-sync/pull");
 const { performPush } = require("../memory-sync/push");
 const { summarizeOperation } = require("../memory-sync/preview");
 const { nextScheduleTick, validateCronExpression } = require("../memory-sync/scheduler");
-const { writeDryRun, writeInfo, writeResult } = require("../output");
+const { writeDryRun, writeInfo, writeResult, writeWarning } = require("../output");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -30,6 +36,8 @@ interface RunOptions {
   maxRuns?: string;
   conflictStrategy?: "inline-markers" | "local-wins" | "remote-wins";
   reachabilityTimeoutMs?: string;
+  allowMassDelete: boolean;
+  acceptMassDelete: boolean;
 }
 
 function registerRunCommand(program: import("commander").Command): void {
@@ -54,12 +62,44 @@ function registerRunCommand(program: import("commander").Command): void {
       "--reachability-timeout-ms <ms>",
       "Timeout for the remote reachability precheck before pull/push (default 4000, env AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS)"
     )
+    .option(
+      "--allow-mass-delete",
+      "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
+        "override an unreliable checkout: a working copy that came back missing files is still refused",
+      false
+    )
+    .option(
+      "--accept-mass-delete",
+      "Apply a remote change that deletes more of a destination than the guard allows, and adopt a " +
+        "checkout the run would otherwise call unreliable. The destination is copied into " +
+        "stateDir/snapshots first. Use it only once the remote deletion is known to be genuine, for one " +
+        "run; it cannot be combined with --allow-mass-delete",
+      false
+    )
     .option("--dry-run", "Preview without making changes", false)
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
     .option("-v, --verbose", "Enable verbose diagnostics", false)
     .option("-q, --quiet", "Suppress non-error diagnostics", false)
     .option("--no-color", "Disable colored diagnostics")
     .action(async (profile: string, options: RunOptions) => {
+      // Checked before the config is even read: a usage error must not
+      // depend on what the config file says. The two flags answer opposite
+      // questions, and together they re-enact the incident: accepting adopts
+      // the remote's deletions locally (the local copies go), after which
+      // there is nothing left for --allow-mass-delete to publish except a
+      // deletion the plan guard would otherwise have refused, and measured
+      // in review that pair took a wiped checkout from local 50 to 0 and
+      // remote 50 to 0 at exit 0. One flag per run.
+      if (options.acceptMassDelete && options.allowMassDelete) {
+        throw new CliError(
+          "--accept-mass-delete and --allow-mass-delete cannot be combined. --accept-mass-delete adopts " +
+            "the remote's deletions locally, after which there is nothing left for --allow-mass-delete to " +
+            "publish; together they would remove the local files and then publish their deletion, which is " +
+            "the sequence the guards exist to stop. Pass one of the two.",
+          2
+        );
+      }
+
       const loaded = await loadConfig(options.config);
       const runConfig = requireRemoteUrl(
         resolveRunConfig(loaded, {
@@ -107,9 +147,29 @@ function registerRunCommand(program: import("commander").Command): void {
           writeDryRun(`executing ${runConfig.mode} for profile '${runConfig.profile}'`, outputOptions);
         }
 
+        // Taken before anything reads or writes rootDir, the base snapshots,
+        // the queue or a working copy under stateDir/tmp, and released again
+        // between scheduled ticks rather than held across the sleep: a run
+        // that cannot have the lock has to leave all of them untouched, and
+        // a scheduled run must not lock out the watch job while it waits for
+        // its next tick. See src/memory-sync/lock.ts.
+        const lock = acquireStateDirLock({
+          stateDir: runConfig.stateDir,
+          command: `run --mode ${runConfig.mode}${options.dryRun ? " --dry-run" : ""}`,
+          staleMs: runConfig.lockStaleMs
+        });
+
         let execution: Record<string, unknown>;
         try {
-          execution = await executeMode(runConfig, { dryRun: options.dryRun }, outputOptions);
+          execution = await executeMode(
+            runConfig,
+            {
+              dryRun: options.dryRun,
+              allowMassDelete: options.allowMassDelete,
+              acceptMassDelete: options.acceptMassDelete
+            },
+            outputOptions
+          );
         } catch (error) {
           // Single run (no --schedule): preserve the pre-fix behavior
           // exactly — RemoteQueueEscalationError (and everything else)
@@ -144,6 +204,8 @@ function registerRunCommand(program: import("commander").Command): void {
             queuedSnapshotId: null,
             notes: [formatErrorMessage(error)]
           };
+        } finally {
+          lock.release();
         }
 
         runs.push(execution);
@@ -196,7 +258,7 @@ async function executeMode(
       required?: boolean;
     }>;
   },
-  options: { dryRun: boolean },
+  options: { dryRun: boolean; allowMassDelete: boolean; acceptMassDelete: boolean },
   outputOptions: { color: boolean; quiet: boolean; verbose: boolean }
 ) {
   if (runConfig.mode === "push") {
@@ -220,22 +282,42 @@ async function executeMode(
       mergedFiles: unique([...pullResult.mergedFiles, ...pushResult.mergedFiles]),
       conflictFiles: unique([...pullResult.conflictFiles, ...pushResult.conflictFiles]),
       deletedFiles: unique([...(pullResult.deletedFiles || []), ...(pushResult.deletedFiles || [])]),
+      snapshots: unique([...(pullResult.snapshots || []), ...(pushResult.snapshots || [])]),
       skippedFiles: unique([...(pullResult.skippedFiles || []), ...(pushResult.skippedFiles || [])]),
+      protectedFiles: unique([...(pullResult.protectedFiles || []), ...(pushResult.protectedFiles || [])]),
       queuedSnapshotId: pushResult.queuedSnapshotId || null,
       notes: [...(pullResult.notes || []), ...(pushResult.notes || [])]
     };
   } catch (error: unknown) {
-    const exitCode =
-      typeof (error as { exitCode?: unknown }).exitCode === "number"
-        ? (error as { exitCode: number }).exitCode
-        : null;
-
-    if (exitCode === 4) {
-      writeInfo("remote unavailable during pull; queueing local snapshot instead", outputOptions);
-      return performPush(runConfig, options);
+    // Root cause of the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run
+    // .ai/runs/2026-09-11-memory-sync-wipe): this used to
+    // discriminate on `exitCode === 4`, and exit code 4 is shared by every
+    // git failure GitClient.run wraps in a generic CliError ("git command
+    // failed: ..."). A pull that died because its own working copy had been
+    // removed underneath it therefore looked exactly like "the remote is
+    // unavailable", and the answer to that, a push-only retry, is what
+    // published the deletion of the whole tracked corpus from a local
+    // workspace the same tick had just emptied.
+    //
+    // Only RemoteUnavailableError means the remote is the problem: it is
+    // thrown from exactly two sites (GitClient.lookupRemoteHead and
+    // GitClient.push, see errors.ts), and for that case a push-only retry is
+    // still right, since performPush queues the snapshot locally. Everything
+    // else now propagates and fails the run loudly, which is what the
+    // supervisor (launchd KeepAlive, systemd StartLimit*) is for.
+    if (!(error instanceof RemoteUnavailableError)) {
+      throw error;
     }
 
-    throw error;
+    // writeWarning, not writeInfo: the periodic jobs run without --verbose,
+    // which made this the one line explaining a degraded tick and made it
+    // invisible in exactly the runs that needed it. The same text is also
+    // appended to the result payload below, so a --quiet or --output json
+    // consumer still sees it.
+    const diagnostic = "remote unavailable during pull; queueing local snapshot instead";
+    writeWarning(diagnostic, outputOptions);
+    const pushResult = await performPush(runConfig, options);
+    return { ...pushResult, notes: [...(pushResult.notes || []), diagnostic] };
   }
 }
 

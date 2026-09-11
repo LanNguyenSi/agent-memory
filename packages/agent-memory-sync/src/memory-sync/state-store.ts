@@ -185,8 +185,20 @@ class StateStore {
     return Math.max(0, referenceTime - Math.min(...createdTimestamps));
   }
 
-  clearTemp(): void {
-    rmSync(this.tempDir(), { recursive: true, force: true });
+  // Removes one labelled working copy under stateDir/tmp, the one its caller
+  // created via GitClient.createTempRepoDir(stateDir, label).
+  //
+  // The label is required. This used to remove the WHOLE tmp root, which is
+  // how the 2026-09-11 wipe started (agent-tasks cda5b12c, pandora run
+  // .ai/runs/2026-09-11-memory-sync-wipe): `watch` and `run --mode sync` share a
+  // stateDir, and watch's post-push cleanup deleted the sync run's freshly
+  // checked-out working copy under tmp/pull while git had already reported
+  // success. The pull then read an empty tree and resolved every path to a
+  // deletion. The advisory lock (./lock.ts) keeps the two jobs apart now;
+  // this keeps a caller's cleanup from reaching another caller's tree even
+  // if it ever runs unlocked.
+  clearTemp(label: string): void {
+    rmSync(path.join(this.tempDir(), label), { recursive: true, force: true });
     mkdirSync(this.tempDir(), { recursive: true });
   }
 
