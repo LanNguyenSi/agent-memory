@@ -72,7 +72,8 @@ function registerRunCommand(program: import("commander").Command): void {
       "--accept-mass-delete",
       "Apply a remote change that deletes more of a destination than the guard allows, and adopt a " +
         "checkout the run would otherwise call unreliable. The destination is copied into " +
-        "stateDir/snapshots first. Use it only once the remote deletion is known to be genuine",
+        "stateDir/snapshots first. Use it only once the remote deletion is known to be genuine, for one " +
+        "run; it cannot be combined with --allow-mass-delete",
       false
     )
     .option("--dry-run", "Preview without making changes", false)
@@ -81,6 +82,24 @@ function registerRunCommand(program: import("commander").Command): void {
     .option("-q, --quiet", "Suppress non-error diagnostics", false)
     .option("--no-color", "Disable colored diagnostics")
     .action(async (profile: string, options: RunOptions) => {
+      // Checked before the config is even read: a usage error must not
+      // depend on what the config file says. The two flags answer opposite
+      // questions, and together they re-enact the incident: accepting adopts
+      // the remote's deletions locally (the local copies go), after which
+      // there is nothing left for --allow-mass-delete to publish except a
+      // deletion the plan guard would otherwise have refused, and measured
+      // in review that pair took a wiped checkout from local 50 to 0 and
+      // remote 50 to 0 at exit 0. One flag per run.
+      if (options.acceptMassDelete && options.allowMassDelete) {
+        throw new CliError(
+          "--accept-mass-delete and --allow-mass-delete cannot be combined. --accept-mass-delete adopts " +
+            "the remote's deletions locally, after which there is nothing left for --allow-mass-delete to " +
+            "publish; together they would remove the local files and then publish their deletion, which is " +
+            "the sequence the guards exist to stop. Pass one of the two.",
+          2
+        );
+      }
+
       const loaded = await loadConfig(options.config);
       const runConfig = requireRemoteUrl(
         resolveRunConfig(loaded, {
@@ -277,8 +296,8 @@ async function executeMode(
     // failed: ..."). A pull that died because its own working copy had been
     // removed underneath it therefore looked exactly like "the remote is
     // unavailable", and the answer to that, a push-only retry, is what
-    // published 406 deletions from a local workspace the same tick had just
-    // emptied.
+    // published the deletion of the whole tracked corpus from a local
+    // workspace the same tick had just emptied.
     //
     // Only RemoteUnavailableError means the remote is the problem: it is
     // thrown from exactly two sites (GitClient.lookupRemoteHead and

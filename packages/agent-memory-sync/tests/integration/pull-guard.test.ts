@@ -484,3 +484,158 @@ test("push: an accepted deletion survives a push that fails afterwards (AC-007)"
   const afterwards = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
   assert.equal(afterwards.status, 0, `stderr: ${afterwards.stderr}`);
 });
+
+// R3 medium (D-018): the two flags answer opposite questions, and together
+// they re-enacted the incident (measured: local 50 to 0, remote 50 to 0,
+// rc 0). After --accept-mass-delete has adopted the remote's state there is
+// nothing left for --allow-mass-delete to publish, so the pair is refused as
+// a usage error before anything is read or written.
+test("run: --accept-mass-delete together with --allow-mass-delete is a usage error (AC-003, AC-007)", () => {
+  const root = createSandbox("flag-pair");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  const seeded = seedLogFiles(workspaceRoot, 50);
+  writeProjectConfig(configPath, logsOnlyConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  peerDeletes(
+    remoteDir,
+    root,
+    "peer-pair-30",
+    seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/"))
+  );
+
+  for (const mode of ["push", "sync", "pull"]) {
+    const result = runCli(
+      [
+        "run",
+        "default",
+        "--config",
+        configPath,
+        "--mode",
+        mode,
+        "--accept-mass-delete",
+        "--allow-mass-delete",
+        "--output",
+        "json"
+      ],
+      { expectFailure: true }
+    );
+
+    assert.equal(result.status, 2, `mode ${mode}: expected a usage error. stderr: ${result.stderr}`);
+    assert.match(result.stderr, /--accept-mass-delete/);
+    assert.match(result.stderr, /--allow-mass-delete/);
+    assert.equal(result.stdout, "");
+  }
+
+  // Nothing happened: every local file is still there, no snapshot was
+  // taken, and the remote still holds the 20 the peer left.
+  for (const relativePath of seeded) {
+    assert.equal(fileExists(path.join(workspaceRoot, relativePath)), true, `${relativePath} was deleted`);
+  }
+  assert.deepEqual(snapshotIds(workspaceRoot, "logs"), []);
+  const inspection = cloneRemote(remoteDir, root, "inspect-pair");
+  assert.equal(fs.readdirSync(path.join(inspection, "shared", "logs")).length, 20);
+});
+
+// R3 medium (D-020): `--dry-run --accept-mass-delete` exited 7 on push and
+// sync while the real run applied, so the one command machine-setup tells an
+// operator to run first could not preview the acceptance. The preview now
+// reports the paths the real run would adopt, and changes nothing.
+for (const mode of ["push", "sync"]) {
+  test(`${mode} --dry-run --accept-mass-delete reports the adoption without applying it (AC-007)`, () => {
+    const root = createSandbox(`dry-run-accept-${mode}`);
+    const remoteDir = initBareRemote(root);
+    const workspaceRoot = path.join(root, "workspace");
+    const configPath = path.join(root, "config.json");
+
+    const seeded = seedLogFiles(workspaceRoot, 50);
+    writeProjectConfig(configPath, logsOnlyConfig(workspaceRoot, remoteDir));
+    runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+    const dropped = seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/"));
+    peerDeletes(remoteDir, root, `peer-dry-${mode}`, dropped);
+
+    // Without the flag the preview refuses the checkout, same as the real run.
+    const refused = runCli(
+      ["run", "default", "--config", configPath, "--mode", mode, "--dry-run", "--output", "json"],
+      { expectFailure: true }
+    );
+    assert.equal(refused.status, 7, `stderr: ${refused.stderr}`);
+
+    const previewed = runCli([
+      "run",
+      "default",
+      "--config",
+      configPath,
+      "--mode",
+      mode,
+      "--dry-run",
+      "--accept-mass-delete",
+      "--output",
+      "json"
+    ]);
+    assert.equal(previewed.status, 0, `stderr: ${previewed.stderr}`);
+    const run = JSON.parse(previewed.stdout).runs[0];
+
+    assert.equal(run.kind, mode);
+    assert.equal(run.status, "dry-run");
+    // The adoption is named: every path the real run would remove locally.
+    assert.deepEqual(run.deletedFiles, [...dropped].sort());
+    assert.match((run.notes || []).join(" "), /would adopt 30 remote deletion\(s\)/);
+    assert.deepEqual(run.snapshots, []);
+
+    // And nothing changed: local tree, snapshots, base snapshot and remote
+    // are exactly as the preview found them.
+    for (const relativePath of seeded) {
+      assert.equal(fileExists(path.join(workspaceRoot, relativePath)), true, `${relativePath} was deleted`);
+    }
+    assert.equal(fs.existsSync(path.join(stateDirOf(workspaceRoot), "snapshots")), false);
+    assert.equal(baseTrackedCount(workspaceRoot, "logs"), 50);
+    const inspection = cloneRemote(remoteDir, root, `inspect-dry-${mode}`);
+    assert.equal(fs.readdirSync(path.join(inspection, "shared", "logs")).length, 20);
+
+    // The real run still wedges afterwards, since the preview adopted nothing.
+    const stillWedged = runCli(
+      ["run", "default", "--config", configPath, "--mode", mode, "--output", "json"],
+      { expectFailure: true }
+    );
+    assert.equal(stillWedged.status, 7, `stderr: ${stillWedged.stderr}`);
+  });
+}
+
+// R3 low: the add-only rule (a destination the plan only ADDS files to is not
+// copied) was untested; removing it left the suite green. A pull that only
+// creates files takes nothing away, so there is nothing a copy could keep.
+test("pull: an add-only plan writes no snapshot (AC-007)", () => {
+  const root = createSandbox("pre-apply-add-only");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  seedLogFiles(workspaceRoot, 3);
+  writeProjectConfig(configPath, logsOnlyConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const peerCheckout = cloneRemote(remoteDir, root, "peer-adds");
+  for (const name of ["added-a.md", "added-b.md", "added-c.md"]) {
+    writeText(path.join(peerCheckout, "shared", "logs", name), `${name}\n`);
+  }
+  git(["add", "-A"], peerCheckout);
+  git(["commit", "-m", "peer adds three files"], peerCheckout);
+  git(["push", "origin", "HEAD:main"], peerCheckout);
+
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  const run = JSON.parse(result.stdout).runs[0];
+
+  assert.equal(run.status, "applied");
+  assert.deepEqual(run.appliedFiles, ["logs/added-a.md", "logs/added-b.md", "logs/added-c.md"]);
+  assert.deepEqual(run.deletedFiles, []);
+  assert.deepEqual(run.snapshots, []);
+  assert.equal(readText(path.join(workspaceRoot, "logs", "added-a.md")), "added-a.md\n");
+  // Not "no generation for logs" but "no snapshots directory at all": the
+  // add-only rule decides before anything is created.
+  assert.equal(fs.existsSync(path.join(stateDirOf(workspaceRoot), "snapshots")), false);
+});

@@ -209,3 +209,70 @@ test("GitClient.listStagedDeletions: a working copy with no commit yet reports n
   const client = new GitClient("git");
   assert.deepEqual(client.listStagedDeletions(repoDir), []);
 });
+
+// GitClient.commitStaged (agent-tasks cda5b12c, D-017): the push measures
+// the index and then commits exactly that index. A commit that re-staged on
+// its way in would carry whatever the working copy looked like at commit
+// time, which is how a wipe landing after the measurement was published.
+test("GitClient.commitStaged: commits the index as measured, not the working copy at commit time", () => {
+  const root = sandbox("commit-staged");
+  const repoDir = initRepoWithFiles(root, {
+    "shared/a.md": "a\n",
+    "shared/b.md": "b\n",
+    "shared/c.md": "c\n"
+  });
+  const client = new GitClient("git");
+
+  // One measured deletion.
+  rmSync(path.join(repoDir, "shared", "a.md"));
+  client.stageAll(repoDir);
+  assert.deepEqual(client.listStagedDeletions(repoDir), ["shared/a.md"]);
+
+  // The working copy is wiped AFTER the measurement.
+  rmSync(path.join(repoDir, "shared", "b.md"));
+  rmSync(path.join(repoDir, "shared", "c.md"));
+
+  const sha = client.commitStaged(repoDir, "measured");
+  assert.ok(sha, "expected a commit sha");
+
+  // The commit carries the one measured deletion and nothing the wipe did.
+  const tree = execFileSync("git", ["ls-tree", "-r", "--name-only", "HEAD"], { cwd: repoDir, encoding: "utf8" })
+    .trim()
+    .split("\n")
+    .sort();
+  assert.deepEqual(tree, ["shared/b.md", "shared/c.md"]);
+});
+
+test("GitClient.commitStaged: an index that matches HEAD produces no commit", () => {
+  const root = sandbox("commit-staged-noop");
+  const repoDir = initRepoWithFiles(root, { "shared/a.md": "a\n" });
+  const client = new GitClient("git");
+  const headBefore = client.revParseHead(repoDir);
+
+  // An unstaged working-copy change is not the index: it must neither be
+  // picked up nor produce a commit.
+  writeFileSync(path.join(repoDir, "shared", "a.md"), "edited but unstaged\n", "utf8");
+  assert.equal(client.commitStaged(repoDir, "nothing"), null);
+  assert.equal(client.revParseHead(repoDir), headBefore);
+});
+
+test("GitClient.commitStaged: creates the first commit on an unborn branch", () => {
+  // prepareWorkingCopy's orphan-branch path (a remote never pushed to): the
+  // index is diffed against the empty tree there, so the first push still
+  // commits.
+  const root = sandbox("commit-staged-unborn");
+  const repoDir = path.join(root, "repo");
+  mkdirSync(path.join(repoDir, "shared"), { recursive: true });
+  execFileSync("git", ["init", "--initial-branch=main"], { cwd: repoDir, encoding: "utf8" });
+  execFileSync("git", ["config", "user.name", "test-runner"], { cwd: repoDir, encoding: "utf8" });
+  execFileSync("git", ["config", "user.email", "test-runner@example.invalid"], { cwd: repoDir, encoding: "utf8" });
+  const client = new GitClient("git");
+
+  assert.equal(client.commitStaged(repoDir, "empty"), null);
+
+  writeFileSync(path.join(repoDir, "shared", "first.md"), "first\n", "utf8");
+  client.stageAll(repoDir);
+  const sha = client.commitStaged(repoDir, "first");
+  assert.ok(sha);
+  assert.equal(client.revParseHead(repoDir), sha);
+});

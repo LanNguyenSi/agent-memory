@@ -1128,6 +1128,179 @@ test("run and watch help: --allow-mass-delete does not promise to merge an unrel
   }
 });
 
+// R3 medium (D-019): `watch --accept-mass-delete` was standing consent for
+// every future tick. Measured: a wiped checkout on a later tick deleted every
+// local file the remote still held, with the watcher exiting 0. The escape is
+// a one-shot `run`; `watch` does not take the flag at all.
+test("watch does not accept --accept-mass-delete; run does (AC-007)", () => {
+  const runHelp = runCli(["run", "--help"]).stdout.replace(/\s+/g, " ");
+  assert.match(runHelp, /--accept-mass-delete/);
+
+  const watchHelp = runCli(["watch", "--help"]).stdout.replace(/\s+/g, " ");
+  assert.doesNotMatch(watchHelp, /--accept-mass-delete/);
+
+  const root = createSandbox("watch-no-accept-flag");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  const rejected = runCli(
+    ["watch", "default", "--config", configPath, "--accept-mass-delete", "--max-runs", "1"],
+    { expectFailure: true }
+  );
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /unknown option '--accept-mass-delete'/);
+});
+
+// git behaves normally except that the SECOND `git add` it is asked to run
+// empties the working tree immediately before staging. Every invocation of
+// `add` is counted in `counterPath`.
+//
+// R3 medium (D-017): the push used to stage twice, once to measure the
+// deletions the commit would carry (the guard's numerator) and once more
+// inside commitAll on the way to the commit. A wipe landing between the two
+// was invisible to the measurement and published by the second stage: rc 0,
+// the whole remote tree deleted, deletedFiles empty. The lock excludes other
+// processes from stateDir, not this in-process window. The fix commits the
+// index as measured, so there is no second stage for a wipe to reach.
+function writeStubGitWipingWorkTreeOnSecondAdd(root: string, counterPath: string): string {
+  const stubPath = path.join(root, "stub-git-wipes-on-second-add.sh");
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "add" ]; then',
+      `  counter=${JSON.stringify(counterPath)}`,
+      '  count=$(cat "$counter" 2>/dev/null || echo 0)',
+      "  count=$((count + 1))",
+      '  echo "$count" > "$counter"',
+      '  if [ "$count" -eq 2 ]; then',
+      '    find "$PWD" -name .git -prune -o -type f -print | while IFS= read -r entry; do',
+      '      rm -f "$entry"',
+      "    done",
+      "  fi",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+// The observed outcome with the fix is that the wipe is irrelevant: the push
+// stages exactly once, the commit carries the index as measured, and the
+// stub's second-add trigger never fires, so the run completes as an ordinary
+// healthy push of the one local edit. Pre-fix (measured at df78fb3): two
+// `git add` invocations, rc 0, the remote's log tree 30 to 0.
+for (const mode of ["push", "sync"]) {
+  test(`${mode}: a working copy wiped after the measured stage cannot reach the commit (AC-003)`, () => {
+    const root = createSandbox(`second-add-wipe-${mode}`);
+    const remoteDir = initBareRemote(root);
+    const workspaceRoot = path.join(root, "workspace");
+    const configPath = path.join(root, "config.json");
+    const stubConfigPath = path.join(root, "config-stub-git.json");
+    const counterPath = path.join(root, "git-add-count.txt");
+
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+    seedLogFiles(workspaceRoot, 30);
+    writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+    runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+    writeProjectConfig(stubConfigPath, {
+      ...createConfig(workspaceRoot, remoteDir),
+      gitBinary: writeStubGitWipingWorkTreeOnSecondAdd(root, counterPath)
+    });
+
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+    const result = runCli(
+      ["run", "default", "--config", stubConfigPath, "--mode", mode, "--output", "json"],
+      { expectFailure: true }
+    );
+
+    // The remote still holds every log file, whatever the exit code: a wipe
+    // after the measurement must not be publishable.
+    assert.equal(
+      remoteLogFileCount(remoteDir, root, `inspect-second-add-${mode}`),
+      30,
+      `stderr: ${result.stderr}\nstdout: ${result.stdout}`
+    );
+
+    // One stage per snapshot: the commit takes the index as measured, so
+    // there is no second `git add` for a wipe to land between.
+    assert.equal(readText(counterPath).trim(), "1");
+
+    // And with nothing wiped, the run is an ordinary push of the one edit.
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const inspection = cloneRemote(remoteDir, root, `inspect-second-add-${mode}-memory`);
+    assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "memory root\nedited\n");
+
+    // The preview commits into its throwaway copy the same way: once per
+    // snapshot, from the measured index, so its arithmetic matches the real
+    // run's and the same seam cannot make a dry run disagree with it.
+    fs.rmSync(counterPath, { force: true });
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited twice\n");
+    const previewed = runCli(
+      ["run", "default", "--config", stubConfigPath, "--mode", mode, "--dry-run", "--output", "json"],
+      { expectFailure: true }
+    );
+    assert.equal(previewed.status, 0, `stderr: ${previewed.stderr}`);
+    assert.equal(JSON.parse(previewed.stdout).runs[0].status, "dry-run");
+    assert.equal(readText(counterPath).trim(), "1");
+  });
+}
+
+// R3 medium (D-018), the reporting half: after --accept-mass-delete adopted
+// a loss, the base snapshot no longer tracks the adopted paths, and a refusal
+// raised in the same run read "(50 of 0 tracked)". The share a plan removes
+// is measured against what the run started with.
+test("push: a refusal after an accepted adoption counts what the run started with (AC-003, AC-007)", () => {
+  const root = createSandbox("post-accept-denominator");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  seedLogFiles(workspaceRoot, 50);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  writeProjectConfig(stubConfigPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitWipingWorkTree(root)
+  });
+
+  // The wiped working copy is adopted by consent (the local copies go, with
+  // a snapshot taken first), and the staged deletions of everything HEAD
+  // holds are then refused by the plan guard, which --accept-mass-delete
+  // does not override.
+  const result = runCli(
+    [
+      "run",
+      "default",
+      "--config",
+      stubConfigPath,
+      "--mode",
+      "push",
+      "--accept-mass-delete",
+      "--output",
+      "json"
+    ],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
+  assert.match(result.stderr, /50 file\(s\) under 'logs' \(50 of 50 tracked\)/);
+  assert.doesNotMatch(result.stderr, /of 0 tracked/);
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-post-accept"), 50);
+});
+
 // RV7 (R2 low): previewPush commits each snapshot into its throwaway working
 // copy, so snapshot N is measured against a HEAD that already carries
 // snapshot N-1. Without that commit the preview re-counts the earlier

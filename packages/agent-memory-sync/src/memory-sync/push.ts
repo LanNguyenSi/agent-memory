@@ -12,7 +12,7 @@ const {
   UnreliableCheckoutError
 } = require("../errors");
 const { GitClient } = require("./git-client");
-const { acceptRemoteDeletions } = require("./accept-remote-deletions");
+const { acceptRemoteDeletions, findRemoteDeletionsToAccept } = require("./accept-remote-deletions");
 const { assertNoMassDelete, assertReliableCheckout } = require("./guards");
 const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
@@ -30,11 +30,14 @@ interface PushOptions {
   // `watch`), forwarded to ./guards.ts. The periodic jobs never pass it, and
   // it never reaches the checkout check.
   allowMassDelete?: boolean;
-  // Operator override for the CHECKOUT check (--accept-mass-delete): the
-  // remote really did drop those files. Adopts the remote state locally
-  // first (./accept-remote-deletions.ts) rather than merely silencing the
-  // refusal, so the push has nothing left to publish for the deleted paths
-  // instead of republishing them.
+  // Operator override for the CHECKOUT check (--accept-mass-delete, on
+  // `run` only and for one run): the remote really did drop those files.
+  // Adopts the remote state locally first (./accept-remote-deletions.ts)
+  // rather than merely silencing the refusal, so the push has nothing left
+  // to publish for the deleted paths instead of republishing them. Never
+  // set together with allowMassDelete: `run` refuses the pair as a usage
+  // error, since after the adoption there is nothing left for the other
+  // flag to publish except a deletion the plan guard would refuse.
   acceptMassDelete?: boolean;
   // Overrides the working-copy temp-dir label under stateDir/tmp (default:
   // "push"). `watch` passes "watch" here so its ticks keep their own
@@ -151,16 +154,27 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // a filtered write, is exactly the kind of external input the read-side
     // filter is permanent defense-in-depth against. Never treat this call
     // as redundant just because push's own write is filtered too.
-    ...queuedSnapshots.map((entry: { id: string; data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> } }) => ({
-      id: entry.id,
-      localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
-      baseFiles: filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles)),
-      message: `sync(queue): replay ${entry.id}`
-    })),
+    ...queuedSnapshots.map((entry: { id: string; data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> } }) => {
+      const baseFiles = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles));
+      return {
+        id: entry.id,
+        localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
+        baseFiles,
+        guardBaseFiles: baseFiles,
+        message: `sync(queue): replay ${entry.id}`
+      };
+    }),
     {
       id: "current",
       localFiles: currentLocalMap,
       baseFiles: currentBaseMap,
+      // The mass-delete guard's denominator, fixed at what this run started
+      // with. An accepted adoption below moves `baseFiles` (the merge's
+      // input) off the adopted paths, and a refusal raised later in the
+      // same run then read "(50 of 0 tracked)": the share a plan removes is
+      // measured against the base as the run found it, not as the run
+      // itself rewrote it.
+      guardBaseFiles: currentBaseMap,
       message: options.commitMessage || "sync(push): local memory update"
     }
   ];
@@ -195,7 +209,10 @@ async function performPush(config: PushConfig, options: PushOptions) {
     }
 
     return appendNotes(
-      previewPush(config, snapshots, { allowMassDelete: options.allowMassDelete }),
+      previewPush(config, snapshots, {
+        allowMassDelete: options.allowMassDelete,
+        acceptMassDelete: options.acceptMassDelete
+      }),
       ownerScopedWarnings
     );
   }
@@ -288,14 +305,14 @@ async function performPush(config: PushConfig, options: PushOptions) {
       // has actually staged. The merge's own plan is a strict subset of them
       // and differs exactly where it matters, since a path the working copy
       // was already missing is not something the plan "deletes" at all,
-      // while the `git add -A` inside commitAll stages and publishes it.
-      // Checking the plan as well changes no outcome the staged check does
-      // not already produce (measured: removing it leaves the whole suite
-      // green), so the numerator is the index and nothing else.
+      // while `git add -A` stages and publishes it. Checking the plan as
+      // well changes no outcome the staged check does not already produce
+      // (measured: removing it leaves the whole suite green), so the
+      // numerator is the index and nothing else.
       const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
       assertNoMassDelete({
         config,
-        baseMap: snapshot.baseFiles,
+        baseMap: snapshot.guardBaseFiles,
         deletedPaths: stagedDeletions.claimed,
         unmappedDeletedPaths: stagedDeletions.unclaimed,
         allowMassDelete: options.allowMassDelete
@@ -304,7 +321,12 @@ async function performPush(config: PushConfig, options: PushOptions) {
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
       deletedFiles.push(...stagedDeletions.claimed);
-      gitClient.commitAll(workingCopy.repoDir, snapshot.message);
+      // The index as measured, and nothing else, is what gets committed
+      // (GitClient.commitStaged). A commit that staged again on its way in
+      // would carry whatever the working copy looked like at that moment,
+      // and a checkout wiped between the measurement and that second stage
+      // was published as a total deletion the guard had measured as none.
+      gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
     }
 
     gitClient.push(workingCopy.repoDir, config.branch);
@@ -361,7 +383,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // fail because the *remote* is unavailable or rejecting the push. Any
     // other error raised inside this try block (prepareWorkingCopy's own
     // init/fetch/checkout, applySnapshotToWorkingCopy's file writes,
-    // commitAll, collectRemoteFiles, any StateStore write — a full disk, a
+    // commitStaged, collectRemoteFiles, any StateStore write: a full disk, a
     // broken commit hook, a corrupted git config, ...) re-throws, so it
     // still crashes loud and reaches the supervisor-restart path (launchd
     // KeepAlive, systemd StartLimit*) instead of being misreported as a
@@ -538,15 +560,21 @@ function formatDurationMs(ms: number): string {
   return `${(totalMinutes / 60).toFixed(1)}h`;
 }
 
+interface PushSnapshot {
+  id: string;
+  localFiles: Record<string, string>;
+  baseFiles: Record<string, string | null>;
+  // The mass-delete guard's denominator for this snapshot; see the
+  // "current" snapshot's comment in performPush for why it is separate from
+  // baseFiles.
+  guardBaseFiles: Record<string, string | null>;
+  message: string;
+}
+
 function previewPush(
   config: PushConfig,
-  snapshots: Array<{
-    id: string;
-    localFiles: Record<string, string>;
-    baseFiles: Record<string, string | null>;
-    message: string;
-  }>,
-  options: { allowMassDelete?: boolean } = {}
+  snapshots: PushSnapshot[],
+  options: { allowMassDelete?: boolean; acceptMassDelete?: boolean } = {}
 ) {
   // Removed again in the finally below, on every exit: a completed preview,
   // a refusal, and a preview that gave up on an unreachable remote all used
@@ -564,27 +592,63 @@ function previewPush(
       previewRepoDir
     );
 
-    // Same two guards as the real push: a dry-run that quietly previews a
-    // plan the real run would refuse would be worse than useless, since
-    // --dry-run is exactly how an operator checks a plan before running it.
-    assertReliableCheckout({
-      config,
-      baseMap: snapshots[snapshots.length - 1]?.baseFiles || {},
-      remoteMap: collectRemoteFiles(config, gitClient, workingCopy.repoDir),
-      remoteHead: workingCopy.remoteHead
-    });
+    const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
+    const current = snapshots[snapshots.length - 1];
+    const notes: string[] = [];
+    let adoptedDeletions: string[] = [];
+    let previewSnapshots = snapshots;
+
+    if (options.acceptMassDelete && current) {
+      // Report-only twin of the real run's acceptRemoteDeletions: the same
+      // paths, found the same way, but no snapshot is written, no local file
+      // is removed and the base snapshot is not moved. The current
+      // snapshot's in-memory maps are adjusted exactly as the real run
+      // adjusts them, so the merge and the staged measurement below see the
+      // plan the real run will see, and the preview's arithmetic matches.
+      // It used to refuse the checkout here regardless of the flag, so the
+      // one command an operator is told to run first could not preview
+      // the acceptance at all.
+      const lost = findRemoteDeletionsToAccept(config, current.baseFiles, remoteMap, workingCopy.remoteHead);
+      if (lost.paths.length > 0) {
+        adoptedDeletions = lost.paths;
+        previewSnapshots = [
+          ...snapshots.slice(0, -1),
+          {
+            ...current,
+            localFiles: withoutKeys(current.localFiles, lost.paths) as Record<string, string>,
+            baseFiles: withoutKeys(current.baseFiles, lost.paths)
+          }
+        ];
+        notes.push(
+          `would adopt ${lost.paths.length} remote deletion(s) under ` +
+            `${lost.destinations.map((destination: string) => `'${destination}'`).join(", ")} with ` +
+            `--accept-mass-delete: the destination is copied into stateDir/snapshots first, then the local ` +
+            `copies listed under deletedFiles are removed and the base snapshot moves with the remote`
+        );
+      }
+    } else {
+      // Same guard as the real push: a dry-run that quietly previews a plan
+      // the real run would refuse would be worse than useless, since
+      // --dry-run is exactly how an operator checks a plan before running it.
+      assertReliableCheckout({
+        config,
+        baseMap: current?.baseFiles || {},
+        remoteMap,
+        remoteHead: workingCopy.remoteHead
+      });
+    }
 
     const appliedFiles: string[] = [];
     const mergedFiles: string[] = [];
     const conflictFiles: string[] = [];
     const deletedFiles: string[] = [];
 
-    for (const snapshot of snapshots) {
+    for (const snapshot of previewSnapshots) {
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
       const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
       assertNoMassDelete({
         config,
-        baseMap: snapshot.baseFiles,
+        baseMap: snapshot.guardBaseFiles,
         deletedPaths: stagedDeletions.claimed,
         unmappedDeletedPaths: stagedDeletions.unclaimed,
         allowMassDelete: options.allowMassDelete
@@ -598,9 +662,10 @@ function previewPush(
       // measurement above is taken against HEAD. Without a commit between
       // snapshots, snapshot N would be measured against a HEAD that still
       // predates snapshot N-1 and would re-count its deletions, so a dry-run
-      // could refuse a plan the real push accepts. Committing keeps the
-      // preview's arithmetic identical to the real run's.
-      gitClient.commitAll(workingCopy.repoDir, snapshot.message);
+      // could refuse a plan the real push accepts. Committing the measured
+      // index, as the real run does, keeps the preview's arithmetic
+      // identical to the real run's.
+      gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
     }
 
     return {
@@ -611,10 +676,10 @@ function previewPush(
       appliedFiles: unique(appliedFiles),
       mergedFiles: unique(mergedFiles),
       conflictFiles: unique(conflictFiles),
-      deletedFiles: unique(deletedFiles),
+      deletedFiles: unique([...deletedFiles, ...adoptedDeletions]),
       snapshots: [],
       queuedSnapshotId: null,
-      notes: []
+      notes
     };
   } catch (error) {
     // A refused plan is a real answer about the plan, not a symptom of an
@@ -709,10 +774,11 @@ function applySnapshotToWorkingCopy(
 // snapshot store and the result payload all use).
 //
 // This is the mass-delete guard's real numerator (agent-tasks cda5b12c,
-// pandora run .ai/runs/2026-09-11-memory-sync-wipe). `git add -A` inside
-// GitClient.commitAll publishes every
-// path the working copy lacks, whether the merge plan asked for it or not,
-// so the plan is not what gets committed and must not be what gets checked.
+// pandora run .ai/runs/2026-09-11-memory-sync-wipe). `git add -A` stages
+// every path the working copy lacks, whether the merge plan asked for it or
+// not, so the plan is not what gets committed and must not be what gets
+// checked. This is also the ONLY stage of the working copy per snapshot:
+// the commit that follows takes this index as it is (GitClient.commitStaged).
 //
 // A staged deletion outside repositorySubdir maps to no sync destination, so
 // it is returned separately, as a repository-relative path, rather than
@@ -762,6 +828,14 @@ function collectRemoteFiles(
 
 function readSnapshotValue(source: Record<string, string | null> | Record<string, string>, key: string): string | null {
   return Object.prototype.hasOwnProperty.call(source, key) ? (source as Record<string, string | null>)[key] : null;
+}
+
+function withoutKeys<T>(source: Record<string, T>, keys: string[]): Record<string, T> {
+  const result = { ...source };
+  for (const key of keys) {
+    delete result[key];
+  }
+  return result;
 }
 
 function unique(values: string[]): string[] {

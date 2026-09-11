@@ -106,11 +106,10 @@ class GitClient {
     return Boolean(result.stdout.trim());
   }
 
-  // Stages the whole working copy, exactly as commitAll does on its way to a
-  // commit. Split out as its own method so a caller can stage FIRST and then
-  // inspect what the commit would actually contain (see listStagedDeletions
-  // below) before deciding whether to commit at all. Idempotent: commitAll
-  // re-runs it, which is a no-op on an already-staged tree.
+  // Stages the whole working copy. Split out as its own method so a caller
+  // can stage FIRST, inspect what the commit would actually contain (see
+  // listStagedDeletions below), and then commit exactly that index with
+  // commitStaged, without staging a second time.
   stageAll(repoDir: string): void {
     this.run(["add", "-A"], repoDir);
   }
@@ -169,10 +168,48 @@ class GitClient {
     return deletions;
   }
 
+  // Stage-and-commit in one step. Not used by the push path, which has to
+  // separate the two (see commitStaged); kept for a caller that has nothing
+  // to measure in between.
   commitAll(repoDir: string, message: string): string | null {
     this.stageAll(repoDir);
     if (!this.hasChanges(repoDir)) {
       return null;
+    }
+
+    this.run(["commit", "-m", message], repoDir);
+    return this.revParseHead(repoDir);
+  }
+
+  // Commits the index exactly as it stands, staging nothing on the way.
+  //
+  // The push path stages once, reads the deletions out of the index
+  // (listStagedDeletions), gates the mass-delete guard on that reading, and
+  // then commits. A commit that re-ran `git add -A` on its way in would
+  // commit a DIFFERENT tree from the one that was measured whenever the
+  // working copy changed in between, and that window is real: a temporary
+  // checkout wiped underneath this process after the measurement was staged
+  // by the second add and published as a total deletion at exit 0, with the
+  // guard reporting no deletions at all (agent-tasks cda5b12c, pandora run
+  // .ai/runs/2026-09-11-memory-sync-wipe, review round 3). The state-dir
+  // lock keeps other processes out of stateDir; it cannot close a window
+  // inside one process. So the commit takes the index as measured and
+  // nothing else: a wipe after the stage never reaches it, and a wipe before
+  // the stage is what the staged guard already refuses.
+  //
+  // `git diff --cached --quiet` is the emptiness check: exit 0 means the
+  // index matches HEAD (or is empty on an unborn branch, where git diffs
+  // against the empty tree), exit 1 means something is staged, anything
+  // else is a git failure. `git status --porcelain`, which commitAll uses,
+  // would also count untracked files, which are exactly what this method
+  // must not pick up.
+  commitStaged(repoDir: string, message: string): string | null {
+    const staged = this.run(["diff", "--cached", "--quiet"], repoDir, true);
+    if (staged.exitCode === 0) {
+      return null;
+    }
+    if (staged.exitCode !== 1) {
+      throw new CliError(`git command failed: ${this.gitBinary} diff --cached --quiet.`, 4);
     }
 
     this.run(["commit", "-m", message], repoDir);

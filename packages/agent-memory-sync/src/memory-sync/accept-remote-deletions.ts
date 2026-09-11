@@ -43,10 +43,58 @@ interface StateStoreLike {
   replaceBaseSnapshots: (files: Record<string, string | null>) => void;
 }
 
-// Returns null when there is nothing to accept: the checkout shows what the
-// base snapshot expects, so no refusal was going to happen and no local file
-// may be removed on the strength of a flag alone. The flag permits adopting
-// a deletion the run objected to; it never invents one.
+// The pure decision half: what an acceptance would adopt, without adopting
+// it. Shared by acceptRemoteDeletions below and by the push's --dry-run
+// preview, which reports these paths and changes nothing.
+//
+// Empty when there is nothing to accept: the checkout shows what the base
+// snapshot expects, so no refusal was going to happen and no local file may
+// be removed on the strength of a flag alone. The flag permits adopting a
+// deletion the run objected to; it never invents one.
+//
+// Otherwise every path the base snapshot tracks that the remote no longer
+// has, in EVERY destination, not only the one that tripped the guard:
+// adopting half of a remote state would leave the other half to be
+// republished on the next push as a local-only addition, which is the
+// opposite of what the operator asked for. `destinations` names the ones
+// those paths fall under, sorted, for the report.
+function findRemoteDeletionsToAccept(
+  config: AcceptConfig,
+  baseMap: Record<string, string | null>,
+  remoteMap: Record<string, string | null>,
+  remoteHead: string | null
+): { paths: string[]; destinations: string[] } {
+  const finding = findUnreliableCheckout(config, baseMap, remoteMap, remoteHead);
+  if (!finding) {
+    return { paths: [], destinations: [] };
+  }
+
+  const destinations = resolveSyncPathEntries(config)
+    .map((entry: { destination: string }) => entry.destination)
+    .sort((left: string, right: string) => right.length - left.length);
+
+  const paths: string[] = [];
+  const affected = new Set<string>();
+  for (const [key, value] of Object.entries(baseMap)) {
+    if (value === null) {
+      continue;
+    }
+    const destination = destinationOf(destinations, key);
+    if (destination === null) {
+      continue;
+    }
+    const remoteValue = Object.prototype.hasOwnProperty.call(remoteMap, key) ? remoteMap[key] : null;
+    if (remoteValue === null) {
+      paths.push(key);
+      affected.add(destination);
+    }
+  }
+
+  return { paths: paths.sort(), destinations: Array.from(affected).sort() };
+}
+
+// Returns null when there is nothing to accept (see
+// findRemoteDeletionsToAccept).
 function acceptRemoteDeletions(input: {
   config: AcceptConfig;
   stateStore: StateStoreLike;
@@ -61,13 +109,14 @@ function acceptRemoteDeletions(input: {
   baseMap: Record<string, string | null>;
   localMap: Record<string, string>;
 } | null {
-  const finding = findUnreliableCheckout(
+  const lost = findRemoteDeletionsToAccept(
     input.config,
     input.baseMap,
     input.remoteMap,
     input.remoteHead
   );
-  if (!finding) {
+  const lostPaths = lost.paths;
+  if (lostPaths.length === 0) {
     return null;
   }
 
@@ -76,43 +125,10 @@ function acceptRemoteDeletions(input: {
     .map((entry: { destination: string }) => entry.destination)
     .sort((left: string, right: string) => right.length - left.length);
 
-  // Every path the base snapshot tracks that the remote no longer has, in
-  // EVERY destination, not only the one that tripped the guard: adopting
-  // half of a remote state would leave the other half to be republished on
-  // the next push as a local-only addition, which is the opposite of what
-  // the operator asked for.
-  const lostPaths: string[] = [];
-  for (const [key, value] of Object.entries(input.baseMap)) {
-    if (value === null) {
-      continue;
-    }
-    if (destinationOf(destinations, key) === null) {
-      continue;
-    }
-    const remoteValue = Object.prototype.hasOwnProperty.call(input.remoteMap, key)
-      ? input.remoteMap[key]
-      : null;
-    if (remoteValue === null) {
-      lostPaths.push(key);
-    }
-  }
-
-  if (lostPaths.length === 0) {
-    return null;
-  }
-
   // Copy first, delete second: the whole point of accepting a deletion this
   // large is that the operator can still be wrong about it.
-  const affected = new Set<string>();
-  for (const lostPath of lostPaths) {
-    const destination = destinationOf(destinations, lostPath);
-    if (destination !== null) {
-      affected.add(destination);
-    }
-  }
-
   const snapshots: string[] = [];
-  for (const destination of Array.from(affected).sort()) {
+  for (const destination of lost.destinations) {
     const files = input.localFiles.filter(
       (file) => destinationOf(destinations, file.remoteRelativePath) === destination
     );
@@ -175,5 +191,6 @@ function destinationOf(destinations: string[], remoteRelativePath: string): stri
 }
 
 module.exports = {
-  acceptRemoteDeletions
+  acceptRemoteDeletions,
+  findRemoteDeletionsToAccept
 };
