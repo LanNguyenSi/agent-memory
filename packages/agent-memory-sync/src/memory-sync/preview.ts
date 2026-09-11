@@ -13,6 +13,12 @@ function summarizeOperation(operation: {
   // handling independently touched it; skippedFiles here only reflects
   // pull's side of that combined payload.
   skippedFiles?: string[];
+  // Local files a pull kept because no base snapshot records them and the
+  // remote does not have them: local-only files, candidates for the next
+  // push, never pull deletions (agent-tasks cda5b12c, AC-002). Reported so a
+  // run that protected files says so, rather than leaving the operator to
+  // infer it from a count that did not change.
+  protectedFiles?: string[];
   queuedSnapshotId?: string | null;
   notes?: string[];
 }): string {
@@ -29,6 +35,10 @@ function summarizeOperation(operation: {
 
   if (operation.skippedFiles && operation.skippedFiles.length > 0) {
     parts.push(`skipped=${operation.skippedFiles.length}`);
+  }
+
+  if (operation.protectedFiles && operation.protectedFiles.length > 0) {
+    parts.push(`protected=${operation.protectedFiles.length}`);
   }
 
   if (operation.queuedSnapshotId) {

@@ -5,8 +5,14 @@ const {
   filterUnmappedBaseMap,
   toRepositoryRelativePath
 } = require("./config");
-const { RemoteUnavailableError, RemoteQueueEscalationError } = require("../errors");
+const {
+  MassDeleteRefusedError,
+  RemoteUnavailableError,
+  RemoteQueueEscalationError,
+  UnreliableCheckoutError
+} = require("../errors");
 const { GitClient } = require("./git-client");
+const { assertNoMassDelete, assertReliableCheckout } = require("./guards");
 const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore, DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("./state-store");
@@ -19,6 +25,9 @@ interface PushOptions {
   // ./snapshot.ts) after watch started reusing this function instead of its
   // own mirror-push (src/commands/watch.ts).
   commitMessage?: string;
+  // Operator override for the deletion guards (--allow-mass-delete on `run`
+  // and `watch`), forwarded to ./guards.ts. The periodic jobs never pass it.
+  allowMassDelete?: boolean;
   // Overrides the working-copy temp-dir label under stateDir/tmp (default:
   // "push"). `watch` passes "watch" here so its ticks keep their own
   // isolated working copy instead of sharing one with a concurrently
@@ -49,6 +58,9 @@ interface PushConfig {
   // reachabilityCheckCommand's null-is-a-real-value convention: the queue
   // then keeps queuing silently, exit 0, forever, regardless of age.
   queueEscalationThresholdMs?: number | null;
+  // Thresholds for the mass-delete guard (./guards.ts); absent means the
+  // package defaults.
+  massDeleteGuard?: { maxRatio?: number; maxFiles?: number } | null;
   syncPaths: Array<{
     source: string;
     destination?: string;
@@ -160,6 +172,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
           appliedFiles: unique(Object.keys(snapshots[snapshots.length - 1]?.localFiles || {})),
           mergedFiles: [],
           conflictFiles: [],
+          deletedFiles: [],
           queuedSnapshotId: null,
           notes: [
             `remote unreachable (${reachability.reason}); this run would enqueue a snapshot instead of pushing immediately`
@@ -169,7 +182,10 @@ async function performPush(config: PushConfig, options: PushOptions) {
       );
     }
 
-    return appendNotes(previewPush(config, snapshots), ownerScopedWarnings);
+    return appendNotes(
+      previewPush(config, snapshots, { allowMassDelete: options.allowMassDelete }),
+      ownerScopedWarnings
+    );
   }
 
   if (!reachability.reachable) {
@@ -195,15 +211,39 @@ async function performPush(config: PushConfig, options: PushOptions) {
       gitClient.createTempRepoDir(config.stateDir, options.tempDirLabel || "push")
     );
 
+    // Guard 1 (agent-tasks cda5b12c): a working copy that does not represent
+    // the remote produces a deletion plan for every path it fails to show.
+    // Checked here, against the freshly fetched tree and before any merge,
+    // so nothing is committed or pushed from it. See ./guards.ts.
+    assertReliableCheckout({
+      config,
+      baseMap: currentBaseMap,
+      remoteMap: collectRemoteFiles(config, gitClient, workingCopy.repoDir),
+      remoteHead: workingCopy.remoteHead,
+      allowMassDelete: options.allowMassDelete
+    });
+
     const appliedFiles: string[] = [];
     const mergedFiles: string[] = [];
     const conflictFiles: string[] = [];
+    const deletedFiles: string[] = [];
 
     for (const snapshot of snapshots) {
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
+      // Guard 2 (agent-tasks cda5b12c, AC-003): evaluated per snapshot and
+      // BEFORE this snapshot's commit, so a refusal leaves the remote
+      // untouched (the push below never runs) and the queued snapshots stay
+      // queued rather than being dropped as replayed.
+      assertNoMassDelete({
+        config,
+        baseMap: snapshot.baseFiles,
+        deletedPaths: result.deletedFiles,
+        allowMassDelete: options.allowMassDelete
+      });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
+      deletedFiles.push(...result.deletedFiles);
       gitClient.commitAll(workingCopy.repoDir, snapshot.message);
     }
 
@@ -243,6 +283,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
         appliedFiles: unique(appliedFiles),
         mergedFiles: unique(mergedFiles),
         conflictFiles: unique(conflictFiles),
+        deletedFiles: unique(deletedFiles),
         queuedSnapshotId,
         notes: queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []
       },
@@ -343,6 +384,7 @@ function enqueueCurrentSnapshot(
     appliedFiles: Object.keys(currentLocalMap).sort(),
     mergedFiles: [],
     conflictFiles: [],
+    deletedFiles: [],
     queuedSnapshotId,
     notes: skewNote ? [note, skewNote] : [note]
   };
@@ -431,8 +473,9 @@ function formatDurationMs(ms: number): string {
 }
 
 function previewPush(
-  config: { stateDir: string; profile: string; conflictStrategy: "inline-markers" | "local-wins" | "remote-wins"; repositorySubdir: string; remoteUrl: string; branch: string; gitBinary: string },
-  snapshots: Array<{ id: string; localFiles: Record<string, string>; baseFiles: Record<string, string | null> }>
+  config: PushConfig,
+  snapshots: Array<{ id: string; localFiles: Record<string, string>; baseFiles: Record<string, string | null> }>,
+  options: { allowMassDelete?: boolean } = {}
 ) {
   try {
     const gitClient = new GitClient(config.gitBinary);
@@ -442,15 +485,34 @@ function previewPush(
       gitClient.createTempRepoDir(config.stateDir, "push-preview")
     );
 
+    // Same two guards as the real push: a dry-run that quietly previews a
+    // plan the real run would refuse would be worse than useless, since
+    // --dry-run is exactly how an operator checks a plan before running it.
+    assertReliableCheckout({
+      config,
+      baseMap: snapshots[snapshots.length - 1]?.baseFiles || {},
+      remoteMap: collectRemoteFiles(config, gitClient, workingCopy.repoDir),
+      remoteHead: workingCopy.remoteHead,
+      allowMassDelete: options.allowMassDelete
+    });
+
     const appliedFiles: string[] = [];
     const mergedFiles: string[] = [];
     const conflictFiles: string[] = [];
+    const deletedFiles: string[] = [];
 
     for (const snapshot of snapshots) {
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
+      assertNoMassDelete({
+        config,
+        baseMap: snapshot.baseFiles,
+        deletedPaths: result.deletedFiles,
+        allowMassDelete: options.allowMassDelete
+      });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
+      deletedFiles.push(...result.deletedFiles);
     }
 
     return {
@@ -461,10 +523,18 @@ function previewPush(
       appliedFiles: unique(appliedFiles),
       mergedFiles: unique(mergedFiles),
       conflictFiles: unique(conflictFiles),
+      deletedFiles: unique(deletedFiles),
       queuedSnapshotId: null,
       notes: []
     };
   } catch (error) {
+    // A refused plan is a real answer about the plan, not a symptom of an
+    // unreachable remote: it must reach the caller instead of being folded
+    // into the catch-all "remote unavailable" preview below.
+    if (error instanceof MassDeleteRefusedError || error instanceof UnreliableCheckoutError) {
+      throw error;
+    }
+
     return {
       kind: "push",
       status: "dry-run",
@@ -473,6 +543,7 @@ function previewPush(
       appliedFiles: unique(Object.keys(snapshots[snapshots.length - 1]?.localFiles || {})),
       mergedFiles: [],
       conflictFiles: [],
+      deletedFiles: [],
       queuedSnapshotId: null,
       notes: ["remote unavailable; this run would enqueue a snapshot instead of pushing immediately"]
     };
@@ -492,6 +563,7 @@ function applySnapshotToWorkingCopy(
   const appliedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
+  const deletedFiles: string[] = [];
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const repositoryPath = toRepositoryRelativePath(config, remoteRelativePath);
@@ -517,6 +589,12 @@ function applySnapshotToWorkingCopy(
     }
 
     if (mergeResult.content === null) {
+      // Only a path the working copy actually holds counts as a deletion:
+      // removing a path that is not there is a no-op, and counting it would
+      // inflate the mass-delete guard's numerator with phantom deletions.
+      if (remoteContent !== null) {
+        deletedFiles.push(remoteRelativePath);
+      }
       gitClient.deleteFile(repoDir, repositoryPath);
       continue;
     }
@@ -527,7 +605,8 @@ function applySnapshotToWorkingCopy(
   return {
     appliedFiles,
     mergedFiles,
-    conflictFiles
+    conflictFiles,
+    deletedFiles
   };
 }
 

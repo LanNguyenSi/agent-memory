@@ -5,7 +5,7 @@ const {
   requireRemoteUrl,
   resolveRunConfig
 } = require("../config/loader");
-const { CliError } = require("../errors");
+const { CliError, MassDeleteRefusedError, UnreliableCheckoutError } = require("../errors");
 const { buildCommitMessage } = require("../memory-sync/snapshot");
 const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
@@ -25,6 +25,7 @@ interface WatchOptions {
   stateDir?: string;
   debounceMs?: string;
   maxRuns?: string;
+  allowMassDelete: boolean;
 }
 
 const DEFAULT_DEBOUNCE_MS = 5000;
@@ -50,6 +51,12 @@ function registerWatchCommand(program: import("commander").Command): void {
       "--max-runs <count>",
       "Exit after this many watch ticks complete — pushed or queued locally when the remote " +
         "is unreachable (primarily for tests)"
+    )
+    .option(
+      "--allow-mass-delete",
+      "Push a plan the mass-delete guard would refuse, and merge a working copy it considers unreliable " +
+        "(see massDeleteGuard in the config)",
+      false
     )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
     .option("-v, --verbose", "Enable verbose diagnostics", false)
@@ -155,7 +162,8 @@ function registerWatchCommand(program: import("commander").Command): void {
         const result = await performPush(runConfig, {
           dryRun: false,
           commitMessage: message,
-          tempDirLabel: "watch"
+          tempDirLabel: "watch",
+          allowMassDelete: options.allowMassDelete
         });
 
         if (result.status === "queued") {
@@ -188,21 +196,39 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         try {
-          // Counts every tick that completed a pushSnapshot() call, whether
-          // performPush actually pushed or queued the snapshot locally
-          // (unreachable/failed remote) — matching run.ts's own --max-runs,
-          // which counts scheduled invocations rather than only ones that
-          // pushed something. This also keeps --max-runs usable as a
-          // deterministic test-termination mechanism for an offline tick,
-          // which never throws (see pushSnapshot above) and so would
-          // otherwise never increment a "successful pushes only" counter.
           await pushSnapshot(message);
-          runsCompleted += 1;
-          if (maxRuns && runsCompleted >= maxRuns) {
-            shouldExit = true;
-          }
         } catch (error) {
-          handleSnapshotError(error);
+          // A refused deletion plan or an unreliable working copy
+          // (agent-tasks cda5b12c, see src/memory-sync/guards.ts) is a
+          // decision about THIS tick, not a broken watcher: the snapshot was
+          // not pushed, nothing was lost, and the next tick is free to try
+          // again once the workspace or the working copy looks sane. Log it
+          // loudly and keep watching, instead of routing it through
+          // handleSnapshotError, which sets a non-zero exit code and shuts
+          // the watcher down. A wedged watcher would be its own outage: the
+          // 2026-09-11 incident was noticed only because the watch job was
+          // still running and still pushing.
+          if (!isGuardRefusal(error)) {
+            handleSnapshotError(error);
+            await maybeShutdown();
+            return;
+          }
+
+          writeWarning(`watch tick refused: ${(error as Error).message}`, outputOptions);
+        }
+
+        // Counts every tick that completed a pushSnapshot() call, whether
+        // performPush actually pushed, queued the snapshot locally
+        // (unreachable/failed remote) or had its plan refused by a guard.
+        // This matches run.ts's own --max-runs, which counts scheduled
+        // invocations rather than only ones that pushed something. This also
+        // keeps --max-runs usable as a deterministic test-termination
+        // mechanism for an offline tick, which never throws (see
+        // pushSnapshot above) and so would otherwise never increment a
+        // "successful pushes only" counter.
+        runsCompleted += 1;
+        if (maxRuns && runsCompleted >= maxRuns) {
+          shouldExit = true;
         }
         await maybeShutdown();
       }
@@ -250,7 +276,15 @@ function registerWatchCommand(program: import("commander").Command): void {
               try {
                 await pushSnapshot(finalMessage);
               } catch (error) {
-                handleSnapshotError(error);
+                // Same treatment as a refused tick above: a guard refusal on
+                // the final flush is a decision about the pending snapshot,
+                // not a watcher failure, so it must not turn a clean
+                // SIGINT/SIGTERM shutdown into a non-zero exit.
+                if (isGuardRefusal(error)) {
+                  writeWarning(`watch tick refused: ${(error as Error).message}`, outputOptions);
+                } else {
+                  handleSnapshotError(error);
+                }
               }
             }
             await maybeShutdown();
@@ -320,6 +354,14 @@ function registerWatchCommand(program: import("commander").Command): void {
       process.off("SIGINT", sigintHandler);
       process.off("SIGTERM", sigtermHandler);
     });
+}
+
+// A deletion guard's refusal (src/memory-sync/guards.ts): the tick decided
+// not to push, which leaves the local workspace, the remote and the queue
+// exactly as they were. Distinguished from every other error so the watch
+// loop survives it. See runTick's own comment for why that matters.
+function isGuardRefusal(error: unknown): boolean {
+  return error instanceof MassDeleteRefusedError || error instanceof UnreliableCheckoutError;
 }
 
 function resolveDebounceMs(override?: string): number {

@@ -3,12 +3,17 @@ const {
   requireRemoteUrl,
   resolveRunConfig
 } = require("../config/loader");
-const { CliError, RemoteQueueEscalationError, formatErrorMessage, isCliError } = require("../errors");
+const {
+  CliError,
+  RemoteQueueEscalationError,
+  RemoteUnavailableError,
+  formatErrorMessage
+} = require("../errors");
 const { performPull } = require("../memory-sync/pull");
 const { performPush } = require("../memory-sync/push");
 const { summarizeOperation } = require("../memory-sync/preview");
 const { nextScheduleTick, validateCronExpression } = require("../memory-sync/scheduler");
-const { writeDryRun, writeInfo, writeResult } = require("../output");
+const { writeDryRun, writeInfo, writeResult, writeWarning } = require("../output");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -30,6 +35,7 @@ interface RunOptions {
   maxRuns?: string;
   conflictStrategy?: "inline-markers" | "local-wins" | "remote-wins";
   reachabilityTimeoutMs?: string;
+  allowMassDelete: boolean;
 }
 
 function registerRunCommand(program: import("commander").Command): void {
@@ -53,6 +59,12 @@ function registerRunCommand(program: import("commander").Command): void {
     .option(
       "--reachability-timeout-ms <ms>",
       "Timeout for the remote reachability precheck before pull/push (default 4000, env AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS)"
+    )
+    .option(
+      "--allow-mass-delete",
+      "Apply a plan the mass-delete guard would refuse, and merge a working copy it considers unreliable " +
+        "(see massDeleteGuard in the config)",
+      false
     )
     .option("--dry-run", "Preview without making changes", false)
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
@@ -109,7 +121,11 @@ function registerRunCommand(program: import("commander").Command): void {
 
         let execution: Record<string, unknown>;
         try {
-          execution = await executeMode(runConfig, { dryRun: options.dryRun }, outputOptions);
+          execution = await executeMode(
+            runConfig,
+            { dryRun: options.dryRun, allowMassDelete: options.allowMassDelete },
+            outputOptions
+          );
         } catch (error) {
           // Single run (no --schedule): preserve the pre-fix behavior
           // exactly — RemoteQueueEscalationError (and everything else)
@@ -196,7 +212,7 @@ async function executeMode(
       required?: boolean;
     }>;
   },
-  options: { dryRun: boolean },
+  options: { dryRun: boolean; allowMassDelete: boolean },
   outputOptions: { color: boolean; quiet: boolean; verbose: boolean }
 ) {
   if (runConfig.mode === "push") {
@@ -221,21 +237,39 @@ async function executeMode(
       conflictFiles: unique([...pullResult.conflictFiles, ...pushResult.conflictFiles]),
       deletedFiles: unique([...(pullResult.deletedFiles || []), ...(pushResult.deletedFiles || [])]),
       skippedFiles: unique([...(pullResult.skippedFiles || []), ...(pushResult.skippedFiles || [])]),
+      protectedFiles: unique([...(pullResult.protectedFiles || []), ...(pushResult.protectedFiles || [])]),
       queuedSnapshotId: pushResult.queuedSnapshotId || null,
       notes: [...(pullResult.notes || []), ...(pushResult.notes || [])]
     };
   } catch (error: unknown) {
-    const exitCode =
-      typeof (error as { exitCode?: unknown }).exitCode === "number"
-        ? (error as { exitCode: number }).exitCode
-        : null;
-
-    if (exitCode === 4) {
-      writeInfo("remote unavailable during pull; queueing local snapshot instead", outputOptions);
-      return performPush(runConfig, options);
+    // Root cause of the 2026-09-11 wipe (agent-tasks cda5b12c): this used to
+    // discriminate on `exitCode === 4`, and exit code 4 is shared by every
+    // git failure GitClient.run wraps in a generic CliError ("git command
+    // failed: ..."). A pull that died because its own working copy had been
+    // removed underneath it therefore looked exactly like "the remote is
+    // unavailable", and the answer to that, a push-only retry, is what
+    // published 406 deletions from a local workspace the same tick had just
+    // emptied.
+    //
+    // Only RemoteUnavailableError means the remote is the problem: it is
+    // thrown from exactly two sites (GitClient.lookupRemoteHead and
+    // GitClient.push, see errors.ts), and for that case a push-only retry is
+    // still right, since performPush queues the snapshot locally. Everything
+    // else now propagates and fails the run loudly, which is what the
+    // supervisor (launchd KeepAlive, systemd StartLimit*) is for.
+    if (!(error instanceof RemoteUnavailableError)) {
+      throw error;
     }
 
-    throw error;
+    // writeWarning, not writeInfo: the periodic jobs run without --verbose,
+    // which made this the one line explaining a degraded tick and made it
+    // invisible in exactly the runs that needed it. The same text is also
+    // appended to the result payload below, so a --quiet or --output json
+    // consumer still sees it.
+    const diagnostic = "remote unavailable during pull; queueing local snapshot instead";
+    writeWarning(diagnostic, outputOptions);
+    const pushResult = await performPush(runConfig, options);
+    return { ...pushResult, notes: [...(pushResult.notes || []), diagnostic] };
   }
 }
 

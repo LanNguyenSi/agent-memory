@@ -8,12 +8,17 @@ const {
   resolveSyncPathEntries
 } = require("./config");
 const { GitClient } = require("./git-client");
+const { assertReliableCheckout } = require("./guards");
 const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore } = require("./state-store");
 
 interface PullOptions {
   dryRun: boolean;
+  // Operator override for the deletion guards (--allow-mass-delete on `run`
+  // and `watch`). Only ever set on an interactive invocation: the periodic
+  // jobs never pass it, which is the point. See ./guards.ts.
+  allowMassDelete?: boolean;
 }
 
 interface PullConfig {
@@ -27,6 +32,7 @@ interface PullConfig {
   gitBinary: string;
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
+  massDeleteGuard?: { maxRatio?: number; maxFiles?: number } | null;
   syncPaths: Array<{
     source: string;
     destination?: string;
@@ -54,6 +60,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       conflictFiles: [],
       deletedFiles: [],
       skippedFiles: [],
+      protectedFiles: [],
       notes: [`remote unreachable (${reachability.reason}); skipped pull, local files unchanged`]
     };
   }
@@ -74,6 +81,21 @@ async function performPull(config: PullConfig, options: PullOptions) {
   );
   const baseMap = stateStore.readBaseSnapshots();
   const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
+  // Guard 1 (agent-tasks cda5b12c): never merge against a working copy that
+  // cannot be trusted to represent the remote. In the 2026-09-11 wipe the
+  // fetched copy under stateDir/tmp/pull had been removed by a concurrent
+  // watch tick's StateStore.clearTemp() AFTER git reported a successful
+  // checkout, so every remote path read as null and the merge below deleted
+  // 404 real local files. This throws UnreliableCheckoutError before the
+  // loop, so no local file is touched and no base snapshot is rewritten.
+  assertReliableCheckout({
+    config,
+    baseMap,
+    remoteMap,
+    remoteHead: workingCopy.remoteHead,
+    allowMassDelete: options.allowMassDelete
+  });
+
   const targetPaths = new Set<string>([
     ...Object.keys(localMap),
     ...Object.keys(baseMap),
@@ -85,6 +107,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const conflictFiles: string[] = [];
   const deletedFiles: string[] = [];
   const skippedFiles: string[] = [];
+  const protectedFiles: string[] = [];
 
   // Resolved once, outside the per-path loop below. See resolveSyncPathEntries'
   // own comment in config.ts (agent-tasks 65380570, LOW): this loop calls
@@ -95,15 +118,38 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const resolvedSyncPathEntries = resolveSyncPathEntries(config);
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
+    // Guard 2 (agent-tasks cda5b12c, AC-002): a local file the base snapshot
+    // has never recorded, and that the remote does not have, is local-only.
+    // It is a candidate for the next push and can never be a pull deletion,
+    // whatever the 3-way merge would make of it. Checked BEFORE mergeText
+    // rather than after, deliberately: today mergeText's `remote === base`
+    // fast path also keeps such a file (both are null, so local wins), but
+    // that is an emergent property of one branch's ordering inside a
+    // general-purpose merge function, not a stated invariant of the pull.
+    // The incident showed what it costs when a merge answer about deletion
+    // is trusted unconditionally, so the invariant is stated here, where the
+    // rmSync lives, and the count is reported.
+    //
+    // Every key of localMap is mappable to a local destination by
+    // construction (collectLocalSyncFiles builds them from the configured
+    // syncPaths), so this cannot swallow a path the unmapped guard below
+    // would otherwise classify as skipped.
+    const hasBaseSnapshot = Object.prototype.hasOwnProperty.call(baseMap, remoteRelativePath);
+    const localValue = readSnapshotValue(localMap, remoteRelativePath);
+    const remoteValue = readSnapshotValue(remoteMap, remoteRelativePath);
+    if (!hasBaseSnapshot && localValue !== null && remoteValue === null) {
+      protectedFiles.push(remoteRelativePath);
+      continue;
+    }
+
     const mergeResult = mergeText({
       base: readSnapshotValue(baseMap, remoteRelativePath),
-      local: readSnapshotValue(localMap, remoteRelativePath),
-      remote: readSnapshotValue(remoteMap, remoteRelativePath),
+      local: localValue,
+      remote: remoteValue,
       strategy: config.conflictStrategy
     });
 
-    const currentLocalValue = readSnapshotValue(localMap, remoteRelativePath);
-    if (mergeResult.content === currentLocalValue) {
+    if (mergeResult.content === localValue) {
       continue;
     }
 
@@ -183,6 +229,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       conflictFiles,
       deletedFiles,
       skippedFiles,
+      protectedFiles,
       notes: []
     };
   }
@@ -197,6 +244,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
     conflictFiles,
     deletedFiles,
     skippedFiles,
+    protectedFiles,
     notes: []
   };
 }

@@ -7,9 +7,10 @@
 // operation shapes instead of spawning a CLI process just to reach text
 // mode.
 //
-// Each optional section (deletedFiles, skippedFiles, queuedSnapshotId,
-// notes) is tested both present and absent/empty, since summarizeOperation
-// only appends its segment when the field is truthy and non-empty.
+// Each optional section (deletedFiles, skippedFiles, protectedFiles,
+// queuedSnapshotId, notes) is tested both present and absent/empty, since
+// summarizeOperation only appends its segment when the field is truthy and
+// non-empty.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -62,6 +63,18 @@ test("summarizeOperation: an empty skippedFiles array omits the skipped= segment
   assert.equal(summary, "operation=push applied=1 merged=0 conflicts=0");
 });
 
+test("summarizeOperation: a non-empty protectedFiles array appends a protected= segment", () => {
+  const summary = summarizeOperation(
+    baseOperation({ kind: "pull", protectedFiles: ["local-only.md", "also-local.md"] })
+  );
+  assert.equal(summary, "operation=pull applied=1 merged=0 conflicts=0 protected=2");
+});
+
+test("summarizeOperation: an empty protectedFiles array omits the protected= segment", () => {
+  const summary = summarizeOperation(baseOperation({ protectedFiles: [] }));
+  assert.equal(summary, "operation=push applied=1 merged=0 conflicts=0");
+});
+
 test("summarizeOperation: a truthy queuedSnapshotId appends a queued= segment", () => {
   const summary = summarizeOperation(baseOperation({ queuedSnapshotId: "1755300000-abcd1234" }));
   assert.equal(summary, "operation=push applied=1 merged=0 conflicts=0 queued=1755300000-abcd1234");
@@ -93,12 +106,13 @@ test("summarizeOperation: all optional segments combined appear in declaration o
       kind: "sync",
       deletedFiles: ["gone.md"],
       skippedFiles: ["orphan.md"],
+      protectedFiles: ["local-only.md"],
       queuedSnapshotId: "snap-1",
       notes: ["replayed 1 queued snapshot(s)"]
     })
   );
   assert.equal(
     summary,
-    "operation=sync applied=1 merged=0 conflicts=0 deleted=1 skipped=1 queued=snap-1 notes=replayed 1 queued snapshot(s)"
+    "operation=sync applied=1 merged=0 conflicts=0 deleted=1 skipped=1 protected=1 queued=snap-1 notes=replayed 1 queued snapshot(s)"
   );
 });
