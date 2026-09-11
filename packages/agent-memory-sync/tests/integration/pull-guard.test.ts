@@ -221,18 +221,24 @@ test("pull: deletions spread across destinations trip the plan-wide total (AC-00
   const destinations = ["memory", "logs", "archive"];
   const seeded: string[] = [];
   for (const destination of destinations) {
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 8; index += 1) {
       const relativePath = `${destination}/note-${String(index).padStart(3, "0")}.md`;
       writeText(path.join(workspaceRoot, relativePath), `entry ${index}\n`);
       seeded.push(relativePath);
     }
   }
+  // maxRatio 1 switches the proportional rule off, so this fixture is about
+  // the absolute rules alone and needs 8 files per destination rather than
+  // the 100 the default 10 percent would demand to keep 8 deletions under
+  // it. The default ratio's own arithmetic is pinned in
+  // tests/unit/guards.test.ts, which needs no files on disk at all.
   writeProjectConfig(configPath, {
     rootDir: workspaceRoot,
     remoteUrl: remoteDir,
     branch: "main",
     repositorySubdir: "shared",
     stateDir: ".agent-memory-sync/default",
+    massDeleteGuard: { maxFiles: 20, maxRatio: 1 },
     syncPaths: destinations.map((destination) => ({
       source: destination,
       destination,
@@ -241,14 +247,9 @@ test("pull: deletions spread across destinations trip the plan-wide total (AC-00
   });
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  // 8 of 100 per destination: under the absolute limit (20) and under the
-  // proportional one (10 percent of 100) everywhere, 24 in total.
-  const removed: string[] = [];
-  for (const destination of destinations) {
-    for (let index = 0; index < 8; index += 1) {
-      removed.push(`${destination}/note-${String(index).padStart(3, "0")}.md`);
-    }
-  }
+  // 8 per destination: under the absolute limit (20) everywhere and under
+  // the proportional rule this fixture turned off, 24 in total.
+  const removed = [...seeded];
   peerDeletes(remoteDir, root, "peer-total", removed);
 
   const refused = runCli(
