@@ -5,7 +5,7 @@ const {
   requireRemoteUrl,
   resolveRunConfig
 } = require("../config/loader");
-const { CliError } = require("../errors");
+const { CliError, RestoreSourceNotFoundError } = require("../errors");
 const { acquireStateDirLock } = require("../memory-sync/lock");
 const {
   collectLocalSyncFiles,
@@ -86,7 +86,12 @@ function registerRestoreCommand(program: import("commander").Command): void {
       "Restore a whole sync destination from a local pre-apply snapshot (default: latest)"
     )
     .option("--dry-run", "List what would be restored without writing", false)
-    .option("--yes", "Confirm a full-snapshot restore without prompting", false)
+    .option(
+      "--yes",
+      "Confirm a full-snapshot restore, or a whole-destination restore (--from-commit/--from-snapshot), " +
+        "without prompting",
+      false
+    )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
     .option("-v, --verbose", "Enable verbose diagnostics", false)
     .option("-q, --quiet", "Suppress non-error diagnostics", false)
@@ -128,6 +133,17 @@ function registerRestoreCommand(program: import("commander").Command): void {
         );
       }
 
+      // The destination forms replace a whole tree, files removed included,
+      // and ask for the same confirmation the full-snapshot form does. A dry
+      // run writes nothing and needs none.
+      if (mode.kind !== "file" && !options.yes && !options.dryRun) {
+        throw new CliError(
+          `restore ${mode.kind === "commit" ? "--from-commit" : "--from-snapshot"} replaces the whole ` +
+            `'${mode.destination}' destination and requires --yes (or --dry-run to preview).`,
+          2
+        );
+      }
+
       const outputOptions = {
         color: runConfig.color,
         quiet: runConfig.quiet,
@@ -144,6 +160,12 @@ function registerRestoreCommand(program: import("commander").Command): void {
         staleMs: runConfig.lockStaleMs
       });
 
+      // The working copy under stateDir/tmp/restore is a throwaway and is
+      // removed on every exit below: a completed restore, a dry run and a
+      // failed resolution alike. It used to survive a dry run and a failure,
+      // sitting under tmp with a full checkout in it until some later
+      // restore happened to reuse the label.
+      const stateStore = new StateStore(runConfig.stateDir, runConfig.profile);
       try {
         if (mode.kind !== "file") {
           await restoreDestination(runConfig, options, outputOptions, mode);
@@ -184,9 +206,8 @@ function registerRestoreCommand(program: import("commander").Command): void {
               .filter((p: string) => p.startsWith(`${runConfig.repositorySubdir}/`));
 
         if (targetRepoPaths.length === 0) {
-          throw new CliError(
-            `no files to restore at ${sha}${options.path ? ` for path '${options.path}'` : ""} under '${runConfig.repositorySubdir}/'.`,
-            5
+          throw new RestoreSourceNotFoundError(
+            `no files to restore at ${sha}${options.path ? ` for path '${options.path}'` : ""} under '${runConfig.repositorySubdir}/'.`
           );
         }
 
@@ -204,10 +225,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
 
           const content = gitClient.showAtRef(workingCopy.repoDir, resolvedSha, repoRelativePath);
           if (content === null) {
-            throw new CliError(
-              `file '${repoRelativePath}' does not exist at ${sha}.`,
-              5
-            );
+            throw new RestoreSourceNotFoundError(`file '${repoRelativePath}' does not exist at ${sha}.`);
           }
 
           if (options.dryRun) {
@@ -239,6 +257,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
             .join("\n")
         );
       } finally {
+        stateStore.clearTemp(RESTORE_TEMP_LABEL);
         lock.release();
       }
     });
@@ -383,9 +402,8 @@ async function restoreDestination(
       }));
 
     if (sourceFiles.length === 0) {
-      throw new CliError(
-        `commit ${resolvedSha} holds no files under '${runConfig.repositorySubdir}/${mode.destination}'.`,
-        5
+      throw new RestoreSourceNotFoundError(
+        `commit ${resolvedSha} holds no files under '${runConfig.repositorySubdir}/${mode.destination}'.`
       );
     }
   } else {
@@ -431,8 +449,16 @@ async function restoreDestination(
         );
       }
       mkdirSync(path.dirname(absolutePath), { recursive: true });
-      // Bytes, not a decoded string: a restore that re-encoded on the way
-      // out would not reproduce the tree it claims to.
+      // Written as a Buffer, never through a decode-and-re-encode of this
+      // command's own. What that buys depends on the source. A snapshot
+      // source is byte-exact: the copy was taken with copyFileSync and is
+      // read back as raw bytes here. A commit source is UTF-8-exact:
+      // showAtRef decodes git's output as UTF-8, which is the same fidelity
+      // collectLocalSyncFiles imposes on every file this package syncs in
+      // the first place (files are read and pushed as UTF-8 text), so no
+      // byte a sync could have carried is lost on the way back, while a
+      // byte sequence that is not valid UTF-8 would be replaced here just as
+      // it would have been on the way in.
       writeFileSync(absolutePath, file.read());
       writeInfo(`restored ${file.remoteRelativePath}`, outputOptions);
     }
@@ -444,7 +470,6 @@ async function restoreDestination(
 
     if (mode.kind === "commit" && workingCopy) {
       moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination);
-      new StateStore(runConfig.stateDir, runConfig.profile).clearTemp(RESTORE_TEMP_LABEL);
     }
   }
 

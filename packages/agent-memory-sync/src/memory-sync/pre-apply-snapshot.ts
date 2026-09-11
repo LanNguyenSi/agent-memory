@@ -18,7 +18,7 @@
 // notices".
 const { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
-const { CliError } = require("../errors");
+const { RestoreSourceNotFoundError } = require("../errors");
 
 // How many generations per destination survive. Overridable per profile with
 // the `snapshotGenerations` config key (src/config/loader.ts).
@@ -206,13 +206,12 @@ function readPreApplySnapshot(
     id === "latest" ? available[available.length - 1] : available.find((entry) => entry.id === id);
 
   if (!selected) {
-    throw new CliError(
+    throw new RestoreSourceNotFoundError(
       `no snapshot ${id === "latest" ? "" : `'${id}' `}for destination '${destination}' under ` +
         `'${destinationDir(stateDir, destination)}'.` +
         (available.length > 0
           ? ` Available: ${available.map((entry) => entry.id).join(", ")}.`
-          : " Nothing has been snapshotted for this destination yet."),
-      5
+          : " Nothing has been snapshotted for this destination yet.")
     );
   }
 

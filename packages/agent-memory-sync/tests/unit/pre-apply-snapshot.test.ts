@@ -154,11 +154,31 @@ test("reading a snapshot that does not exist fails loudly", () => {
   assert.throws(
     () => readPreApplySnapshot(stateDir, "logs", "latest"),
     (error: Error & { exitCode?: number }) => {
-      assert.equal(error.exitCode, 5);
+      // 10, its own code: a source that is not there is neither a refused
+      // push plan (5) nor a config error (3).
+      assert.equal(error.exitCode, 10);
+      assert.equal(error.name, "RestoreSourceNotFoundError");
       assert.match(error.message, /no snapshot/);
       return true;
     }
   );
   // A read creates nothing, not even the directory it looked in.
   assert.deepEqual(readdirSync(root), []);
+});
+
+// R3 low: the byte-for-byte test above used UTF-8-safe content, so a copy
+// that decoded and re-encoded the file on the way in passed it. A lone 0xFF
+// byte is not valid UTF-8 and comes out as EF BF BD from any text round trip.
+test("a snapshot preserves bytes that are not valid UTF-8", () => {
+  const root = sandbox("raw-bytes");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 1);
+  const rawBytes = Buffer.from([0x61, 0xff, 0x0a, 0x00, 0x62]);
+  writeFileSync(files[0].absolutePath, rawBytes);
+
+  const snapshot = writePreApplySnapshot({ stateDir, destination: "logs", files });
+
+  const stored = readFileSync(path.join(snapshot.dir, "files", files[0].remoteRelativePath));
+  assert.deepEqual(stored, rawBytes);
+  assert.equal(stored.length, rawBytes.length);
 });

@@ -68,9 +68,10 @@ class RemoteQueueEscalationError extends CliError {
 //
 // Origin: the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run
 // .ai/runs/2026-09-11-memory-sync-wipe). A sync tick whose pull
-// had just emptied the local workspace pushed 406 deletions, and the peer
-// machine mirrored them one tick later. Nothing in the push path asked
-// whether deleting the entire tracked corpus at once was plausible.
+// had just emptied the local workspace pushed the deletion of the whole
+// tracked corpus, and the peer machine mirrored it one tick later. Nothing
+// in the push path asked whether deleting the entire tracked corpus at once
+// was plausible.
 class MassDeleteRefusedError extends CliError {
   constructor(message: string, exitCode = 5) {
     super(message, exitCode);
@@ -130,6 +131,21 @@ class StateDirLockedError extends CliError {
   }
 }
 
+// Thrown when a restore's source has nothing to restore: the named pre-apply
+// snapshot does not exist (src/memory-sync/pre-apply-snapshot.ts), or the
+// commit holds no file, or not the named file, under the requested path or
+// destination (src/commands/restore.ts). Exit code 10, its own code: a
+// source that is not there is neither a refused push plan (5), which the
+// exit-code table used to send an operator to --allow-mass-delete for, nor
+// a configuration error (3). The operator named a source; the answer is
+// "not that one", and the fix is to pick another.
+class RestoreSourceNotFoundError extends CliError {
+  constructor(message: string, exitCode = 10) {
+    super(message, exitCode);
+    this.name = "RestoreSourceNotFoundError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -150,6 +166,7 @@ module.exports = {
   RemoteDeletionRefusedError,
   UnreliableCheckoutError,
   StateDirLockedError,
+  RestoreSourceNotFoundError,
   isCliError,
   formatErrorMessage
 };
