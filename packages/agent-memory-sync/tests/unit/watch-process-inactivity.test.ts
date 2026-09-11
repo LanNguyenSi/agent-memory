@@ -171,3 +171,62 @@ test("withTickDeadline (inactivity mode): the absolute whole-tick cap fires with
     killDummyGroup(child);
   }
 });
+
+// D-009: the inactivity budget is now an environment property rather than a
+// source-code constant (see resolveInactivityTimeoutMs in
+// tests/helpers/watch-process.ts). The fallback behavior is the load-bearing
+// half: a bad value must fall back to the default, never disable the
+// deadline, or every stuck child turns back into a hung CI job instead of
+// one red test.
+const {
+  resolveInactivityTimeoutMs,
+  DEFAULT_INACTIVITY_TIMEOUT_MS,
+  INACTIVITY_TIMEOUT_ENV_VAR
+} = require("../helpers/watch-process.ts");
+
+function withEnv(value: string | undefined, fn: () => void): void {
+  const previous = process.env[INACTIVITY_TIMEOUT_ENV_VAR];
+  if (typeof value === "undefined") {
+    delete process.env[INACTIVITY_TIMEOUT_ENV_VAR];
+  } else {
+    process.env[INACTIVITY_TIMEOUT_ENV_VAR] = value;
+  }
+  try {
+    fn();
+  } finally {
+    if (typeof previous === "undefined") {
+      delete process.env[INACTIVITY_TIMEOUT_ENV_VAR];
+    } else {
+      process.env[INACTIVITY_TIMEOUT_ENV_VAR] = previous;
+    }
+  }
+}
+
+test("resolveInactivityTimeoutMs: an unset budget falls back to the default", () => {
+  withEnv(undefined, () => {
+    assert.equal(resolveInactivityTimeoutMs(), DEFAULT_INACTIVITY_TIMEOUT_MS);
+  });
+});
+
+test("resolveInactivityTimeoutMs: a positive numeric budget overrides the default", () => {
+  withEnv("240000", () => {
+    assert.equal(resolveInactivityTimeoutMs(), 240000);
+  });
+  assert.notEqual(
+    240000,
+    DEFAULT_INACTIVITY_TIMEOUT_MS,
+    "the override value must differ from the default, or the test above proves nothing"
+  );
+});
+
+test("resolveInactivityTimeoutMs: an unusable budget falls back instead of disabling the deadline", () => {
+  for (const value of ["", "soon", "0", "-1", "NaN"]) {
+    withEnv(value, () => {
+      assert.equal(
+        resolveInactivityTimeoutMs(),
+        DEFAULT_INACTIVITY_TIMEOUT_MS,
+        `'${value}' must fall back to the default budget`
+      );
+    });
+  }
+});

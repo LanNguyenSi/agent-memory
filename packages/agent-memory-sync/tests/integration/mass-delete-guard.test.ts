@@ -586,6 +586,15 @@ test("push: a single-file deletion is never refused by the proportional rule (AC
 
   assert.equal(payload.runs[0].status, "applied");
   assert.deepEqual(payload.runs[0].deletedFiles, ["logs/note-000.md"]);
+  // A removed path is reported as a deletion, not as an applied file (R1
+  // medium): a mass deletion used to arrive as status=applied with the
+  // deleted paths listed under appliedFiles and deletedFiles empty, which
+  // reads as a successful sync of exactly the files that were destroyed.
+  assert.equal(
+    payload.runs[0].appliedFiles.includes("logs/note-000.md"),
+    false,
+    `a deleted path must not be reported as applied: ${JSON.stringify(payload.runs[0].appliedFiles)}`
+  );
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-single"), 4);
 });
 
@@ -680,4 +689,345 @@ test("watch: a refused mass delete is logged and the watcher keeps watching (AC-
 
   // Nothing was deleted on the remote, and the second tick's new file landed.
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-watch"), 13);
+});
+
+// git reports success for every subcommand, but `checkout` leaves a
+// PARTIALLY populated working tree behind: the real checkout runs first,
+// then every non-.git file except `keepRepoRelativePath` is removed.
+//
+// R1 critical (D-006): this is the same race writeStubGitWipingWorkTree
+// above models, one file short of total. The original guards saw nothing
+// wrong with it. The checkout check fired only on a destination holding
+// EXACTLY zero files, and the deletion plan built from such a tree reports
+// no deletions at all (every missing path merges to "delete" but the
+// working copy has nothing to delete), so `git add -A` inside commitAll
+// published the whole tree as removed while the payload reported a clean
+// apply. A wipe that leaves one file behind is not a milder incident than
+// one that leaves none.
+function writeStubGitLeavingOneFile(root: string, keepRepoRelativePath: string, label: string): string {
+  const stubPath = path.join(root, `stub-git-partial-wipe-${label}.sh`);
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "checkout" ]; then',
+      '  git "$@" || exit $?',
+      `  keep="$PWD/${keepRepoRelativePath}"`,
+      '  find "$PWD" -name .git -prune -o -type f -print | while IFS= read -r entry; do',
+      '    if [ "$entry" != "$keep" ]; then',
+      '      rm -f "$entry"',
+      "    fi",
+      "  done",
+      "  exit 0",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+// git behaves normally until the moment the push stages its working copy,
+// and empties the tree immediately BEFORE that `git add -A` runs.
+//
+// This is the seam for the other half of D-006: everything the push reads
+// (the remote tree it compares against, the merge plan it builds) is read
+// before any staging, so both the checkout check and a plan-derived deletion
+// count see a perfectly healthy run. Only the index knows what the commit
+// would really carry. A guard whose numerator is the merge plan cannot see
+// this at all; a guard whose numerator is the staged deletion set stops it.
+function writeStubGitWipingWorkTreeOnStage(root: string): string {
+  const stubPath = path.join(root, "stub-git-wipes-on-stage.sh");
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "add" ]; then',
+      '  find "$PWD" -name .git -prune -o -type f -print | while IFS= read -r entry; do',
+      '    rm -f "$entry"',
+      "  done",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+// Seeds a workspace and a remote holding `count` log files plus MEMORY.md,
+// then returns a config whose git binary leaves a working copy holding only
+// logs/note-000.md. Shared by the partial-wipe tests below.
+function preparePartialWipe(label: string, count: number) {
+  const root = createSandbox(`partial-wipe-${label}`);
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  const seeded = seedLogFiles(workspaceRoot, count);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  writeProjectConfig(stubConfigPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitLeavingOneFile(root, "shared/logs/note-000.md", label)
+  });
+
+  return { root, remoteDir, workspaceRoot, configPath, stubConfigPath, seeded };
+}
+
+// AC-001/AC-003 (D-006), the reviewer's critical shape, at both corpus sizes
+// the run's evidence names. Pre-fix: rc 0, the remote tree reduced to a
+// single file, the payload reporting a successful apply with an empty
+// deletedFiles list.
+for (const count of [50, 400]) {
+  for (const mode of ["push", "sync"]) {
+    test(`${mode}: a working copy holding 1 of ${count} files never publishes the loss (AC-001, AC-003)`, () => {
+      const scenario = preparePartialWipe(`${mode}-${count}`, count);
+
+      // One genuine local edit, so the run has real work to do and cannot
+      // be a no-op for reasons unrelated to the guard.
+      writeText(path.join(scenario.workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+      const result = runCli(
+        ["run", "default", "--config", scenario.stubConfigPath, "--mode", mode, "--output", "json"],
+        { expectFailure: true }
+      );
+
+      assert.notEqual(result.status, 0, `a partial wipe must not exit 0. stdout: ${result.stdout}`);
+      assert.match(result.stderr, /unreliable checkout/);
+      // The count, not just the fact: an operator reading a launchd log has
+      // to be able to tell a 1-file loss from a corpus-wide one.
+      assert.match(result.stderr, new RegExp(`missing ${count - 1} of the ${count} file\\(s\\)`));
+      assert.match(result.stderr, /1 still present/);
+
+      // Nothing was published: the remote still holds every log file.
+      assert.equal(
+        remoteLogFileCount(scenario.remoteDir, scenario.root, `inspect-${mode}-${count}`),
+        count
+      );
+
+      // And nothing was removed locally either, which is the half `--mode
+      // sync` reaches through pull's own rmSync loop.
+      for (const relativePath of scenario.seeded) {
+        assert.equal(
+          fileExists(path.join(scenario.workspaceRoot, relativePath)),
+          true,
+          `${relativePath} was deleted locally`
+        );
+      }
+    });
+  }
+}
+
+// D-004/D-008: --allow-mass-delete is the operator's answer to "yes, delete
+// these files". It is not an answer to "the working copy this run fetched is
+// not the remote", and it used to bypass that check too - on a wiped working
+// copy, the one flag an operator would reach for after a refusal was the one
+// that published the wipe.
+test("push: --allow-mass-delete does not bypass the unreliable-checkout refusal (AC-003)", () => {
+  const root = createSandbox("mass-delete-flag-checkout");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  seedLogFiles(workspaceRoot, 8);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  writeProjectConfig(stubConfigPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitWipingWorkTree(root)
+  });
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+  const result = runCli(
+    [
+      "run",
+      "default",
+      "--config",
+      stubConfigPath,
+      "--mode",
+      "push",
+      "--allow-mass-delete",
+      "--output",
+      "json"
+    ],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 7, `expected the checkout refusal's exit code. stderr: ${result.stderr}`);
+  assert.match(result.stderr, /unreliable checkout/);
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-flag-checkout"), 8);
+});
+
+// D-006, the other half: the guard's numerator must be the deletions the
+// commit carries, not the deletions the merge plan intended. Here the
+// working copy is healthy for every read the push performs and is emptied
+// only at staging time, so the checkout check and any plan-derived count
+// both see a clean run.
+test("push: a working copy emptied between the merge and the commit is refused (AC-003)", () => {
+  const root = createSandbox("staged-deletion-gate");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  seedLogFiles(workspaceRoot, 30);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  writeProjectConfig(stubConfigPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitWipingWorkTreeOnStage(root)
+  });
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+  const result = runCli(
+    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
+  assert.match(result.stderr, /30 file\(s\) under 'logs'/);
+  assert.match(result.stderr, /Nothing was pushed/);
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-staged-gate"), 30);
+});
+
+// AC-002 through the mode the periodic job actually runs. The AC-002 tests
+// above drive `--mode pull` directly, so run.ts's own merge of pull's
+// protectedFiles into the combined sync result was unpinned: dropping it
+// left every one of them green while real `--mode sync` output lost its
+// protected= count entirely.
+test("sync: a protected local file is counted in both the JSON and the text summary (AC-002)", () => {
+  const root = createSandbox("protected-sync-mode");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeText(path.join(workspaceRoot, "logs", "shared.md"), "shared\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // Created after the push, so it has no base snapshot and the remote has
+  // never seen it: local-only, a push candidate, never a pull deletion.
+  writeText(path.join(workspaceRoot, "logs", "local-only.md"), "local only\n");
+
+  const jsonResult = runCli([
+    "run",
+    "default",
+    "--config",
+    configPath,
+    "--mode",
+    "sync",
+    "--output",
+    "json"
+  ]);
+  const payload = JSON.parse(jsonResult.stdout);
+
+  assert.equal(payload.runs[0].kind, "sync");
+  assert.deepEqual(payload.runs[0].protectedFiles, ["logs/local-only.md"]);
+  assert.equal(readText(path.join(workspaceRoot, "logs", "local-only.md")), "local only\n");
+
+  // The previous sync pushed local-only.md, so it now has a base snapshot.
+  // A second brand-new file reproduces the same state for the text run.
+  writeText(path.join(workspaceRoot, "logs", "local-only-two.md"), "local only two\n");
+
+  const textResult = runCli(["run", "default", "--config", configPath, "--mode", "sync"]);
+
+  assert.match(textResult.stdout, /operation=sync/);
+  assert.match(textResult.stdout, /protected=1/);
+});
+
+// RM8 (R1 low): removing assertNoMassDelete from previewPush left the whole
+// suite green, because no test drove an over-threshold plan through
+// --dry-run. --dry-run is exactly how an operator inspects a plan before
+// running it, so a dry-run that previews a plan the real run would refuse
+// is worse than useless.
+test("push --dry-run: an over-threshold plan is refused rather than previewed (AC-003)", () => {
+  const root = createSandbox("mass-delete-dry-run");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  const seeded = seedLogFiles(workspaceRoot, 12);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  for (const relativePath of seeded.slice(0, 3)) {
+    fs.rmSync(path.join(workspaceRoot, relativePath));
+  }
+
+  const result = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--dry-run", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
+  assert.match(result.stderr, /3 of 12/);
+  assert.doesNotMatch(result.stdout, /"status": "dry-run"/);
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run"), 12);
+});
+
+// R1 medium, the reporting half: once a run really does remove paths, the
+// payload has to say so. Same seam as the staged-gate test above (the
+// working copy is emptied at staging time, so the merge plan reports no
+// deletions at all) plus the documented override, so the push goes through
+// and its payload can be inspected. deletedFiles must name what was
+// published as removed, whether or not the plan asked for it.
+test("push: deletedFiles reports what the commit removed, not what the plan intended (AC-003)", () => {
+  const root = createSandbox("staged-deletion-reporting");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  seedLogFiles(workspaceRoot, 30);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  writeProjectConfig(stubConfigPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitWipingWorkTreeOnStage(root)
+  });
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+  const result = runCli([
+    "run",
+    "default",
+    "--config",
+    stubConfigPath,
+    "--mode",
+    "push",
+    "--allow-mass-delete",
+    "--output",
+    "json"
+  ]);
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(payload.runs[0].status, "applied");
+  // 30 log files plus MEMORY.md: every path the commit removed, none of
+  // which the merge plan classified as a deletion.
+  assert.equal(payload.runs[0].deletedFiles.length, 31);
+  assert.ok(payload.runs[0].deletedFiles.includes("MEMORY.md"));
+  assert.ok(payload.runs[0].deletedFiles.includes("logs/note-000.md"));
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-staged-reporting"), 0);
 });

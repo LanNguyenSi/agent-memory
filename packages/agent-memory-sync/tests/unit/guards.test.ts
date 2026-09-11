@@ -40,9 +40,9 @@ function config(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function tracked(destination: string, count: number): Record<string, string | null> {
+function tracked(destination: string, count: number, offset = 0): Record<string, string | null> {
   const map: Record<string, string | null> = {};
-  for (let index = 0; index < count; index += 1) {
+  for (let index = offset; index < offset + count; index += 1) {
     map[`${destination}/file-${String(index).padStart(3, "0")}.md`] = `content ${index}\n`;
   }
   return map;
@@ -54,6 +54,19 @@ function paths(destination: string, count: number, offset = 0): string[] {
     result.push(`${destination}/file-${String(index).padStart(3, "0")}.md`);
   }
   return result;
+}
+
+// Three directory destinations, for the plan-wide total rule (D-007): the
+// per-destination rules cannot see a plan that stays under the limit in each
+// destination separately, so the case needs more than one of them.
+function threeDestinationConfig() {
+  return config({
+    syncPaths: [
+      { source: "memory", destination: "memory", kind: "directory" },
+      { source: "logs", destination: "logs", kind: "directory" },
+      { source: "archive", destination: "archive", kind: "directory" }
+    ]
+  });
 }
 
 test("defaults: 10 percent and 20 files, with a two-deletion floor on the proportional rule", () => {
@@ -149,6 +162,102 @@ test("findMassDelete: a tombstone in the base map is not a tracked file", () => 
   assert.deepEqual(finding, { destination: "logs", deleted: 3, tracked: 4, rule: "proportional" });
 });
 
+// D-007 (R1 medium): the absolute rule is per destination, so a plan that
+// deletes 20 files in each of three destinations deletes 60 files while
+// tripping nothing. AC-003's text is unqualified about the count.
+test("findMassDelete: 20 deletions in each of three destinations trip the plan-wide total", () => {
+  const guardConfig = threeDestinationConfig();
+  const baseMap = {
+    ...tracked("memory", 400),
+    ...tracked("logs", 400),
+    ...tracked("archive", 400)
+  };
+  const deleted = [...paths("memory", 20), ...paths("logs", 20), ...paths("archive", 20)];
+
+  // Negative control for the reading: each destination on its own is
+  // acceptable, so nothing but the total can be what refuses this plan.
+  for (const destination of ["memory", "logs", "archive"]) {
+    assert.equal(
+      findMassDelete(guardConfig, baseMap, paths(destination, 20), DEFAULT_MASS_DELETE_GUARD),
+      null,
+      `20 of 400 in '${destination}' alone must stay acceptable`
+    );
+  }
+
+  assert.deepEqual(findMassDelete(guardConfig, baseMap, deleted, DEFAULT_MASS_DELETE_GUARD), {
+    destination: null,
+    deleted: 60,
+    tracked: 1200,
+    rule: "total"
+  });
+});
+
+test("findMassDelete: 15 plus 10 deletions across two destinations trip the plan-wide total", () => {
+  const guardConfig = threeDestinationConfig();
+  const baseMap = { ...tracked("memory", 400), ...tracked("logs", 400) };
+
+  assert.deepEqual(
+    findMassDelete(
+      guardConfig,
+      baseMap,
+      [...paths("memory", 15), ...paths("logs", 10)],
+      DEFAULT_MASS_DELETE_GUARD
+    ),
+    { destination: null, deleted: 25, tracked: 800, rule: "total" }
+  );
+});
+
+test("findMassDelete: the plan-wide total fires strictly above maxFiles, not at it", () => {
+  const guardConfig = threeDestinationConfig();
+  const baseMap = { ...tracked("memory", 400), ...tracked("logs", 400) };
+
+  // Exactly 20 in total is at the limit, not over it.
+  assert.equal(
+    findMassDelete(
+      guardConfig,
+      baseMap,
+      [...paths("memory", 10), ...paths("logs", 10)],
+      DEFAULT_MASS_DELETE_GUARD
+    ),
+    null
+  );
+
+  assert.deepEqual(
+    findMassDelete(
+      guardConfig,
+      baseMap,
+      [...paths("memory", 11), ...paths("logs", 10)],
+      DEFAULT_MASS_DELETE_GUARD
+    ),
+    { destination: null, deleted: 21, tracked: 800, rule: "total" }
+  );
+});
+
+test("assertNoMassDelete: the plan-wide total names the count and all destinations", () => {
+  const guardConfig = threeDestinationConfig();
+  const baseMap = {
+    ...tracked("memory", 400),
+    ...tracked("logs", 400),
+    ...tracked("archive", 400)
+  };
+
+  assert.throws(
+    () =>
+      assertNoMassDelete({
+        config: guardConfig,
+        baseMap,
+        deletedPaths: [...paths("memory", 20), ...paths("logs", 20), ...paths("archive", 20)]
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "MassDeleteRefusedError");
+      assert.equal(error.exitCode, 5);
+      assert.match(error.message, /60 file\(s\) across all sync destinations/);
+      assert.match(error.message, /60 of 1200 tracked/);
+      return true;
+    }
+  );
+});
+
 test("assertNoMassDelete: throws with the counts, the destination and the flag", () => {
   assert.throws(
     () =>
@@ -199,7 +308,13 @@ test("assertNoMassDelete: profile thresholds replace the defaults", () => {
 
 test("findUnreliableCheckout: an empty destination the base snapshot knows is an anomaly", () => {
   const finding = findUnreliableCheckout(config(), tracked("memory", 404), {}, "c6be19d");
-  assert.deepEqual(finding, { destination: "memory", tracked: 404 });
+  assert.deepEqual(finding, {
+    destination: "memory",
+    tracked: 404,
+    present: 0,
+    lost: 404,
+    rule: "absolute"
+  });
 });
 
 test("findUnreliableCheckout: a remote with no commits is never an anomaly", () => {
@@ -218,7 +333,10 @@ test("findUnreliableCheckout: one destination still present does not excuse anot
   const remoteMap = tracked("memory", 12);
   assert.deepEqual(findUnreliableCheckout(config(), baseMap, remoteMap, "c6be19d"), {
     destination: "logs",
-    tracked: 3
+    tracked: 3,
+    present: 0,
+    lost: 3,
+    rule: "proportional"
   });
 });
 
@@ -227,13 +345,73 @@ test("findUnreliableCheckout: a fully present checkout passes", () => {
   assert.equal(findUnreliableCheckout(config(), baseMap, { ...baseMap }, "c6be19d"), null);
 });
 
-test("findUnreliableCheckout: a partially present destination is not reported here", () => {
-  // Deliberate: a partial tree cannot be told apart from a partial remote
-  // deletion by reading it alone. The push side catches that case through
-  // the proportional rule instead (the deletion plan it produces), which is
-  // what assertNoMassDelete covers above.
+// R1 critical (D-006): the original check fired only on a destination that
+// came back with EXACTLY zero files, so a working copy that kept a single
+// file walked past it and its deletion plan was published. A partial wipe is
+// not a milder failure than a total one, and the same thresholds that decide
+// whether a deletion PLAN is plausible decide whether a checkout is.
+test("findUnreliableCheckout: a destination that kept one of twelve files is an anomaly", () => {
   const baseMap = tracked("memory", 12);
-  assert.equal(findUnreliableCheckout(config(), baseMap, tracked("memory", 1), "c6be19d"), null);
+  assert.deepEqual(findUnreliableCheckout(config(), baseMap, tracked("memory", 1), "c6be19d"), {
+    destination: "memory",
+    tracked: 12,
+    present: 1,
+    lost: 11,
+    rule: "proportional"
+  });
+});
+
+test("findUnreliableCheckout: the partial-wipe shape at 50 and at 400 tracked files is an anomaly", () => {
+  for (const count of [50, 400]) {
+    assert.deepEqual(
+      findUnreliableCheckout(config(), tracked("memory", count), tracked("memory", 1), "c6be19d"),
+      {
+        destination: "memory",
+        tracked: count,
+        present: 1,
+        lost: count - 1,
+        rule: "absolute"
+      },
+      `a checkout keeping 1 of ${count} files must be refused`
+    );
+  }
+});
+
+test("findUnreliableCheckout: a loss inside both thresholds is still an ordinary remote change", () => {
+  // 10 of 100 lost is exactly the ratio and well under the absolute limit:
+  // at the threshold, not over it. This is the boundary that keeps a
+  // genuine, gradual remote deletion applying instead of being refused as an
+  // unreliable checkout.
+  const baseMap = tracked("memory", 100);
+  const remoteMap = tracked("memory", 100);
+  for (const key of paths("memory", 10)) {
+    delete remoteMap[key];
+  }
+  assert.equal(findUnreliableCheckout(config(), baseMap, remoteMap, "c6be19d"), null);
+});
+
+test("findUnreliableCheckout: files the checkout gained do not mask the ones it lost", () => {
+  // Counting tracked-minus-present instead of the lost paths themselves
+  // would report zero here: 12 tracked, 12 present, but none of them the
+  // same file.
+  const baseMap = tracked("memory", 12);
+  const remoteMap = tracked("memory", 12, 100);
+  assert.deepEqual(findUnreliableCheckout(config(), baseMap, remoteMap, "c6be19d"), {
+    destination: "memory",
+    tracked: 12,
+    present: 12,
+    lost: 12,
+    rule: "proportional"
+  });
+});
+
+test("findUnreliableCheckout: profile thresholds apply to the checkout check too", () => {
+  const loosened = config({ massDeleteGuard: { maxFiles: 500, maxRatio: 1 } });
+  assert.equal(
+    findUnreliableCheckout(loosened, tracked("memory", 404), tracked("memory", 1), "c6be19d"),
+    null,
+    "a profile that accepts a 100 percent deletion plan also accepts the checkout that produces it"
+  );
 });
 
 test("assertReliableCheckout: throws with the destination, the count and the remote head", () => {
@@ -257,12 +435,62 @@ test("assertReliableCheckout: throws with the destination, the count and the rem
   );
 });
 
-test("assertReliableCheckout: allowMassDelete skips the check entirely", () => {
-  assertReliableCheckout({
-    config: config(),
-    baseMap: tracked("memory", 404),
-    remoteMap: {},
-    remoteHead: "c6be19d",
-    allowMassDelete: true
-  });
+test("assertReliableCheckout: a partial loss names how many files are missing", () => {
+  assert.throws(
+    () =>
+      assertReliableCheckout({
+        config: config(),
+        baseMap: tracked("memory", 400),
+        remoteMap: tracked("memory", 1),
+        remoteHead: "c6be19d"
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "UnreliableCheckoutError");
+      assert.equal(error.exitCode, 7);
+      assert.match(error.message, /missing 399 of the 400 file\(s\)/);
+      assert.match(error.message, /1 still present/);
+      return true;
+    }
+  );
+});
+
+// D-008: the refusal used to end with "re-run with --allow-mass-delete",
+// which is a blanket bypass of both guards on both the pull and the push
+// side, i.e. the one instruction that turns a wiped working copy into a
+// published wipe. D-004: the flag is an override of the PLAN guard only, so
+// it must not reach this check at all.
+test("assertReliableCheckout: the refusal never recommends --allow-mass-delete", () => {
+  assert.throws(
+    () =>
+      assertReliableCheckout({
+        config: config(),
+        baseMap: tracked("memory", 404),
+        remoteMap: {},
+        remoteHead: "c6be19d"
+      }),
+    (error: Error) => {
+      assert.doesNotMatch(error.message, /allow-mass-delete/);
+      assert.match(error.message, /re-run the command/);
+      assert.match(error.message, /restore/);
+      return true;
+    }
+  );
+});
+
+test("assertReliableCheckout: allowMassDelete does not skip the check", () => {
+  assert.throws(
+    () =>
+      assertReliableCheckout({
+        config: config(),
+        baseMap: tracked("memory", 404),
+        remoteMap: {},
+        remoteHead: "c6be19d",
+        allowMassDelete: true
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "UnreliableCheckoutError");
+      assert.equal(error.exitCode, 7);
+      return true;
+    }
+  );
 });
