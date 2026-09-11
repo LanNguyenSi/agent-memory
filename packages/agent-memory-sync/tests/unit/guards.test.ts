@@ -1,0 +1,268 @@
+// Unit tests for the deletion guards (src/memory-sync/guards.ts), the two
+// checks added after the 2026-09-11 memory-corpus wipe (agent-tasks
+// cda5b12c). The integration suite
+// (tests/integration/mass-delete-guard.test.ts) drives them through the CLI
+// against a real bare repo; this file pins the threshold arithmetic itself,
+// including the boundaries, which are expensive to cover one by one through
+// a spawned process.
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { mkdtempSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const path = require("node:path");
+const {
+  DEFAULT_MASS_DELETE_GUARD,
+  MIN_PROPORTIONAL_DELETIONS,
+  assertNoMassDelete,
+  assertReliableCheckout,
+  findMassDelete,
+  findUnreliableCheckout,
+  resolveMassDeleteGuard
+} = require("../../src/memory-sync/guards");
+
+// resolveSyncPathEntries (src/memory-sync/config.ts) resolves an entry's
+// kind by stat-ing the source when the config does not state one. Every
+// config below states `kind` explicitly, so no path in this file needs to
+// exist on disk; rootDir is still a real, empty directory so nothing can
+// accidentally resolve against the repository itself.
+const sandboxRoot = mkdtempSync(path.join(tmpdir(), "agent-memory-sync-guards-"));
+
+function config(overrides: Record<string, unknown> = {}) {
+  return {
+    rootDir: sandboxRoot,
+    repositorySubdir: "shared",
+    syncPaths: [
+      { source: "MEMORY.md", destination: "MEMORY.md", kind: "file" },
+      { source: "memory", destination: "memory", kind: "directory" },
+      { source: "logs", destination: "logs", kind: "directory" }
+    ],
+    ...overrides
+  };
+}
+
+function tracked(destination: string, count: number): Record<string, string | null> {
+  const map: Record<string, string | null> = {};
+  for (let index = 0; index < count; index += 1) {
+    map[`${destination}/file-${String(index).padStart(3, "0")}.md`] = `content ${index}\n`;
+  }
+  return map;
+}
+
+function paths(destination: string, count: number, offset = 0): string[] {
+  const result: string[] = [];
+  for (let index = offset; index < offset + count; index += 1) {
+    result.push(`${destination}/file-${String(index).padStart(3, "0")}.md`);
+  }
+  return result;
+}
+
+test("defaults: 10 percent and 20 files, with a two-deletion floor on the proportional rule", () => {
+  assert.deepEqual(DEFAULT_MASS_DELETE_GUARD, { maxRatio: 0.1, maxFiles: 20 });
+  assert.equal(MIN_PROPORTIONAL_DELETIONS, 2);
+});
+
+test("resolveMassDeleteGuard: a partial override keeps the default for the other key", () => {
+  assert.deepEqual(resolveMassDeleteGuard({ maxFiles: 3 }), { maxRatio: 0.1, maxFiles: 3 });
+  assert.deepEqual(resolveMassDeleteGuard({ maxRatio: 0.5 }), { maxRatio: 0.5, maxFiles: 20 });
+  assert.deepEqual(resolveMassDeleteGuard(null), { maxRatio: 0.1, maxFiles: 20 });
+  assert.deepEqual(resolveMassDeleteGuard(undefined), { maxRatio: 0.1, maxFiles: 20 });
+});
+
+test("findMassDelete: an empty plan is never a mass delete", () => {
+  assert.equal(
+    findMassDelete(config(), tracked("memory", 400), [], DEFAULT_MASS_DELETE_GUARD),
+    null
+  );
+});
+
+test("findMassDelete: the absolute rule fires at 21 deletions, not at 20", () => {
+  const baseMap = tracked("memory", 400);
+  assert.equal(findMassDelete(config(), baseMap, paths("memory", 20), DEFAULT_MASS_DELETE_GUARD), null);
+
+  const finding = findMassDelete(config(), baseMap, paths("memory", 21), DEFAULT_MASS_DELETE_GUARD);
+  assert.deepEqual(finding, { destination: "memory", deleted: 21, tracked: 400, rule: "absolute" });
+});
+
+test("findMassDelete: the proportional rule fires strictly above the ratio, not at it", () => {
+  const baseMap = tracked("memory", 100);
+  // Exactly 10 of 100 is 10 percent: at the threshold, not over it.
+  assert.equal(findMassDelete(config(), baseMap, paths("memory", 10), DEFAULT_MASS_DELETE_GUARD), null);
+
+  const finding = findMassDelete(config(), baseMap, paths("memory", 11), DEFAULT_MASS_DELETE_GUARD);
+  assert.deepEqual(finding, { destination: "memory", deleted: 11, tracked: 100, rule: "proportional" });
+});
+
+test("findMassDelete: a single deletion never trips the proportional rule, however small the destination", () => {
+  for (const count of [1, 2, 5, 9]) {
+    assert.equal(
+      findMassDelete(config(), tracked("logs", count), paths("logs", 1), DEFAULT_MASS_DELETE_GUARD),
+      null,
+      `a single deletion out of ${count} tracked file(s) must be allowed`
+    );
+  }
+});
+
+test("findMassDelete: two deletions out of two tracked files are refused", () => {
+  const finding = findMassDelete(
+    config(),
+    tracked("logs", 2),
+    paths("logs", 2),
+    DEFAULT_MASS_DELETE_GUARD
+  );
+  assert.deepEqual(finding, { destination: "logs", deleted: 2, tracked: 2, rule: "proportional" });
+});
+
+test("findMassDelete: the whole incident shape (404 tracked, 406 deleted) is refused", () => {
+  const baseMap = tracked("memory", 404);
+  const finding = findMassDelete(
+    config(),
+    baseMap,
+    paths("memory", 404),
+    DEFAULT_MASS_DELETE_GUARD
+  );
+  assert.deepEqual(finding, { destination: "memory", deleted: 404, tracked: 404, rule: "absolute" });
+});
+
+test("findMassDelete: destinations are evaluated independently", () => {
+  const baseMap = { ...tracked("memory", 400), ...tracked("logs", 4) };
+  // 4 of 400 in memory is harmless; 3 of 4 in logs is not, and the finding
+  // must name logs rather than the destination that happens to sort first.
+  const finding = findMassDelete(
+    config(),
+    baseMap,
+    [...paths("memory", 4), ...paths("logs", 3)],
+    DEFAULT_MASS_DELETE_GUARD
+  );
+  assert.deepEqual(finding, { destination: "logs", deleted: 3, tracked: 4, rule: "proportional" });
+});
+
+test("findMassDelete: a tombstone in the base map is not a tracked file", () => {
+  // A base snapshot records a deleted path as null (StateStore's
+  // `.meta.json` marker). Counting those as tracked files would inflate the
+  // denominator and make the proportional rule quietly permissive.
+  const baseMap: Record<string, string | null> = { ...tracked("logs", 4) };
+  for (const key of paths("logs", 40, 100)) {
+    baseMap[key] = null;
+  }
+
+  const finding = findMassDelete(config(), baseMap, paths("logs", 3), DEFAULT_MASS_DELETE_GUARD);
+  assert.deepEqual(finding, { destination: "logs", deleted: 3, tracked: 4, rule: "proportional" });
+});
+
+test("assertNoMassDelete: throws with the counts, the destination and the flag", () => {
+  assert.throws(
+    () =>
+      assertNoMassDelete({
+        config: config(),
+        baseMap: tracked("memory", 404),
+        deletedPaths: paths("memory", 404)
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "MassDeleteRefusedError");
+      assert.equal(error.exitCode, 5);
+      assert.match(error.message, /404 file\(s\) under 'memory'/);
+      assert.match(error.message, /--allow-mass-delete/);
+      assert.match(error.message, /Nothing was pushed/);
+      return true;
+    }
+  );
+});
+
+test("assertNoMassDelete: allowMassDelete skips the check entirely", () => {
+  assertNoMassDelete({
+    config: config(),
+    baseMap: tracked("memory", 404),
+    deletedPaths: paths("memory", 404),
+    allowMassDelete: true
+  });
+});
+
+test("assertNoMassDelete: profile thresholds replace the defaults", () => {
+  const tightened = config({ massDeleteGuard: { maxFiles: 2, maxRatio: 1 } });
+  assert.throws(
+    () =>
+      assertNoMassDelete({
+        config: tightened,
+        baseMap: tracked("memory", 400),
+        deletedPaths: paths("memory", 3)
+      }),
+    /limit of 2 file\(s\)/
+  );
+
+  const loosened = config({ massDeleteGuard: { maxFiles: 500, maxRatio: 1 } });
+  assertNoMassDelete({
+    config: loosened,
+    baseMap: tracked("memory", 404),
+    deletedPaths: paths("memory", 404)
+  });
+});
+
+test("findUnreliableCheckout: an empty destination the base snapshot knows is an anomaly", () => {
+  const finding = findUnreliableCheckout(config(), tracked("memory", 404), {}, "c6be19d");
+  assert.deepEqual(finding, { destination: "memory", tracked: 404 });
+});
+
+test("findUnreliableCheckout: a remote with no commits is never an anomaly", () => {
+  assert.equal(findUnreliableCheckout(config(), tracked("memory", 404), {}, null), null);
+});
+
+test("findUnreliableCheckout: a destination that tracked a single file is an ordinary deletion", () => {
+  assert.equal(
+    findUnreliableCheckout(config(), tracked("logs", 1), {}, "c6be19d"),
+    null
+  );
+});
+
+test("findUnreliableCheckout: one destination still present does not excuse another that vanished", () => {
+  const baseMap = { ...tracked("memory", 12), ...tracked("logs", 3) };
+  const remoteMap = tracked("memory", 12);
+  assert.deepEqual(findUnreliableCheckout(config(), baseMap, remoteMap, "c6be19d"), {
+    destination: "logs",
+    tracked: 3
+  });
+});
+
+test("findUnreliableCheckout: a fully present checkout passes", () => {
+  const baseMap = { ...tracked("memory", 12), ...tracked("logs", 3) };
+  assert.equal(findUnreliableCheckout(config(), baseMap, { ...baseMap }, "c6be19d"), null);
+});
+
+test("findUnreliableCheckout: a partially present destination is not reported here", () => {
+  // Deliberate: a partial tree cannot be told apart from a partial remote
+  // deletion by reading it alone. The push side catches that case through
+  // the proportional rule instead (the deletion plan it produces), which is
+  // what assertNoMassDelete covers above.
+  const baseMap = tracked("memory", 12);
+  assert.equal(findUnreliableCheckout(config(), baseMap, tracked("memory", 1), "c6be19d"), null);
+});
+
+test("assertReliableCheckout: throws with the destination, the count and the remote head", () => {
+  assert.throws(
+    () =>
+      assertReliableCheckout({
+        config: config(),
+        baseMap: tracked("memory", 404),
+        remoteMap: {},
+        remoteHead: "c6be19d"
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "UnreliableCheckoutError");
+      assert.equal(error.exitCode, 7);
+      assert.match(error.message, /no files under 'memory'/);
+      assert.match(error.message, /404 file\(s\)/);
+      assert.match(error.message, /c6be19d/);
+      assert.match(error.message, /Nothing was deleted locally/);
+      return true;
+    }
+  );
+});
+
+test("assertReliableCheckout: allowMassDelete skips the check entirely", () => {
+  assertReliableCheckout({
+    config: config(),
+    baseMap: tracked("memory", 404),
+    remoteMap: {},
+    remoteHead: "c6be19d",
+    allowMassDelete: true
+  });
+});

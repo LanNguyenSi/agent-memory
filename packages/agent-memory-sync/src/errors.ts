@@ -57,6 +57,44 @@ class RemoteQueueEscalationError extends CliError {
   }
 }
 
+// Thrown when a PUSH plan would delete more of a destination than the
+// mass-delete guard allows (src/memory-sync/guards.ts). Deliberately NOT a
+// RemoteUnavailableError: performPush's catch queues only that type and
+// re-throws everything else, which is exactly what must happen here. A
+// refused plan is a fail-loud condition, not something to persist into the
+// replay queue and retry every tick. Exit code 5 keeps it distinguishable
+// from a usage error (2), a config error (3), a git/remote failure (4) and
+// the queue escalation (6) in a launchd/systemd log.
+//
+// Origin: the 2026-09-11 wipe (agent-tasks cda5b12c). A sync tick whose pull
+// had just emptied the local workspace pushed 406 deletions, and the peer
+// machine mirrored them one tick later. Nothing in the push path asked
+// whether deleting the entire tracked corpus at once was plausible.
+class MassDeleteRefusedError extends CliError {
+  constructor(message: string, exitCode = 5) {
+    super(message, exitCode);
+    this.name = "MassDeleteRefusedError";
+  }
+}
+
+// Thrown when the temporary working copy a pull or push just prepared cannot
+// be trusted to represent the remote: git reported success, but a sync
+// destination the base snapshot knows to hold files came back with none
+// (src/memory-sync/guards.ts). In the 2026-09-11 incident that was the
+// stateDir/tmp wipe race (StateStore.clearTemp removes the WHOLE tmp root,
+// and the watch and sync jobs share one stateDir), which is indistinguishable
+// from a genuine remote deletion at the file level and was read as one.
+//
+// Exit code 7, and again deliberately not a RemoteUnavailableError: an
+// unreliable checkout must stop the run rather than be queued or retried as
+// a push.
+class UnreliableCheckoutError extends CliError {
+  constructor(message: string, exitCode = 7) {
+    super(message, exitCode);
+    this.name = "UnreliableCheckoutError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -73,6 +111,8 @@ module.exports = {
   CliError,
   RemoteUnavailableError,
   RemoteQueueEscalationError,
+  MassDeleteRefusedError,
+  UnreliableCheckoutError,
   isCliError,
   formatErrorMessage
 };

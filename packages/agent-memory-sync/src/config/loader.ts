@@ -4,6 +4,7 @@ const path = require("node:path");
 const { CliError } = require("../errors");
 const { DEFAULT_REACHABILITY_TIMEOUT_MS } = require("../memory-sync/reachability");
 const { DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("../memory-sync/state-store");
+const { DEFAULT_MASS_DELETE_GUARD } = require("../memory-sync/guards");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -43,6 +44,17 @@ interface UserConfig {
   // null-is-a-real-value convention. See validateQueueEscalationThresholdMs
   // and push.ts's resolveQueueEscalationThresholdMs.
   queueEscalationThresholdMs?: number | null;
+  // Thresholds for the push-side mass-delete guard
+  // (src/memory-sync/guards.ts). Absent falls through to
+  // DEFAULT_MASS_DELETE_GUARD; a partial object keeps the default for the
+  // key it omits, so a profile can tighten one rule without restating the
+  // other.
+  massDeleteGuard?: MassDeleteGuardConfig | null;
+}
+
+interface MassDeleteGuardConfig {
+  maxRatio?: number;
+  maxFiles?: number;
 }
 
 interface LoadedConfig {
@@ -69,6 +81,7 @@ interface RunConfig extends UserConfig {
   reachabilityTimeoutMs: number;
   reachabilityCheckCommand: string[] | null;
   queueEscalationThresholdMs: number | null;
+  massDeleteGuard: Required<MassDeleteGuardConfig>;
 }
 
 interface RunConfigOverrides {
@@ -90,6 +103,7 @@ interface RunConfigOverrides {
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
   queueEscalationThresholdMs?: number | null;
+  massDeleteGuard?: MassDeleteGuardConfig | null;
 }
 
 const DEFAULT_SYNC_PATHS: SyncPathConfig[] = [
@@ -112,7 +126,8 @@ const DEFAULTS: Omit<RunConfig, "repositorySubdir" | "stateDir" | "remoteUrl" | 
   gitBinary: "git",
   reachabilityTimeoutMs: DEFAULT_REACHABILITY_TIMEOUT_MS,
   reachabilityCheckCommand: null,
-  queueEscalationThresholdMs: DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+  queueEscalationThresholdMs: DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS,
+  massDeleteGuard: DEFAULT_MASS_DELETE_GUARD
 };
 
 function defaultConfigPath(): string {
@@ -177,7 +192,8 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
       DEFAULT_REACHABILITY_TIMEOUT_MS
     ),
     reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand),
-    queueEscalationThresholdMs: validateQueueEscalationThresholdMs(merged.queueEscalationThresholdMs)
+    queueEscalationThresholdMs: validateQueueEscalationThresholdMs(merged.queueEscalationThresholdMs),
+    massDeleteGuard: normalizeMassDeleteGuard(merged.massDeleteGuard)
   };
 }
 
@@ -250,7 +266,8 @@ function listConfigKeys(): string[] {
     "gitBinary",
     "reachabilityTimeoutMs",
     "reachabilityCheckCommand",
-    "queueEscalationThresholdMs"
+    "queueEscalationThresholdMs",
+    "massDeleteGuard"
   ];
 }
 
@@ -414,7 +431,9 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
     reachability_check_command: "reachabilityCheckCommand",
     reachabilityCheckCommand: "reachabilityCheckCommand",
     queue_escalation_threshold_ms: "queueEscalationThresholdMs",
-    queueEscalationThresholdMs: "queueEscalationThresholdMs"
+    queueEscalationThresholdMs: "queueEscalationThresholdMs",
+    mass_delete_guard: "massDeleteGuard",
+    massDeleteGuard: "massDeleteGuard"
   };
 
   for (const [key, value] of Object.entries(raw)) {
@@ -425,6 +444,11 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
 
     if (normalizedKey === "reachabilityCheckCommand") {
       normalized.reachabilityCheckCommand = normalizeReachabilityCheckCommand(value as string[] | null);
+      continue;
+    }
+
+    if (normalizedKey === "massDeleteGuard") {
+      normalized.massDeleteGuard = normalizeMassDeleteGuard(value as MassDeleteGuardConfig | null);
       continue;
     }
 
@@ -520,6 +544,43 @@ function validateQueueEscalationThresholdMs(value: number | null | undefined): n
   return validatePositiveInteger(value, "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
 }
 
+// Explicit `null` (or an absent key) means "use the defaults" rather than
+// "no guard": a mass-delete guard that can be turned off from a config file
+// would reintroduce the exact failure mode this package just closed, and the
+// per-run escape hatch is the --allow-mass-delete flag, which is visible in
+// the invocation that used it. Each key is validated independently so a
+// profile can tighten one rule and inherit the other.
+function normalizeMassDeleteGuard(value?: MassDeleteGuardConfig | null): Required<MassDeleteGuardConfig> {
+  if (!value) {
+    return { ...DEFAULT_MASS_DELETE_GUARD };
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new CliError(
+      "config key 'massDeleteGuard' must be an object with optional 'maxRatio' and 'maxFiles' keys.",
+      3
+    );
+  }
+
+  const maxRatio =
+    typeof value.maxRatio === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxRatio : value.maxRatio;
+  const maxFiles =
+    typeof value.maxFiles === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxFiles : value.maxFiles;
+
+  if (typeof maxRatio !== "number" || !Number.isFinite(maxRatio) || maxRatio <= 0 || maxRatio > 1) {
+    throw new CliError(
+      "config key 'massDeleteGuard.maxRatio' must be a number greater than 0 and at most 1.",
+      3
+    );
+  }
+
+  if (!Number.isInteger(maxFiles) || maxFiles <= 0) {
+    throw new CliError("config key 'massDeleteGuard.maxFiles' must be a positive integer.", 3);
+  }
+
+  return { maxRatio, maxFiles };
+}
+
 function normalizeReachabilityCheckCommand(value?: string[] | null): string[] | null {
   if (!value) {
     return null;
@@ -564,6 +625,10 @@ function parseConfigValue(key: string, value: string): unknown {
       return value === "null"
         ? null
         : validatePositiveInteger(Number(value), "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
+    case "massDeleteGuard":
+      return value === "null"
+        ? null
+        : normalizeMassDeleteGuard(JSON.parse(value) as MassDeleteGuardConfig);
     case "reachabilityCheckCommand":
       return value === "null"
         ? null
