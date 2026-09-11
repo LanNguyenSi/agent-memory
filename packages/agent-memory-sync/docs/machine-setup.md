@@ -365,6 +365,67 @@ precheck the way `pull`/`push`/`sync` do; an unreachable remote during
 `restore` fails loudly rather than skipping, since a restore you asked for
 that silently did nothing would be worse than a clear error.
 
+### Recovering a destination the remote no longer has
+
+A rollback above answers "this edit was wrong". This answers "these files are
+gone": a run applied a remote deletion, or a peer published one, and the local
+tree no longer has the files.
+
+Three sources, in the order to reach for them:
+
+```bash
+# 1. The copy the run that removed them took first (nothing is fetched; this
+#    is the fastest and works offline). One per destination, the newest
+#    `snapshotGenerations` kept, under <stateDir>/snapshots/<destination>/.
+agent-memory-sync restore <profile> memory --from-snapshot latest --config profiles/<name>.json
+
+# 2. The last commit that still had them. This also moves the base snapshot
+#    for that destination to the CURRENT remote tree, so the next run
+#    publishes the recovered files as additions instead of deleting them
+#    again, and an exit-7 refusal caused by a stale base clears with it.
+agent-memory-sync restore <profile> memory --from-commit <sha> --config profiles/<name>.json
+
+# 3. Straight out of the bare repo's history, when the CLI is not an option
+#    (a machine without the fixed build installed, say). Extract into the
+#    profile's rootDir and let the watcher push the result.
+git -C ~/memory-sync/pandora-memory.git archive <sha> pandora/memory | tar -x -C <rootDir>
+```
+
+After (1) or (3), the recovered files are local-only as far as the base
+snapshot is concerned, so the next `watch` tick or `run --mode sync` publishes
+them. After (2) the same is true by construction. Check with
+`agent-memory-sync run <profile> --mode sync --dry-run --config
+profiles/<name>.json` before letting a scheduled tick do it.
+
+### When a run refuses instead of syncing
+
+| Exit | What the run decided | What to do |
+|---|---|---|
+| `5` | This push would delete more than the guard allows. | Check whether the local tree was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. |
+| `7` | The fetched working copy is missing too much of what the base snapshot tracks, so it may not represent the remote at all. | Re-run once no other run is touching `stateDir/tmp`. If the remote really did drop those files, re-run with `--accept-mass-delete` (the destination is copied first), or recover it with `restore --from-commit`. |
+| `8` | Another run holds this state directory's lock. | Wait and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically; only remove `<stateDir>/lock.json` by hand if neither applies. |
+| `9` | A remote change would delete more of a destination than the guard allows. | Confirm the deletion is genuine, then re-run with `--accept-mass-delete`. |
+
+The two flags are not interchangeable. `--allow-mass-delete` answers "yes,
+publish these deletions" and never overrides an untrustworthy working copy;
+`--accept-mass-delete` answers "yes, the remote really did drop those files" and
+is the only thing that does. Both are per-invocation: neither can be turned on
+from a config file, so a run that used one says so in the command line that
+produced it.
+
+The thresholds and the snapshot depth are per profile: `massDeleteGuard`
+(`maxRatio`, `maxFiles`), `snapshotGenerations`, and `lockStaleMs` for how long
+an abandoned lock survives. See README.md's Deletion guards section.
+
+### Re-enabling the periodic sync job
+
+The periodic `run --mode sync` job stays unloaded until the build carrying these
+guards is installed on **every** peer that syncs into the same remote. A peer on
+an older build has none of them: it can still publish a mass deletion that the
+machines running the fixed build will then be asked to apply, and their guards
+will refuse the result rather than prevent it. Install first, then re-load the
+timer/agent as described in (b) and (c).
+
 Inspecting the bare repo directly (e.g. `ssh mini`, `cd
 ~/memory-sync/pandora-memory.git`, `git log`/`git show`) shows every
 machine's files under the same `pandora/memory/` tree — `git show

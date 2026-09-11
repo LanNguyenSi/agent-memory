@@ -118,7 +118,8 @@ class GitClient {
   // Repository-relative paths the INDEX currently records as deletions
   // against HEAD, i.e. the deletions the next commit would actually carry.
   //
-  // Origin (agent-tasks cda5b12c, R1 critical): the push-side mass-delete
+  // Origin (agent-tasks cda5b12c, pandora run
+  // .ai/runs/2026-09-11-memory-sync-wipe): the push-side mass-delete
   // guard used to count the deletions its own 3-way merge plan intended,
   // which is not the same set as the deletions `git add -A` commits. A path
   // the working copy was already missing (a temp checkout wiped underneath

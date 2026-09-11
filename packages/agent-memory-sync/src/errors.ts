@@ -66,7 +66,8 @@ class RemoteQueueEscalationError extends CliError {
 // from a usage error (2), a config error (3), a git/remote failure (4) and
 // the queue escalation (6) in a launchd/systemd log.
 //
-// Origin: the 2026-09-11 wipe (agent-tasks cda5b12c). A sync tick whose pull
+// Origin: the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run
+// .ai/runs/2026-09-11-memory-sync-wipe). A sync tick whose pull
 // had just emptied the local workspace pushed 406 deletions, and the peer
 // machine mirrored them one tick later. Nothing in the push path asked
 // whether deleting the entire tracked corpus at once was plausible.

@@ -279,7 +279,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
 
     for (const snapshot of snapshots) {
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
-      // Guard 2 (agent-tasks cda5b12c, AC-003): evaluated per snapshot and
+      // Guard 2: evaluated per snapshot and
       // BEFORE this snapshot's commit, so a refusal leaves the remote
       // untouched (the push below never runs) and the queued snapshots stay
       // queued rather than being dropped as replayed.
@@ -287,7 +287,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
       // Two measurements, in order of cost. The plan's own deletions are
       // already in hand, so they are checked first as a cheap pre-check. The
       // GATE is the second one: the deletions git has actually staged. The
-      // two differ exactly where it matters (R1 critical, D-006) - a path
+      // two differ exactly where it matters: a path
       // the working copy was already missing is not something the plan
       // "deletes", it never reads as a deletion at all, and yet the
       // `git add -A` inside commitAll stages and publishes it. Measuring the
@@ -701,7 +701,7 @@ function applySnapshotToWorkingCopy(
       // happens instead, in the index (collectStagedDeletions), which is the
       // guard's gate.
       //
-      // Deliberately kept out of appliedFiles too (R1 medium): a run that
+      // Deliberately kept out of appliedFiles too: a run that
       // removes files reported them as "applied" with an empty deletedFiles
       // list, which reads as a successful sync of those paths. appliedFiles
       // is the files this snapshot WROTE; deletions are reported as
@@ -729,8 +729,9 @@ function applySnapshotToWorkingCopy(
 // carry, as remote-relative paths (the key space the guards, the base
 // snapshot store and the result payload all use).
 //
-// This is the mass-delete guard's real numerator (agent-tasks cda5b12c, R1
-// critical, D-006). `git add -A` inside GitClient.commitAll publishes every
+// This is the mass-delete guard's real numerator (agent-tasks cda5b12c,
+// pandora run .ai/runs/2026-09-11-memory-sync-wipe). `git add -A` inside
+// GitClient.commitAll publishes every
 // path the working copy lacks, whether the merge plan asked for it or not,
 // so the plan is not what gets committed and must not be what gets checked.
 //

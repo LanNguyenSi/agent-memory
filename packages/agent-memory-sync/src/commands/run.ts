@@ -270,7 +270,8 @@ async function executeMode(
       notes: [...(pullResult.notes || []), ...(pushResult.notes || [])]
     };
   } catch (error: unknown) {
-    // Root cause of the 2026-09-11 wipe (agent-tasks cda5b12c): this used to
+    // Root cause of the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run
+    // .ai/runs/2026-09-11-memory-sync-wipe): this used to
     // discriminate on `exitCode === 4`, and exit code 4 is shared by every
     // git failure GitClient.run wraps in a generic CliError ("git command
     // failed: ..."). A pull that died because its own working copy had been

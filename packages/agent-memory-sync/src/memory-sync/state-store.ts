@@ -189,7 +189,8 @@ class StateStore {
   // created via GitClient.createTempRepoDir(stateDir, label).
   //
   // The label is required. This used to remove the WHOLE tmp root, which is
-  // how the 2026-09-11 wipe started: `watch` and `run --mode sync` share a
+  // how the 2026-09-11 wipe started (agent-tasks cda5b12c, pandora run
+  // .ai/runs/2026-09-11-memory-sync-wipe): `watch` and `run --mode sync` share a
   // stateDir, and watch's post-push cleanup deleted the sync run's freshly
   // checked-out working copy under tmp/pull while git had already reported
   // success. The pull then read an empty tree and resolved every path to a

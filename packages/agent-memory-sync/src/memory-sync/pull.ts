@@ -100,7 +100,8 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const baseMap = stateStore.readBaseSnapshots();
   const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
   // Guard 1: never merge against a working copy that cannot be trusted to
-  // represent the remote. In the 2026-09-11 wipe the fetched copy under
+  // represent the remote. In the 2026-09-11 wipe (agent-tasks cda5b12c,
+  // pandora run .ai/runs/2026-09-11-memory-sync-wipe) the fetched copy under
   // stateDir/tmp/pull had been removed by a concurrent tick AFTER git
   // reported a successful checkout, so every remote path read as null and
   // the merge below deleted 404 real local files. This throws before the
@@ -307,7 +308,7 @@ interface PullPlanEntry {
 }
 
 // Copies every destination this plan is about to delete from or overwrite
-// inside, and returns the snapshot ids for the run's report (AC-007).
+// inside, and returns the snapshot ids for the run's report.
 //
 // A destination the plan only ADDS files to is not copied: nothing that
 // exists is being replaced, so there is nothing a copy could preserve. A

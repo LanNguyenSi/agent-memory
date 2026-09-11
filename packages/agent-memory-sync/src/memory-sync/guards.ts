@@ -62,10 +62,10 @@ const DEFAULT_MASS_DELETE_GUARD: MassDeleteGuardConfig = {
 // "10 percent" for every destination holding fewer than ten files, so a
 // one-file rule would make routine single-file housekeeping impossible on a
 // small destination and would force --allow-mass-delete for the most common
-// legitimate deletion there is. AC-003's negative space names that case
-// explicitly ("does not prevent a genuine gradual deletion below the
-// thresholds"), and this package's own watch-mirror-delete.test.ts negative
-// control depends on it.
+// legitimate deletion there is. A guard whose price is that ordinary
+// housekeeping needs an override is a guard that gets overridden by habit,
+// and this package's own watch-mirror-delete.test.ts negative control
+// depends on a single deletion still going through.
 //
 // The absolute rule (maxFiles) is NOT floored this way, so a destination
 // that loses everything it has is still caught the moment the count passes
@@ -179,8 +179,9 @@ interface MassDeleteFinding {
 // both per-destination rules are, by construction, blind to a plan that
 // stays just under the limit in each of several destinations at once: with
 // three configured destinations, maxFiles refuses 21 deletions in one of
-// them and accepts 60 spread evenly across all three (R1 medium, D-007).
-// AC-003's text is unqualified about the count, so the total is checked too.
+// them and accepts 60 spread evenly across all three. The limit is about
+// how much one run may remove, not about how much it may remove per
+// destination, so the total is checked too.
 //
 // `unmappedDeletedPaths` are staged deletions no configured destination
 // claims (a path outside repositorySubdir in the same remote repository).
@@ -284,7 +285,7 @@ function describeMassDelete(
 // and reads them back out of the index (GitClient.listStagedDeletions)
 // before calling this. A plan-derived list is a strict subset and misses
 // every path that was already missing from the working copy, which is the
-// exact shape a wiped temp checkout produces (R1 critical, D-006).
+// exact shape a wiped temp checkout produces.
 //
 // Call this BEFORE the plan is committed or pushed, once per snapshot: the
 // remote must be untouched when it throws.
@@ -401,10 +402,10 @@ interface CheckoutFinding {
 // this process) rather than of a remote that genuinely dropped that many
 // files at once.
 //
-// The thresholds are the mass-delete guard's own (R1 critical, D-006): the
-// original check fired only on a destination that came back with EXACTLY
-// zero files, which a partially wiped working copy walks straight past, and
-// a partial wipe is not a milder failure than a total one. The same
+// The thresholds are the mass-delete guard's own. An earlier version of
+// this check fired only on a destination that came back with EXACTLY zero
+// files, which a partially wiped working copy walks straight past, and a
+// partial wipe is not a milder failure than a total one. The same
 // MIN_PROPORTIONAL_DELETIONS floor applies as for the proportional rule: a
 // destination that tracked a single file and now reports none is an ordinary
 // single-file deletion, which this package has always applied and which its
@@ -502,13 +503,19 @@ function describeUnreliableCheckout(finding: CheckoutFinding): string {
 // and the push side: pull must not delete local files from it, push must not
 // build a deletion plan out of it.
 //
-// Deliberately takes no override (D-004, D-008). --allow-mass-delete is an
-// operator's answer to "yes, delete these files"; it is not an answer to
-// "the working copy this run fetched is not the remote", which is a question
-// about the inputs, not about the plan. An operator reaching for the flag on
-// a wiped working copy would publish the wipe, which is the live path the
-// incident took. A genuine full removal goes through `restore` or a fresh
-// base snapshot instead.
+// --allow-mass-delete is deliberately not an override here.  It is an
+// operator's answer to "yes, publish these deletions"; it is not an answer
+// to "the working copy this run fetched is not the remote", which is a
+// question about the inputs, not about the plan. An operator reaching for
+// that flag on a wiped working copy would publish the wipe, which is the
+// live path the incident took.
+//
+// --accept-mass-delete is the one override, because nothing at the file
+// level tells a wiped checkout from a remote that genuinely dropped the
+// files, and without an escape a legitimate large deletion wedges every
+// mode permanently. It is destructive by consent: the caller adopts the
+// remote's state after copying the destination (see ./pull.ts and
+// ./accept-remote-deletions.ts), rather than silencing this check.
 function assertReliableCheckout(input: {
   config: GuardConfig;
   baseMap: Record<string, string | null>;

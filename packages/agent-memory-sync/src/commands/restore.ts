@@ -57,8 +57,9 @@ function registerRestoreCommand(program: import("commander").Command): void {
     //   restore <profile> <destination> --from-snapshot [<id>|latest]
     //
     // The first is the form this command shipped with and keeps working
-    // unchanged; the second is the destination-shaped recovery AC-007
-    // describes (agent-tasks cda5b12c).
+    // unchanged; the second is the destination-shaped recovery the
+    // 2026-09-11 wipe needed (agent-tasks cda5b12c, pandora run
+    // .ai/runs/2026-09-11-memory-sync-wipe).
     .argument(
       "[target]",
       "Commit SHA to restore from, or the configuration profile when --from-commit/--from-snapshot is given",
