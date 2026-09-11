@@ -95,6 +95,23 @@ class UnreliableCheckoutError extends CliError {
   }
 }
 
+// Thrown when a PULL would apply more deletions to the local workspace than
+// the mass-delete guard allows (src/memory-sync/guards.ts). The mirror image
+// of MassDeleteRefusedError: same thresholds, opposite direction, and a
+// different question for the operator, which is why it is a different error
+// with a different flag (--accept-mass-delete, "yes, the remote really did
+// drop these") and a different exit code.
+//
+// Exit code 9, distinct from the push-side refusal (5) and from an
+// untrustworthy working copy (7), so a launchd/systemd log says which of the
+// three happened without parsing the message.
+class RemoteDeletionRefusedError extends CliError {
+  constructor(message: string, exitCode = 9) {
+    super(message, exitCode);
+    this.name = "RemoteDeletionRefusedError";
+  }
+}
+
 // Thrown when another agent-memory-sync process already holds the advisory
 // lock on this stateDir (src/memory-sync/lock.ts). Exit code 8, distinct
 // from every other refusal so a launchd/systemd log tells "someone else is
@@ -129,6 +146,7 @@ module.exports = {
   RemoteUnavailableError,
   RemoteQueueEscalationError,
   MassDeleteRefusedError,
+  RemoteDeletionRefusedError,
   UnreliableCheckoutError,
   StateDirLockedError,
   isCliError,

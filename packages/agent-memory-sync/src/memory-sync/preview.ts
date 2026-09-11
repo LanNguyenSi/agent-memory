@@ -19,6 +19,11 @@ function summarizeOperation(operation: {
   // run that protected files says so, rather than leaving the operator to
   // infer it from a count that did not change.
   protectedFiles?: string[];
+  // Ids of the pre-apply snapshots this run wrote before touching a
+  // destination (agent-tasks cda5b12c). Reported so a run that copied
+  // something says where the copy is, instead of leaving the operator to
+  // discover stateDir/snapshots on their own.
+  snapshots?: string[];
   queuedSnapshotId?: string | null;
   notes?: string[];
 }): string {
@@ -39,6 +44,10 @@ function summarizeOperation(operation: {
 
   if (operation.protectedFiles && operation.protectedFiles.length > 0) {
     parts.push(`protected=${operation.protectedFiles.length}`);
+  }
+
+  if (operation.snapshots && operation.snapshots.length > 0) {
+    parts.push(`snapshots=${operation.snapshots.length}`);
   }
 
   if (operation.queuedSnapshotId) {

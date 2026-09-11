@@ -1,4 +1,4 @@
-const { existsSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { mkdirSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const {
   collectLocalSyncFiles,
@@ -8,8 +8,9 @@ const {
   resolveSyncPathEntries
 } = require("./config");
 const { GitClient } = require("./git-client");
-const { assertReliableCheckout } = require("./guards");
+const { assertNoRemoteMassDelete, assertReliableCheckout } = require("./guards");
 const { mergeText } = require("./merge");
+const { writePreApplySnapshot } = require("./pre-apply-snapshot");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore } = require("./state-store");
 
@@ -20,14 +21,19 @@ const PULL_TEMP_LABEL = "pull";
 
 interface PullOptions {
   dryRun: boolean;
-  // Deliberately no allowMassDelete (D-004, D-008): --allow-mass-delete is
-  // the operator's override for the PUSH-side plan guard, and pull has no
-  // plan of its own to override. The one guard pull runs, the checkout
-  // check, is about whether the fetched working copy is the remote at all,
-  // which no flag can answer. The pull-side accept flag AC-007 describes
-  // (--accept-mass-delete, for a remote change that really does delete a
-  // large share of a destination) is a separate, still-to-come decision,
-  // deliberately not this flag.
+  // --accept-mass-delete: the operator's answer to "the remote really did
+  // drop those files". It is the one thing that lets a pull apply a deletion
+  // both guards below would otherwise refuse, and it is deliberately NOT
+  // --allow-mass-delete, which answers the opposite question ("publish these
+  // deletions") on the push side and never reaches either of these checks.
+  //
+  // It is also the only override of the checkout check. Nothing at the file
+  // level distinguishes a working copy that was wiped from a remote that
+  // genuinely dropped the files, so without an escape a legitimate large
+  // deletion wedges every mode permanently; with it, an operator who has
+  // confirmed the deletion is genuine can proceed, and the destination is
+  // copied into stateDir/snapshots before a single file is removed.
+  acceptMassDelete?: boolean;
 }
 
 interface PullConfig {
@@ -42,6 +48,8 @@ interface PullConfig {
   reachabilityTimeoutMs?: number;
   reachabilityCheckCommand?: string[] | null;
   massDeleteGuard?: { maxRatio?: number; maxFiles?: number } | null;
+  // How many pre-apply snapshots per destination survive (./pre-apply-snapshot.ts).
+  snapshotGenerations?: number | null;
   syncPaths: Array<{
     source: string;
     destination?: string;
@@ -70,6 +78,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       deletedFiles: [],
       skippedFiles: [],
       protectedFiles: [],
+      snapshots: [],
       notes: [`remote unreachable (${reachability.reason}); skipped pull, local files unchanged`]
     };
   }
@@ -90,25 +99,28 @@ async function performPull(config: PullConfig, options: PullOptions) {
   );
   const baseMap = stateStore.readBaseSnapshots();
   const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
-  // Guard 1 (agent-tasks cda5b12c): never merge against a working copy that
-  // cannot be trusted to represent the remote. In the 2026-09-11 wipe the
-  // fetched copy under stateDir/tmp/pull had been removed by a concurrent
-  // watch tick's StateStore.clearTemp() AFTER git reported a successful
-  // checkout, so every remote path read as null and the merge below deleted
-  // 404 real local files. This throws UnreliableCheckoutError before the
+  // Guard 1: never merge against a working copy that cannot be trusted to
+  // represent the remote. In the 2026-09-11 wipe the fetched copy under
+  // stateDir/tmp/pull had been removed by a concurrent tick AFTER git
+  // reported a successful checkout, so every remote path read as null and
+  // the merge below deleted 404 real local files. This throws before the
   // loop, so no local file is touched and no base snapshot is rewritten.
   //
-  // The check covers a partially wiped copy too, not just an empty one
-  // (D-006), which is why it sits here rather than inside the loop: this is
-  // pull's only rmSync path, and it must refuse BEFORE the first deletion,
-  // not after counting the deletions it already made. It takes no
-  // --allow-mass-delete override (D-004, D-008); see ./guards.ts.
-  assertReliableCheckout({
-    config,
-    baseMap,
-    remoteMap,
-    remoteHead: workingCopy.remoteHead
-  });
+  // It sits here rather than inside the loop because this is pull's only
+  // deletion path, and it must refuse BEFORE the first deletion instead of
+  // after counting the ones it already made. --allow-mass-delete does not
+  // reach it: that flag answers "publish these deletions", not "trust this
+  // working copy". --accept-mass-delete does, because a genuine remote
+  // deletion is indistinguishable from a wiped checkout at the file level
+  // and would otherwise have no way through at all. See ./guards.ts.
+  if (!options.acceptMassDelete) {
+    assertReliableCheckout({
+      config,
+      baseMap,
+      remoteMap,
+      remoteHead: workingCopy.remoteHead
+    });
+  }
 
   const targetPaths = new Set<string>([
     ...Object.keys(localMap),
@@ -116,12 +128,15 @@ async function performPull(config: PullConfig, options: PullOptions) {
     ...Object.keys(remoteMap)
   ]);
 
-  const changedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
-  const deletedFiles: string[] = [];
   const skippedFiles: string[] = [];
   const protectedFiles: string[] = [];
+  // Everything this pull would write or delete, assembled before any of it
+  // is carried out. The plan exists as its own phase so the guard below can
+  // refuse an implausible one, and so the pre-apply snapshots can be taken,
+  // while the workspace is still exactly as this run found it.
+  const plan: PullPlanEntry[] = [];
 
   // Resolved once, outside the per-path loop below. See resolveSyncPathEntries'
   // own comment in config.ts (agent-tasks 65380570, LOW): this loop calls
@@ -132,17 +147,17 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const resolvedSyncPathEntries = resolveSyncPathEntries(config);
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
-    // Guard 2 (agent-tasks cda5b12c, AC-002): a local file the base snapshot
-    // has never recorded, and that the remote does not have, is local-only.
-    // It is a candidate for the next push and can never be a pull deletion,
-    // whatever the 3-way merge would make of it. Checked BEFORE mergeText
-    // rather than after, deliberately: today mergeText's `remote === base`
-    // fast path also keeps such a file (both are null, so local wins), but
-    // that is an emergent property of one branch's ordering inside a
-    // general-purpose merge function, not a stated invariant of the pull.
-    // The incident showed what it costs when a merge answer about deletion
-    // is trusted unconditionally, so the invariant is stated here, where the
-    // rmSync lives, and the count is reported.
+    // Guard 2: a local file the base snapshot has never recorded, and that
+    // the remote does not have, is local-only. It is a candidate for the
+    // next push and can never be a pull deletion, whatever the 3-way merge
+    // would make of it. Checked BEFORE mergeText rather than after,
+    // deliberately: today mergeText's `remote === base` fast path also keeps
+    // such a file (both are null, so local wins), but that is an emergent
+    // property of one branch's ordering inside a general-purpose merge
+    // function, not a stated invariant of the pull. The incident showed what
+    // it costs when a merge answer about deletion is trusted
+    // unconditionally, so the invariant is stated here, where the deletion
+    // lives, and the count is reported.
     //
     // Every key of localMap is mappable to a local destination by
     // construction (collectLocalSyncFiles builds them from the configured
@@ -182,7 +197,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       // before the write. An unmapped path that mergeText resolves to
       // "conflict" (e.g. base/remote both non-null, local null because it
       // was never written) used to still land in conflictFiles even though
-      // no local file with markers was ever created for it — the payload
+      // no local file with markers was ever created for it: the payload
       // claimed conflicts=1 for a file nothing could ever show a conflict
       // in. Classifying it here, once, as skipped, and returning before the
       // merged/conflict pushes keeps conflictFiles/mergedFiles an honest
@@ -198,69 +213,160 @@ async function performPull(config: PullConfig, options: PullOptions) {
       conflictFiles.push(remoteRelativePath);
     }
 
-    changedFiles.push(remoteRelativePath);
-
-    if (options.dryRun) {
-      if (mergeResult.content === null) {
-        deletedFiles.push(remoteRelativePath);
-      }
-      continue;
-    }
-
-    if (mergeResult.content === null) {
-      rmSync(localAbsolutePath, { force: true });
-      deletedFiles.push(remoteRelativePath);
-      continue;
-    }
-
-    mkdirSync(path.dirname(localAbsolutePath), { recursive: true });
-    writeFileSync(localAbsolutePath, mergeResult.content, "utf8");
+    plan.push({
+      remoteRelativePath,
+      localAbsolutePath,
+      content: mergeResult.content,
+      // A write onto a file that is already there replaces bytes that exist
+      // nowhere else once it lands, which is what makes it worth a snapshot;
+      // a write that creates a file takes nothing away.
+      overwrite: localValue !== null
+    });
   }
 
-  if (!options.dryRun) {
-    const remoteHeadAfter = workingCopy.remoteHead ? gitClient.revParseHead(workingCopy.repoDir) : null;
-    const state = stateStore.loadState();
-    state.lastRemoteHead = remoteHeadAfter;
-    state.lastRunAt = new Date().toISOString();
-    // filterUnmappedBaseMap (config.ts): the base snapshot store must never
-    // record a remote path this run just classified as skippedFiles above
-    // (no configured syncPaths destination maps it back to a local file) —
-    // see that function's comment for the full agent-tasks 65380570
-    // writeup. Left unfiltered, the next push's 3-way merge would see
-    // base=<content>/local=null for that path and silently delete it from
-    // the remote as a false "local wins".
-    stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, remoteMap));
-    stateStore.saveState(state);
-    stateStore.clearTemp(PULL_TEMP_LABEL);
+  const changedFiles = plan.map((entry) => entry.remoteRelativePath);
+  const deletedFiles = plan
+    .filter((entry) => entry.content === null)
+    .map((entry) => entry.remoteRelativePath);
 
+  // Guard 3: the plan itself. Evaluated for a dry run too, since --dry-run
+  // is how an operator inspects a plan before running it and must not
+  // preview one the real run would refuse.
+  assertNoRemoteMassDelete({
+    config,
+    baseMap,
+    deletedPaths: deletedFiles,
+    acceptMassDelete: options.acceptMassDelete
+  });
+
+  if (options.dryRun) {
     return {
       kind: "pull",
-      status: "applied",
+      status: "dry-run",
       remoteHeadBefore: workingCopy.remoteHead,
-      remoteHeadAfter,
+      remoteHeadAfter: workingCopy.remoteHead,
       appliedFiles: changedFiles,
       mergedFiles,
       conflictFiles,
       deletedFiles,
       skippedFiles,
       protectedFiles,
+      snapshots: [],
       notes: []
     };
   }
 
+  const snapshots = snapshotAffectedDestinations(config, plan, localFiles, resolvedSyncPathEntries);
+
+  for (const entry of plan) {
+    if (entry.content === null) {
+      rmSync(entry.localAbsolutePath, { force: true });
+      continue;
+    }
+
+    mkdirSync(path.dirname(entry.localAbsolutePath), { recursive: true });
+    writeFileSync(entry.localAbsolutePath, entry.content, "utf8");
+  }
+
+  const remoteHeadAfter = workingCopy.remoteHead ? gitClient.revParseHead(workingCopy.repoDir) : null;
+  const state = stateStore.loadState();
+  state.lastRemoteHead = remoteHeadAfter;
+  state.lastRunAt = new Date().toISOString();
+  // filterUnmappedBaseMap (config.ts): the base snapshot store must never
+  // record a remote path this run just classified as skippedFiles above
+  // (no configured syncPaths destination maps it back to a local file):
+  // see that function's comment for the full agent-tasks 65380570
+  // writeup. Left unfiltered, the next push's 3-way merge would see
+  // base=<content>/local=null for that path and silently delete it from
+  // the remote as a false "local wins".
+  stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, remoteMap));
+  stateStore.saveState(state);
+  stateStore.clearTemp(PULL_TEMP_LABEL);
+
   return {
     kind: "pull",
-    status: "dry-run",
+    status: "applied",
     remoteHeadBefore: workingCopy.remoteHead,
-    remoteHeadAfter: workingCopy.remoteHead,
+    remoteHeadAfter,
     appliedFiles: changedFiles,
     mergedFiles,
     conflictFiles,
     deletedFiles,
     skippedFiles,
     protectedFiles,
+    snapshots,
     notes: []
   };
+}
+
+interface PullPlanEntry {
+  remoteRelativePath: string;
+  localAbsolutePath: string;
+  content: string | null;
+  overwrite: boolean;
+}
+
+// Copies every destination this plan is about to delete from or overwrite
+// inside, and returns the snapshot ids for the run's report (AC-007).
+//
+// A destination the plan only ADDS files to is not copied: nothing that
+// exists is being replaced, so there is nothing a copy could preserve. A
+// plan that changes nothing at all snapshots nothing, which is what keeps a
+// quiet periodic sync from rotating through generations of identical copies
+// and pushing the interesting one out.
+function snapshotAffectedDestinations(
+  config: PullConfig,
+  plan: PullPlanEntry[],
+  localFiles: Array<{ remoteRelativePath: string; absolutePath: string }>,
+  resolvedSyncPathEntries: Array<{ destination: string }>
+): string[] {
+  const destinations = resolvedSyncPathEntries
+    .map((entry) => entry.destination)
+    .sort((left, right) => right.length - left.length);
+
+  const affected = new Set<string>();
+  for (const entry of plan) {
+    if (entry.content !== null && !entry.overwrite) {
+      continue;
+    }
+    const destination = destinationOf(destinations, entry.remoteRelativePath);
+    if (destination !== null) {
+      affected.add(destination);
+    }
+  }
+
+  const written: string[] = [];
+  for (const destination of Array.from(affected).sort()) {
+    const files = localFiles.filter(
+      (file) => destinationOf(destinations, file.remoteRelativePath) === destination
+    );
+    written.push(
+      writePreApplySnapshot({
+        stateDir: config.stateDir,
+        destination,
+        files: files.map((file) => ({
+          remoteRelativePath: file.remoteRelativePath,
+          absolutePath: file.absolutePath
+        })),
+        generations: config.snapshotGenerations
+      }).id
+    );
+  }
+
+  return written;
+}
+
+// Longest destination first, so the most specific configured destination
+// claims a path when one destination is a prefix of another. Mirrors the
+// same resolution in ./guards.ts and mapRemotePathToLocalAbsolute.
+function destinationOf(destinations: string[], remoteRelativePath: string): string | null {
+  for (const destination of destinations) {
+    if (remoteRelativePath === destination || remoteRelativePath.startsWith(`${destination}/`)) {
+      return destination;
+    }
+  }
+
+  return null;
 }
 
 function collectRemoteFiles(

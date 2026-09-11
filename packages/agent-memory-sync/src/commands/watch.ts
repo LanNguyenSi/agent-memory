@@ -32,6 +32,7 @@ interface WatchOptions {
   debounceMs?: string;
   maxRuns?: string;
   allowMassDelete: boolean;
+  acceptMassDelete: boolean;
 }
 
 const DEFAULT_DEBOUNCE_MS = 5000;
@@ -62,6 +63,13 @@ function registerWatchCommand(program: import("commander").Command): void {
       "--allow-mass-delete",
       "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
         "override an unreliable checkout: a working copy that came back missing files is still refused",
+      false
+    )
+    .option(
+      "--accept-mass-delete",
+      "Adopt a remote deletion the run would otherwise call an unreliable checkout: the destination is " +
+        "copied into stateDir/snapshots, the local files the remote dropped are removed, and the push " +
+        "continues. Use it only once the remote deletion is known to be genuine",
       false
     )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
@@ -169,7 +177,8 @@ function registerWatchCommand(program: import("commander").Command): void {
           dryRun: false,
           commitMessage: message,
           tempDirLabel: "watch",
-          allowMassDelete: options.allowMassDelete
+          allowMassDelete: options.allowMassDelete,
+          acceptMassDelete: options.acceptMassDelete
         });
 
         if (result.status === "queued") {

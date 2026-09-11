@@ -27,9 +27,12 @@ test("json output keeps the top-level run schema stable", () => {
 
   // `deletedFiles` joined this list with the mass-delete guard (agent-tasks
   // cda5b12c): push now reports which remote paths its plan removed, the
-  // same way pull always has. Additive only, so an existing consumer reading
-  // the keys above is unaffected; pull additionally carries `skippedFiles`
-  // and `protectedFiles`, which this push-shaped assertion does not cover.
+  // same way pull always has. `snapshots` joined it with the pre-apply
+  // snapshots from the same task: the ids of the copies a run took before
+  // touching a destination, empty on the runs that touched none. Both are
+  // additive, so an existing consumer reading the keys above is unaffected;
+  // pull additionally carries `skippedFiles` and `protectedFiles`, which
+  // this push-shaped assertion does not cover.
   const run = payload.runs[0];
   assert.deepEqual(
     Object.keys(run).sort(),
@@ -43,6 +46,7 @@ test("json output keeps the top-level run schema stable", () => {
       "queuedSnapshotId",
       "remoteHeadAfter",
       "remoteHeadBefore",
+      "snapshots",
       "status"
     ]
   );

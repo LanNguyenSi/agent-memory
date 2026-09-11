@@ -14,6 +14,7 @@ const {
   DEFAULT_MASS_DELETE_GUARD,
   MIN_PROPORTIONAL_DELETIONS,
   assertNoMassDelete,
+  assertNoRemoteMassDelete,
   assertReliableCheckout,
   findMassDelete,
   findUnreliableCheckout,
@@ -566,4 +567,60 @@ test("assertNoMassDelete: allowMassDelete also covers unclaimed paths", () => {
     unmappedDeletedPaths: outsidePaths(50),
     allowMassDelete: true
   });
+});
+
+// AC-007, the pull side: the same thresholds, asked about the plan a pull is
+// about to APPLY to the local workspace rather than about the plan a push is
+// about to publish. Distinct error and exit code, since the answer an
+// operator gives to "delete this much of my local corpus" is a different
+// answer from "publish this much deletion" (--accept-mass-delete, not
+// --allow-mass-delete).
+test("assertNoRemoteMassDelete: an over-threshold remote deletion is refused with its own code", () => {
+  assert.throws(
+    () =>
+      assertNoRemoteMassDelete({
+        config: config(),
+        baseMap: tracked("memory", 406),
+        deletedPaths: paths("memory", 406)
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "RemoteDeletionRefusedError");
+      assert.equal(error.exitCode, 9);
+      assert.match(error.message, /406 file\(s\) under 'memory'/);
+      assert.match(error.message, /--accept-mass-delete/);
+      assert.doesNotMatch(error.message, /--allow-mass-delete/);
+      assert.match(error.message, /Nothing was deleted locally/);
+      return true;
+    }
+  );
+});
+
+test("assertNoRemoteMassDelete: a plan inside the thresholds applies", () => {
+  assertNoRemoteMassDelete({
+    config: config(),
+    baseMap: tracked("memory", 400),
+    deletedPaths: paths("memory", 20)
+  });
+});
+
+test("assertNoRemoteMassDelete: acceptMassDelete skips the check entirely", () => {
+  assertNoRemoteMassDelete({
+    config: config(),
+    baseMap: tracked("memory", 406),
+    deletedPaths: paths("memory", 406),
+    acceptMassDelete: true
+  });
+});
+
+test("assertNoRemoteMassDelete: allowMassDelete is not the pull side's flag", () => {
+  assert.throws(
+    () =>
+      assertNoRemoteMassDelete({
+        config: config(),
+        baseMap: tracked("memory", 406),
+        deletedPaths: paths("memory", 406),
+        allowMassDelete: true
+      } as { config: unknown; baseMap: unknown; deletedPaths: string[] }),
+    /RemoteDeletionRefusedError|refusing to apply/
+  );
 });

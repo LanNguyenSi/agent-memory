@@ -6,6 +6,7 @@ const { DEFAULT_REACHABILITY_TIMEOUT_MS } = require("../memory-sync/reachability
 const { DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("../memory-sync/state-store");
 const { DEFAULT_MASS_DELETE_GUARD } = require("../memory-sync/guards");
 const { DEFAULT_LOCK_STALE_MS } = require("../memory-sync/lock");
+const { DEFAULT_SNAPSHOT_GENERATIONS } = require("../memory-sync/pre-apply-snapshot");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -55,6 +56,9 @@ interface UserConfig {
   // before a later run treats it as abandoned and takes it over. See
   // DEFAULT_LOCK_STALE_MS for how the default is sized.
   lockStaleMs?: number;
+  // How many pre-apply snapshots per sync destination are kept
+  // (src/memory-sync/pre-apply-snapshot.ts).
+  snapshotGenerations?: number;
 }
 
 interface MassDeleteGuardConfig {
@@ -88,6 +92,7 @@ interface RunConfig extends UserConfig {
   queueEscalationThresholdMs: number | null;
   massDeleteGuard: Required<MassDeleteGuardConfig>;
   lockStaleMs: number;
+  snapshotGenerations: number;
 }
 
 interface RunConfigOverrides {
@@ -111,6 +116,7 @@ interface RunConfigOverrides {
   queueEscalationThresholdMs?: number | null;
   massDeleteGuard?: MassDeleteGuardConfig | null;
   lockStaleMs?: number;
+  snapshotGenerations?: number;
 }
 
 const DEFAULT_SYNC_PATHS: SyncPathConfig[] = [
@@ -135,7 +141,8 @@ const DEFAULTS: Omit<RunConfig, "repositorySubdir" | "stateDir" | "remoteUrl" | 
   reachabilityCheckCommand: null,
   queueEscalationThresholdMs: DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS,
   massDeleteGuard: DEFAULT_MASS_DELETE_GUARD,
-  lockStaleMs: DEFAULT_LOCK_STALE_MS
+  lockStaleMs: DEFAULT_LOCK_STALE_MS,
+  snapshotGenerations: DEFAULT_SNAPSHOT_GENERATIONS
 };
 
 function defaultConfigPath(): string {
@@ -202,7 +209,13 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
     reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand),
     queueEscalationThresholdMs: validateQueueEscalationThresholdMs(merged.queueEscalationThresholdMs),
     massDeleteGuard: normalizeMassDeleteGuard(merged.massDeleteGuard),
-    lockStaleMs: validatePositiveInteger(merged.lockStaleMs, "lockStaleMs", DEFAULT_LOCK_STALE_MS)
+    lockStaleMs: validatePositiveInteger(merged.lockStaleMs, "lockStaleMs", DEFAULT_LOCK_STALE_MS),
+    snapshotGenerations: validatePositiveInteger(
+      merged.snapshotGenerations,
+      "snapshotGenerations",
+      DEFAULT_SNAPSHOT_GENERATIONS,
+      "generations"
+    )
   };
 }
 
@@ -277,7 +290,8 @@ function listConfigKeys(): string[] {
     "reachabilityCheckCommand",
     "queueEscalationThresholdMs",
     "massDeleteGuard",
-    "lockStaleMs"
+    "lockStaleMs",
+    "snapshotGenerations"
   ];
 }
 
@@ -352,6 +366,14 @@ function readEnvConfig(): UserConfig {
       Number(env.AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS),
       "AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS",
       DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+    );
+  }
+  if (env.AGENT_MEMORY_SYNC_SNAPSHOT_GENERATIONS) {
+    config.snapshotGenerations = validatePositiveInteger(
+      Number(env.AGENT_MEMORY_SYNC_SNAPSHOT_GENERATIONS),
+      "AGENT_MEMORY_SYNC_SNAPSHOT_GENERATIONS",
+      DEFAULT_SNAPSHOT_GENERATIONS,
+      "generations"
     );
   }
   if (env.AGENT_MEMORY_SYNC_LOCK_STALE_MS) {
@@ -452,7 +474,9 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
     mass_delete_guard: "massDeleteGuard",
     massDeleteGuard: "massDeleteGuard",
     lock_stale_ms: "lockStaleMs",
-    lockStaleMs: "lockStaleMs"
+    lockStaleMs: "lockStaleMs",
+    snapshot_generations: "snapshotGenerations",
+    snapshotGenerations: "snapshotGenerations"
   };
 
   for (const [key, value] of Object.entries(raw)) {
@@ -539,13 +563,21 @@ function validateConflictStrategy(value?: ConflictStrategy): ConflictStrategy {
   );
 }
 
-function validatePositiveInteger(value: number | undefined, key: string, fallback: number): number {
+// `unit` names what the number counts, so the message a misconfigured key
+// produces says what a valid value would look like. Milliseconds by default,
+// since every caller but one measures a duration.
+function validatePositiveInteger(
+  value: number | undefined,
+  key: string,
+  fallback: number,
+  unit = "milliseconds"
+): number {
   if (typeof value === "undefined") {
     return fallback;
   }
 
   if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
-    throw new CliError(`config key '${key}' must be a positive integer (milliseconds).`, 3);
+    throw new CliError(`config key '${key}' must be a positive integer (${unit}).`, 3);
   }
 
   return value;
@@ -642,6 +674,13 @@ function parseConfigValue(key: string, value: string): unknown {
       return validatePositiveInteger(Number(value), "reachabilityTimeoutMs", DEFAULT_REACHABILITY_TIMEOUT_MS);
     case "lockStaleMs":
       return validatePositiveInteger(Number(value), "lockStaleMs", DEFAULT_LOCK_STALE_MS);
+    case "snapshotGenerations":
+      return validatePositiveInteger(
+        Number(value),
+        "snapshotGenerations",
+        DEFAULT_SNAPSHOT_GENERATIONS,
+        "generations"
+      );
     case "queueEscalationThresholdMs":
       return value === "null"
         ? null

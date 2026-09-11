@@ -24,7 +24,11 @@
 //                           across the whole plan, stops and asks instead of
 //                           publishing the removal.
 const { resolveSyncPathEntries } = require("./config");
-const { MassDeleteRefusedError, UnreliableCheckoutError } = require("../errors");
+const {
+  MassDeleteRefusedError,
+  RemoteDeletionRefusedError,
+  UnreliableCheckoutError
+} = require("../errors");
 
 interface MassDeleteGuardConfig {
   maxRatio: number;
@@ -316,6 +320,71 @@ function assertNoMassDelete(input: {
   );
 }
 
+// The pull-side companion to assertNoMassDelete: the same thresholds, asked
+// about the deletions a pull is about to apply to the LOCAL workspace rather
+// than about the deletions a push is about to publish.
+//
+// Its relationship to assertReliableCheckout, which runs first and is the
+// broader net: a planned deletion is always a path the base snapshot tracks
+// and the checkout no longer shows, so per destination the checkout check
+// sees everything this one sees and more (a lost path whose local copy was
+// edited since is not deleted by the merge, but is still lost). What it
+// cannot see is the plan-wide total across destinations, which it has no
+// notion of: three destinations each losing a share small enough to pass on
+// its own still add up to a run that removes far more than the absolute
+// limit allows. That is this check's own ground, and the reason it carries
+// its own exit code rather than being folded into the other.
+//
+// Call this on the assembled plan, before the first local file is touched.
+function assertNoRemoteMassDelete(input: {
+  config: GuardConfig;
+  baseMap: Record<string, string | null>;
+  deletedPaths: string[];
+  acceptMassDelete?: boolean;
+}): void {
+  if (input.acceptMassDelete) {
+    return;
+  }
+
+  const guard = resolveMassDeleteGuard(input.config.massDeleteGuard);
+  const finding = findMassDelete(input.config, input.baseMap, input.deletedPaths, guard);
+  if (!finding) {
+    return;
+  }
+
+  throw new RemoteDeletionRefusedError(
+    `${describeRemoteMassDelete(finding, guard)} Nothing was deleted locally and nothing was pushed. If the ` +
+      `remote really did drop those files, re-run with --accept-mass-delete: the destination is copied into ` +
+      `stateDir/snapshots first, and the deletion is then applied. If it did not, recover the remote (see ` +
+      `'agent-memory-sync restore --help') before syncing again.`
+  );
+}
+
+function describeRemoteMassDelete(finding: MassDeleteFinding, guard: MassDeleteGuardConfig): string {
+  if (finding.rule === "total") {
+    return (
+      `refusing to apply a remote change that deletes ${finding.deleted} file(s) across all sync ` +
+      `destinations (${finding.deleted} of ${finding.tracked} tracked), over the mass-delete limit of ` +
+      `${guard.maxFiles} file(s).`
+    );
+  }
+
+  if (finding.rule === "absolute") {
+    return (
+      `refusing to apply a remote change that deletes ${finding.deleted} file(s) under ` +
+      `'${finding.destination}' (${finding.deleted} of ${finding.tracked} tracked), over the mass-delete ` +
+      `limit of ${guard.maxFiles} file(s).`
+    );
+  }
+
+  const ratio = finding.tracked > 0 ? finding.deleted / finding.tracked : 1;
+  return (
+    `refusing to apply a remote change that deletes ${finding.deleted} of ${finding.tracked} tracked ` +
+    `file(s) under '${finding.destination}' (${formatPercent(ratio)}), over the mass-delete threshold of ` +
+    `${formatPercent(guard.maxRatio)}.`
+  );
+}
+
 interface CheckoutFinding {
   destination: string;
   tracked: number;
@@ -458,11 +527,14 @@ function assertReliableCheckout(input: {
 
   throw new UnreliableCheckoutError(
     `unreliable checkout: the fetched working copy for remote head ${input.remoteHead} ` +
-      `${describeUnreliableCheckout(finding)}. Nothing was deleted locally and nothing was pushed. This is ` +
-      `usually a temporary working copy that was wiped or never materialized (a concurrent watch/sync run ` +
-      `sharing stateDir/tmp), so re-run the command once nothing else is touching stateDir/tmp. If the ` +
-      `remote really did drop those files, recover the destination with ` +
-      `'agent-memory-sync restore <commit>' and let the next run push from the restored tree.`
+      `${describeUnreliableCheckout(finding)}. Nothing was deleted locally and nothing was pushed. There ` +
+      `are two ways on from here. (1) If this is a temporary working copy that was wiped or never ` +
+      `materialized (a concurrent watch/sync run sharing stateDir/tmp), re-run the command once nothing ` +
+      `else is touching stateDir/tmp. (2) If the remote really did drop those files and that was intended, ` +
+      `re-run with --accept-mass-delete, which copies the destination into stateDir/snapshots and then ` +
+      `applies the remote's state locally. To bring the files back instead, restore the destination from a ` +
+      `commit that still had them ('agent-memory-sync restore --from-commit <sha>') and let the next run ` +
+      `push them.`
   );
 }
 
@@ -470,6 +542,7 @@ module.exports = {
   DEFAULT_MASS_DELETE_GUARD,
   MIN_PROPORTIONAL_DELETIONS,
   assertNoMassDelete,
+  assertNoRemoteMassDelete,
   assertReliableCheckout,
   findMassDelete,
   findUnreliableCheckout,

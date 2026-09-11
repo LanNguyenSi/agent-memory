@@ -12,6 +12,7 @@ const {
   UnreliableCheckoutError
 } = require("../errors");
 const { GitClient } = require("./git-client");
+const { acceptRemoteDeletions } = require("./accept-remote-deletions");
 const { assertNoMassDelete, assertReliableCheckout } = require("./guards");
 const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
@@ -25,9 +26,16 @@ interface PushOptions {
   // ./snapshot.ts) after watch started reusing this function instead of its
   // own mirror-push (src/commands/watch.ts).
   commitMessage?: string;
-  // Operator override for the deletion guards (--allow-mass-delete on `run`
-  // and `watch`), forwarded to ./guards.ts. The periodic jobs never pass it.
+  // Operator override for the PLAN guard (--allow-mass-delete on `run` and
+  // `watch`), forwarded to ./guards.ts. The periodic jobs never pass it, and
+  // it never reaches the checkout check.
   allowMassDelete?: boolean;
+  // Operator override for the CHECKOUT check (--accept-mass-delete): the
+  // remote really did drop those files. Adopts the remote state locally
+  // first (./accept-remote-deletions.ts) rather than merely silencing the
+  // refusal, so the push has nothing left to publish for the deleted paths
+  // instead of republishing them.
+  acceptMassDelete?: boolean;
   // Overrides the working-copy temp-dir label under stateDir/tmp (default:
   // "push"). `watch` passes "watch" here so its ticks keep their own
   // isolated working copy instead of sharing one with a concurrently
@@ -61,6 +69,9 @@ interface PushConfig {
   // Thresholds for the mass-delete guard (./guards.ts); absent means the
   // package defaults.
   massDeleteGuard?: { maxRatio?: number; maxFiles?: number } | null;
+  // How many pre-apply snapshots per destination survive
+  // (./pre-apply-snapshot.ts).
+  snapshotGenerations?: number | null;
   syncPaths: Array<{
     source: string;
     destination?: string;
@@ -85,7 +96,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     ownerFilter: true,
     warnings: ownerScopedWarnings
   });
-  const currentLocalMap = Object.fromEntries(
+  let currentLocalMap = Object.fromEntries(
     currentLocalFiles.map((file: { remoteRelativePath: string; content: string }) => [
       file.remoteRelativePath,
       file.content
@@ -112,7 +123,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
   // never had a local copy of. See filterUnmappedBaseMap's own comment in
   // config.ts for the full writeup, including why removing any one of its
   // three call sites (this read, and both writes) reopens the bug.
-  const currentBaseMap = filterUnmappedBaseMap(
+  let currentBaseMap = filterUnmappedBaseMap(
     config,
     filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots())
   );
@@ -173,6 +184,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
           mergedFiles: [],
           conflictFiles: [],
           deletedFiles: [],
+          snapshots: [],
           queuedSnapshotId: null,
           notes: [
             `remote unreachable (${reachability.reason}); this run would enqueue a snapshot instead of pushing immediately`
@@ -211,18 +223,54 @@ async function performPush(config: PushConfig, options: PushOptions) {
       gitClient.createTempRepoDir(config.stateDir, options.tempDirLabel || "push")
     );
 
-    // Guard 1 (agent-tasks cda5b12c): a working copy that does not represent
-    // the remote produces a deletion plan for every path it fails to show.
-    // Checked here, against the freshly fetched tree and before any merge,
-    // so nothing is committed or pushed from it. See ./guards.ts. Takes no
-    // --allow-mass-delete override (D-004/D-008): the flag answers "yes,
-    // delete these files", not "trust this working copy".
-    assertReliableCheckout({
-      config,
-      baseMap: currentBaseMap,
-      remoteMap: collectRemoteFiles(config, gitClient, workingCopy.repoDir),
-      remoteHead: workingCopy.remoteHead
-    });
+    // Guard 1: a working copy that does not represent the remote produces a
+    // deletion plan for every path it fails to show. Checked here, against
+    // the freshly fetched tree and before any merge, so nothing is committed
+    // or pushed from it. --allow-mass-delete does not reach it: that flag
+    // answers "yes, publish these deletions", not "trust this working copy",
+    // and on a wiped copy it was the one instruction that published the
+    // wipe. See ./guards.ts.
+    //
+    // --accept-mass-delete does reach it, and not as a silencer: it adopts
+    // the remote's state locally first (copy the destinations, remove the
+    // local files the remote no longer has, move the base snapshot to the
+    // remote's), so this push then has nothing to publish for those paths.
+    // Without that, silencing the refusal would push the "deleted" files
+    // straight back to the remote on the following run.
+    const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
+    let acceptedDeletions: string[] = [];
+    let preApplySnapshots: string[] = [];
+
+    if (options.acceptMassDelete) {
+      const accepted = acceptRemoteDeletions({
+        config,
+        stateStore,
+        baseMap: currentBaseMap,
+        localMap: currentLocalMap,
+        localFiles: currentLocalFiles,
+        remoteMap,
+        remoteHead: workingCopy.remoteHead
+      });
+
+      if (accepted) {
+        acceptedDeletions = accepted.deletedPaths;
+        preApplySnapshots = accepted.snapshots;
+        currentBaseMap = accepted.baseMap;
+        currentLocalMap = accepted.localMap;
+        // The "current" snapshot was assembled from these two maps before
+        // the working copy existed; it has to reflect the adoption, or the
+        // merge below would still see the removed files as local state.
+        snapshots[snapshots.length - 1].localFiles = currentLocalMap;
+        snapshots[snapshots.length - 1].baseFiles = currentBaseMap;
+      }
+    } else {
+      assertReliableCheckout({
+        config,
+        baseMap: currentBaseMap,
+        remoteMap,
+        remoteHead: workingCopy.remoteHead
+      });
+    }
 
     const appliedFiles: string[] = [];
     const mergedFiles: string[] = [];
@@ -302,7 +350,12 @@ async function performPush(config: PushConfig, options: PushOptions) {
         appliedFiles: unique(appliedFiles),
         mergedFiles: unique(mergedFiles),
         conflictFiles: unique(conflictFiles),
-        deletedFiles: unique(deletedFiles),
+        // The adopted deletions are local removals, not remote ones, and
+        // are reported as deletions this run made all the same: leaving them
+        // out would report a run that removed hundreds of local files as
+        // having deleted nothing.
+        deletedFiles: unique([...deletedFiles, ...acceptedDeletions]),
+        snapshots: preApplySnapshots,
         queuedSnapshotId,
         notes: queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []
       },
@@ -404,6 +457,7 @@ function enqueueCurrentSnapshot(
     mergedFiles: [],
     conflictFiles: [],
     deletedFiles: [],
+    snapshots: [],
     queuedSnapshotId,
     notes: skewNote ? [note, skewNote] : [note]
   };
@@ -571,6 +625,7 @@ function previewPush(
       mergedFiles: unique(mergedFiles),
       conflictFiles: unique(conflictFiles),
       deletedFiles: unique(deletedFiles),
+      snapshots: [],
       queuedSnapshotId: null,
       notes: []
     };
@@ -591,6 +646,7 @@ function previewPush(
       mergedFiles: [],
       conflictFiles: [],
       deletedFiles: [],
+      snapshots: [],
       queuedSnapshotId: null,
       notes: ["remote unavailable; this run would enqueue a snapshot instead of pushing immediately"]
     };

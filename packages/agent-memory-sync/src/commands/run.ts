@@ -37,6 +37,7 @@ interface RunOptions {
   conflictStrategy?: "inline-markers" | "local-wins" | "remote-wins";
   reachabilityTimeoutMs?: string;
   allowMassDelete: boolean;
+  acceptMassDelete: boolean;
 }
 
 function registerRunCommand(program: import("commander").Command): void {
@@ -65,6 +66,13 @@ function registerRunCommand(program: import("commander").Command): void {
       "--allow-mass-delete",
       "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
         "override an unreliable checkout: a working copy that came back missing files is still refused",
+      false
+    )
+    .option(
+      "--accept-mass-delete",
+      "Apply a remote change that deletes more of a destination than the guard allows, and adopt a " +
+        "checkout the run would otherwise call unreliable. The destination is copied into " +
+        "stateDir/snapshots first. Use it only once the remote deletion is known to be genuine",
       false
     )
     .option("--dry-run", "Preview without making changes", false)
@@ -136,7 +144,11 @@ function registerRunCommand(program: import("commander").Command): void {
         try {
           execution = await executeMode(
             runConfig,
-            { dryRun: options.dryRun, allowMassDelete: options.allowMassDelete },
+            {
+              dryRun: options.dryRun,
+              allowMassDelete: options.allowMassDelete,
+              acceptMassDelete: options.acceptMassDelete
+            },
             outputOptions
           );
         } catch (error) {
@@ -227,7 +239,7 @@ async function executeMode(
       required?: boolean;
     }>;
   },
-  options: { dryRun: boolean; allowMassDelete: boolean },
+  options: { dryRun: boolean; allowMassDelete: boolean; acceptMassDelete: boolean },
   outputOptions: { color: boolean; quiet: boolean; verbose: boolean }
 ) {
   if (runConfig.mode === "push") {
@@ -251,6 +263,7 @@ async function executeMode(
       mergedFiles: unique([...pullResult.mergedFiles, ...pushResult.mergedFiles]),
       conflictFiles: unique([...pullResult.conflictFiles, ...pushResult.conflictFiles]),
       deletedFiles: unique([...(pullResult.deletedFiles || []), ...(pushResult.deletedFiles || [])]),
+      snapshots: unique([...(pullResult.snapshots || []), ...(pushResult.snapshots || [])]),
       skippedFiles: unique([...(pullResult.skippedFiles || []), ...(pushResult.skippedFiles || [])]),
       protectedFiles: unique([...(pullResult.protectedFiles || []), ...(pushResult.protectedFiles || [])]),
       queuedSnapshotId: pushResult.queuedSnapshotId || null,
