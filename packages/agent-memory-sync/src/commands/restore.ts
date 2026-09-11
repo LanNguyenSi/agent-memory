@@ -1,4 +1,4 @@
-const { mkdirSync, writeFileSync } = require("node:fs");
+const { mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const {
   loadConfig,
@@ -7,11 +7,22 @@ const {
 } = require("../config/loader");
 const { CliError } = require("../errors");
 const { acquireStateDirLock } = require("../memory-sync/lock");
-const { mapRemotePathToLocalAbsolute } = require("../memory-sync/config");
+const {
+  collectLocalSyncFiles,
+  mapRemotePathToLocalAbsolute,
+  resolveSyncPathEntries
+} = require("../memory-sync/config");
 const { GitClient } = require("../memory-sync/git-client");
+const { readPreApplySnapshot, writePreApplySnapshot } = require("../memory-sync/pre-apply-snapshot");
+const { StateStore } = require("../memory-sync/state-store");
 const { writeDryRun, writeInfo, writeResult } = require("../output");
 
 type OutputFormat = "text" | "json" | "yaml";
+
+// The label of restore's own working copy under stateDir/tmp, named once so
+// the directory it creates and the directory it clears cannot drift apart
+// (see StateStore.clearTemp).
+const RESTORE_TEMP_LABEL = "restore";
 
 interface RestoreOptions {
   config?: string;
@@ -27,13 +38,33 @@ interface RestoreOptions {
   path?: string;
   dryRun: boolean;
   yes: boolean;
+  fromCommit?: string;
+  fromSnapshot?: string | boolean;
 }
 
 function registerRestoreCommand(program: import("commander").Command): void {
   program
     .command("restore")
-    .description("Restore memory files from a specific snapshot commit in the remote repository")
-    .argument("<sha>", "Commit SHA to restore from")
+    .description(
+      "Restore memory files from a commit in the remote repository, or a whole sync destination from a " +
+        "commit or from a local pre-apply snapshot"
+    )
+    // Two shapes, told apart by --from-commit/--from-snapshot rather than by
+    // guessing what the positionals mean:
+    //
+    //   restore <sha> [--path P] [--yes]              one file or one tree, from a commit
+    //   restore <profile> <destination> --from-commit <sha>
+    //   restore <profile> <destination> --from-snapshot [<id>|latest]
+    //
+    // The first is the form this command shipped with and keeps working
+    // unchanged; the second is the destination-shaped recovery AC-007
+    // describes (agent-tasks cda5b12c).
+    .argument(
+      "[target]",
+      "Commit SHA to restore from, or the configuration profile when --from-commit/--from-snapshot is given",
+      "default"
+    )
+    .argument("[destination]", "Sync destination to restore (with --from-commit/--from-snapshot)")
     .option("--config <path>", "Override config file path")
     .option("--root-dir <path>", "Override the local workspace root")
     .option("--remote <url>", "Override the remote Git repository URL")
@@ -44,33 +75,52 @@ function registerRestoreCommand(program: import("commander").Command): void {
       "--path <relative>",
       "Restore only this remote-relative path (relative to repositorySubdir)"
     )
+    .option(
+      "--from-commit <sha>",
+      "Restore a whole sync destination from this commit, and move the base snapshot for it to the " +
+        "CURRENT remote tree, so the next push publishes the recovered files as additions"
+    )
+    .option(
+      "--from-snapshot [id]",
+      "Restore a whole sync destination from a local pre-apply snapshot (default: latest)"
+    )
     .option("--dry-run", "List what would be restored without writing", false)
     .option("--yes", "Confirm a full-snapshot restore without prompting", false)
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
     .option("-v, --verbose", "Enable verbose diagnostics", false)
     .option("-q, --quiet", "Suppress non-error diagnostics", false)
     .option("--no-color", "Disable colored diagnostics")
-    .action(async (sha: string, options: RestoreOptions) => {
-      if (!/^[0-9a-f]{4,64}$/i.test(sha)) {
+    .action(async (target: string, destination: string | undefined, options: RestoreOptions) => {
+      const mode = resolveRestoreMode(target, destination, options);
+      const sha = mode.kind === "file" ? mode.sha : "";
+
+      if (mode.kind === "file" && !/^[0-9a-f]{4,64}$/i.test(sha)) {
         throw new CliError(`invalid commit sha '${sha}'.`, 2);
       }
 
       const loaded = await loadConfig(options.config);
-      const runConfig = requireRemoteUrl(
-        resolveRunConfig(loaded, {
-          outputFormat: options.output,
-          verbose: options.verbose,
-          quiet: options.quiet,
-          color: options.color,
-          rootDir: options.rootDir,
-          remoteUrl: options.remote,
-          branch: options.branch,
-          repositorySubdir: options.repositorySubdir,
-          stateDir: options.stateDir
-        })
-      );
+      const resolved = resolveRunConfig(loaded, {
+        // The profile decides which state directory (and so which lock,
+        // which base snapshots and which pre-apply snapshots) this restore
+        // operates on, so it has to be resolved before anything is taken or
+        // read. The older form has no profile positional and keeps the
+        // config file's own.
+        profile: mode.kind === "file" ? undefined : mode.profile,
+        outputFormat: options.output,
+        verbose: options.verbose,
+        quiet: options.quiet,
+        color: options.color,
+        rootDir: options.rootDir,
+        remoteUrl: options.remote,
+        branch: options.branch,
+        repositorySubdir: options.repositorySubdir,
+        stateDir: options.stateDir
+      });
+      // A snapshot restore reads nothing but the local state directory, so
+      // it is the one form that works with no remote configured at all.
+      const runConfig = mode.kind === "snapshot" ? resolved : requireRemoteUrl(resolved);
 
-      if (!options.path && !options.yes && !options.dryRun) {
+      if (mode.kind === "file" && !options.path && !options.yes && !options.dryRun) {
         throw new CliError(
           "full-snapshot restore requires --yes (or use --path to restore a single file, or --dry-run to preview).",
           2
@@ -94,11 +144,16 @@ function registerRestoreCommand(program: import("commander").Command): void {
       });
 
       try {
+        if (mode.kind !== "file") {
+          await restoreDestination(runConfig, options, outputOptions, mode);
+          return;
+        }
+
         const gitClient = new GitClient(runConfig.gitBinary);
         const workingCopy = gitClient.prepareWorkingCopy(
           runConfig.remoteUrl,
           runConfig.branch,
-          gitClient.createTempRepoDir(runConfig.stateDir, "restore")
+          gitClient.createTempRepoDir(runConfig.stateDir, RESTORE_TEMP_LABEL)
         );
 
         // Skip the network-only fetchRef path entirely when `sha` (full or
@@ -186,6 +241,276 @@ function registerRestoreCommand(program: import("commander").Command): void {
         lock.release();
       }
     });
+}
+
+
+type RestoreMode =
+  | { kind: "file"; sha: string }
+  | { kind: "commit"; profile: string; destination: string; sha: string }
+  | { kind: "snapshot"; profile: string; destination: string; snapshot: string };
+
+// Decides which of the command's two shapes was invoked. The flags decide,
+// never the positionals: `restore <sha> --yes` and
+// `restore <profile> <destination> --from-commit <sha>` would otherwise be
+// told apart by guessing whether the first word looks like a sha, and a
+// profile named like one would silently take the wrong branch.
+function resolveRestoreMode(
+  target: string,
+  destination: string | undefined,
+  options: RestoreOptions
+): RestoreMode {
+  const wantsCommit = typeof options.fromCommit === "string" && options.fromCommit.length > 0;
+  const wantsSnapshot = typeof options.fromSnapshot !== "undefined" && options.fromSnapshot !== false;
+
+  if (!wantsCommit && !wantsSnapshot) {
+    if (destination) {
+      throw new CliError(
+        `restore takes a second positional only with --from-commit or --from-snapshot. ` +
+          `Use 'restore <sha> [--path <p>] [--yes]', or ` +
+          `'restore <profile> <destination> --from-commit <sha>'.`,
+        2
+      );
+    }
+    return { kind: "file", sha: target };
+  }
+
+  if (wantsCommit && wantsSnapshot) {
+    throw new CliError("--from-commit and --from-snapshot name two different sources; pass one.", 2);
+  }
+
+  if (!destination) {
+    throw new CliError(
+      "restore --from-commit/--from-snapshot needs a destination: " +
+        "'restore <profile> <destination> --from-commit <sha>'.",
+      2
+    );
+  }
+
+  if (wantsCommit) {
+    const sha = options.fromCommit as string;
+    if (!/^[0-9a-f]{4,64}$/i.test(sha)) {
+      throw new CliError(`invalid commit sha '${sha}'.`, 2);
+    }
+    return { kind: "commit", profile: target, destination, sha };
+  }
+
+  return {
+    kind: "snapshot",
+    profile: target,
+    destination,
+    // `--from-snapshot` with no value is the one an operator wants almost
+    // every time: the copy the run that just surprised them took.
+    snapshot: typeof options.fromSnapshot === "string" ? options.fromSnapshot : "latest"
+  };
+}
+
+// Restores one whole sync destination, from a commit in the remote or from a
+// local pre-apply snapshot, and leaves the destination holding exactly what
+// the source held: files the source has are written, files it does not are
+// removed. Both halves are covered by the copy this takes of the current
+// tree before it changes anything, so a restore aimed at the wrong source is
+// itself undoable.
+async function restoreDestination(
+  runConfig: {
+    profile: string;
+    rootDir: string;
+    stateDir: string;
+    repositorySubdir: string;
+    remoteUrl: string;
+    branch: string;
+    gitBinary: string;
+    outputFormat: OutputFormat;
+    snapshotGenerations: number;
+    syncPaths: Array<{ source: string; destination?: string; kind?: "file" | "directory"; required?: boolean }>;
+  },
+  options: RestoreOptions,
+  outputOptions: { color: boolean; quiet: boolean; verbose: boolean },
+  mode: Extract<RestoreMode, { kind: "commit" | "snapshot" }>
+): Promise<void> {
+  const resolvedEntries = resolveSyncPathEntries(runConfig);
+  const destinations = resolvedEntries.map((entry: { destination: string }) => entry.destination);
+  if (!destinations.includes(mode.destination)) {
+    throw new CliError(
+      `'${mode.destination}' is not a configured sync destination. Configured: ${destinations.sort().join(", ")}.`,
+      3
+    );
+  }
+
+  // Everything the destination currently holds, read before anything is
+  // written: the copy below and the removals further down both depend on it.
+  const currentFiles = collectLocalSyncFiles(runConfig).filter(
+    (file: { remoteRelativePath: string }) =>
+      belongsToDestination(file.remoteRelativePath, mode.destination)
+  );
+
+  const gitClient = new GitClient(runConfig.gitBinary);
+  let sourceFiles: Array<{ remoteRelativePath: string; read: () => Buffer }>;
+  let workingCopy: { repoDir: string; remoteHead: string | null } | null = null;
+  let resolvedSha = "";
+
+  if (mode.kind === "commit") {
+    const prepared = gitClient.prepareWorkingCopy(
+      runConfig.remoteUrl,
+      runConfig.branch,
+      gitClient.createTempRepoDir(runConfig.stateDir, RESTORE_TEMP_LABEL)
+    );
+    workingCopy = prepared;
+    const repoDir = prepared.repoDir;
+    resolvedSha = gitClient.resolveLocalCommit(repoDir, mode.sha) || "";
+    if (!resolvedSha) {
+      gitClient.fetchRef(repoDir, mode.sha);
+      resolvedSha = gitClient.resolveLocalCommit(repoDir, mode.sha) || mode.sha;
+    }
+
+    const prefix = `${runConfig.repositorySubdir}/`;
+    sourceFiles = gitClient
+      .listTreePaths(repoDir, resolvedSha, runConfig.repositorySubdir)
+      .filter((repoRelativePath: string) => repoRelativePath.startsWith(prefix))
+      .map((repoRelativePath: string) => repoRelativePath.slice(prefix.length))
+      .filter((remoteRelativePath: string) => belongsToDestination(remoteRelativePath, mode.destination))
+      .map((remoteRelativePath: string) => ({
+        remoteRelativePath,
+        read: () =>
+          Buffer.from(
+            gitClient.showAtRef(
+              repoDir,
+              resolvedSha,
+              `${runConfig.repositorySubdir}/${remoteRelativePath}`
+            ) || "",
+            "utf8"
+          )
+      }));
+
+    if (sourceFiles.length === 0) {
+      throw new CliError(
+        `commit ${resolvedSha} holds no files under '${runConfig.repositorySubdir}/${mode.destination}'.`,
+        5
+      );
+    }
+  } else {
+    // Resolved to a concrete generation BEFORE the copy below adds one, so
+    // "latest" never means the snapshot this very command is about to take.
+    const stored = readPreApplySnapshot(runConfig.stateDir, mode.destination, mode.snapshot);
+    resolvedSha = stored.id;
+    sourceFiles = stored.files.map((file: { remoteRelativePath: string; storedPath: string }) => ({
+      remoteRelativePath: file.remoteRelativePath,
+      read: () => readFileSync(file.storedPath)
+    }));
+  }
+
+  const sourcePaths = new Set(sourceFiles.map((file) => file.remoteRelativePath));
+  const removable = currentFiles.filter(
+    (file: { remoteRelativePath: string }) => !sourcePaths.has(file.remoteRelativePath)
+  );
+
+  if (options.dryRun) {
+    for (const file of sourceFiles) {
+      writeDryRun(`would restore ${file.remoteRelativePath}`, outputOptions);
+    }
+    for (const file of removable) {
+      writeDryRun(`would remove ${file.remoteRelativePath}`, outputOptions);
+    }
+  } else {
+    writePreApplySnapshot({
+      stateDir: runConfig.stateDir,
+      destination: mode.destination,
+      files: currentFiles.map((file: { remoteRelativePath: string; absolutePath: string }) => ({
+        remoteRelativePath: file.remoteRelativePath,
+        absolutePath: file.absolutePath
+      })),
+      generations: runConfig.snapshotGenerations
+    });
+
+    for (const file of sourceFiles) {
+      const absolutePath = mapRemotePathToLocalAbsolute(runConfig, file.remoteRelativePath, resolvedEntries);
+      if (!absolutePath) {
+        throw new CliError(
+          `cannot map '${file.remoteRelativePath}' to a local sync target. Update syncPaths.`,
+          3
+        );
+      }
+      mkdirSync(path.dirname(absolutePath), { recursive: true });
+      // Bytes, not a decoded string: a restore that re-encoded on the way
+      // out would not reproduce the tree it claims to.
+      writeFileSync(absolutePath, file.read());
+      writeInfo(`restored ${file.remoteRelativePath}`, outputOptions);
+    }
+
+    for (const file of removable) {
+      rmSync(file.absolutePath, { force: true });
+      writeInfo(`removed ${file.remoteRelativePath}`, outputOptions);
+    }
+
+    if (mode.kind === "commit" && workingCopy) {
+      moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination);
+      new StateStore(runConfig.stateDir, runConfig.profile).clearTemp(RESTORE_TEMP_LABEL);
+    }
+  }
+
+  const payload = {
+    command: "restore",
+    profile: runConfig.profile,
+    destination: mode.destination,
+    dryRun: options.dryRun,
+    source:
+      mode.kind === "commit"
+        ? { kind: "commit", commit: resolvedSha }
+        : { kind: "snapshot", snapshot: resolvedSha },
+    restored: sourceFiles.map((file) => file.remoteRelativePath).sort(),
+    removed: removable.map((file: { remoteRelativePath: string }) => file.remoteRelativePath).sort()
+  };
+
+  writeResult(payload, runConfig.outputFormat, () =>
+    [
+      ...payload.restored.map((p: string) => `${options.dryRun ? "[dry-run] " : ""}restore ${p}`),
+      ...payload.removed.map((p: string) => `${options.dryRun ? "[dry-run] " : ""}remove ${p}`)
+    ].join("\n")
+  );
+}
+
+// The base snapshot for this destination becomes the CURRENT remote tree,
+// not the restored one. That is what makes the restored files read as
+// local-only additions on the next push instead of as a local copy that is
+// merely out of date: with base === remote for those paths, the 3-way merge
+// sees base null, local present, remote null and publishes them. Setting the
+// base to the restored tree would produce the opposite, and a push that
+// deletes them all over again.
+//
+// Only this destination's keys move. Another destination's base entries are
+// left exactly as they were, including a peer's owner-scoped file, which is
+// why this reads and rewrites the stored map rather than replacing it.
+function moveBaseToCurrentRemote(
+  runConfig: { profile: string; stateDir: string; repositorySubdir: string },
+  gitClient: InstanceType<typeof GitClient>,
+  repoDir: string,
+  destination: string
+): void {
+  const stateStore = new StateStore(runConfig.stateDir, runConfig.profile);
+  const stored = stateStore.readBaseSnapshots();
+
+  for (const key of Object.keys(stored)) {
+    if (belongsToDestination(key, destination)) {
+      delete stored[key];
+    }
+  }
+
+  const prefix = `${runConfig.repositorySubdir}/`;
+  for (const repoRelativePath of gitClient.listFiles(repoDir, runConfig.repositorySubdir)) {
+    if (!repoRelativePath.startsWith(prefix)) {
+      continue;
+    }
+    const remoteRelativePath = repoRelativePath.slice(prefix.length);
+    if (!belongsToDestination(remoteRelativePath, destination)) {
+      continue;
+    }
+    stored[remoteRelativePath] = gitClient.readFile(repoDir, repoRelativePath);
+  }
+
+  stateStore.replaceBaseSnapshots(stored);
+}
+
+function belongsToDestination(remoteRelativePath: string, destination: string): boolean {
+  return remoteRelativePath === destination || remoteRelativePath.startsWith(`${destination}/`);
 }
 
 function normalizeRequestedPath(repositorySubdir: string, requested: string): string {
