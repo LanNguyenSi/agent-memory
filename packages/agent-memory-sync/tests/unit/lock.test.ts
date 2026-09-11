@@ -10,6 +10,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
 const { hostname } = require("node:os");
 const path = require("node:path");
 const {
@@ -112,8 +113,31 @@ test("staleness is configurable, and a lock inside the configured age still hold
 
 test("a lock whose holder is gone on this host is taken over", () => {
   const stateDir = path.join(sandbox("dead-holder"), "state");
-  // Never a live pid: the kernel rejects it outright, so `process.kill(pid, 0)`
-  // cannot be fooled by pid reuse here.
+  // A pid that really was a process on this host and really is not one any
+  // more: the one shape that exercises the process-table check rather than
+  // the record-shape check below. Taken from a child that has already
+  // exited, so nothing here depends on guessing an unused number.
+  const exited = spawnSync(process.execPath, ["-e", "0"]);
+  assert.equal(exited.status, 0);
+  assert.ok(typeof exited.pid === "number" && exited.pid > 0);
+
+  writeLockFile(stateDir, {
+    pid: exited.pid,
+    host: hostname(),
+    command: "watch",
+    acquiredAt: new Date().toISOString()
+  });
+
+  const lock = acquireStateDirLock({ stateDir, command: "run --mode sync" });
+  assert.equal(JSON.parse(readFileSync(lockFilePath(stateDir), "utf8")).command, "run --mode sync");
+  lock.release();
+});
+
+test("a lock record with an impossible pid is taken over too", () => {
+  const stateDir = path.join(sandbox("bad-pid"), "state");
+  // Never a pid at all: a negative number addresses a process GROUP for
+  // `process.kill`, so a record carrying one has to be rejected on its shape
+  // rather than handed to the process table.
   writeLockFile(stateDir, {
     pid: -12345,
     host: hostname(),
@@ -155,20 +179,32 @@ test("an unreadable lock file is taken over rather than wedging the run forever"
   lock.release();
 });
 
-test("release is idempotent and never removes a lock this caller no longer owns", () => {
+test("release is idempotent", () => {
   const stateDir = path.join(sandbox("release"), "state");
 
   const lock = acquireStateDirLock({ stateDir, command: "run --mode sync" });
   lock.release();
   lock.release();
+  assert.equal(existsSync(lockFilePath(stateDir)), false);
+});
 
-  // A later holder's lock file must survive an earlier holder's late release.
+test("release never removes a lock this caller no longer owns", () => {
+  const stateDir = path.join(sandbox("release-takeover"), "state");
+
+  const lock = acquireStateDirLock({ stateDir, command: "run --mode sync" });
+
+  // Taken over while this holder was still running (its own lock went stale,
+  // or an operator cleared it), so the file now belongs to someone else. The
+  // late release must leave it alone: removing it would hand a third process
+  // a lock the second one is still holding. Note this holder has NOT released
+  // yet, so nothing but the ownership check can save the file here.
   writeLockFile(stateDir, {
     pid: process.pid,
     host: hostname(),
     command: "watch",
-    acquiredAt: new Date().toISOString()
+    acquiredAt: new Date(Date.now() + 1000).toISOString()
   });
+
   lock.release();
   assert.equal(JSON.parse(readFileSync(lockFilePath(stateDir), "utf8")).command, "watch");
 });

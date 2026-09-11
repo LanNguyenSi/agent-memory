@@ -1200,3 +1200,39 @@ test("push --dry-run: queued snapshots are measured one commit at a time (AC-003
     false
   );
 });
+
+// The preview measures the index for the same reason the real push does, and
+// nothing pinned that half of it: a plan whose deletions only appear once the
+// working copy is staged reads as an empty plan right up to the moment it is
+// committed. A dry run that previewed such a plan as clean would be telling
+// an operator the opposite of what the real run is about to do.
+test("push --dry-run: a plan whose deletions appear only at staging time is refused (AC-003)", () => {
+  const root = createSandbox("dry-run-staged-gate");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  seedLogFiles(workspaceRoot, 30);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  writeProjectConfig(stubConfigPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitWipingWorkTreeOnStage(root)
+  });
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+  const result = runCli(
+    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--dry-run", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
+  assert.match(result.stderr, /30 file\(s\) under 'logs'/);
+  assert.doesNotMatch(result.stdout, /"status": "dry-run"/);
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run-staged"), 30);
+});

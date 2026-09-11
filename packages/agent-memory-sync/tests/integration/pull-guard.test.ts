@@ -402,3 +402,85 @@ test("push: --accept-mass-delete adopts the remote's deletion instead of republi
   const secondInspection = cloneRemote(remoteDir, root, "inspect-push-accept-2");
   assert.equal(fs.readdirSync(path.join(secondInspection, "shared", "logs")).length, 20);
 });
+
+// git behaves normally except that the push itself is rejected, which
+// performPush treats as an unreachable remote and queues.
+function writeStubGitRejectingPush(root: string): string {
+  const stubPath = path.join(root, "stub-git-rejects-push.sh");
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "push" ]; then',
+      '  echo "fatal: simulated push rejection" >&2',
+      "  exit 1",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+function baseTrackedCount(workspaceRoot: string, destination: string): number {
+  const dir = path.join(stateDirOf(workspaceRoot), "base", destination);
+  if (!fs.existsSync(dir)) {
+    return 0;
+  }
+  return fs.readdirSync(dir).filter((name: string) => !name.endsWith(".meta.json")).length;
+}
+
+// An accepted deletion changes the local tree immediately, so the base
+// snapshot has to move with it immediately too. Leaving that to the end of a
+// successful push means a push that fails afterwards leaves a base snapshot
+// claiming files that are no longer on disk, and the next run reads that as a
+// checkout that lost them: refused at exit 7, with the adoption the operator
+// already agreed to still not recorded anywhere.
+test("push: an accepted deletion survives a push that fails afterwards (AC-007)", () => {
+  const root = createSandbox("accept-then-failed-push");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  const seeded = seedLogFiles(workspaceRoot, 50);
+  writeProjectConfig(configPath, logsOnlyConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  assert.equal(baseTrackedCount(workspaceRoot, "logs"), 50);
+
+  peerDeletes(
+    remoteDir,
+    root,
+    "peer-failed-push",
+    seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/"))
+  );
+
+  writeProjectConfig(stubConfigPath, {
+    ...logsOnlyConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitRejectingPush(root)
+  });
+
+  const queued = runCli([
+    "run",
+    "default",
+    "--config",
+    stubConfigPath,
+    "--mode",
+    "push",
+    "--accept-mass-delete",
+    "--output",
+    "json"
+  ]);
+  assert.equal(JSON.parse(queued.stdout).runs[0].status, "queued");
+
+  // The adoption stands on its own: local and base agree with the remote,
+  // even though this run never got to rewrite the base after a push.
+  assert.equal(fileExists(path.join(workspaceRoot, seeded[0])), false);
+  assert.equal(baseTrackedCount(workspaceRoot, "logs"), 20);
+
+  // So the next ordinary run is clean rather than refusing a checkout it
+  // would otherwise read as having lost 30 files.
+  const afterwards = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  assert.equal(afterwards.status, 0, `stderr: ${afterwards.stderr}`);
+});

@@ -284,21 +284,14 @@ async function performPush(config: PushConfig, options: PushOptions) {
       // untouched (the push below never runs) and the queued snapshots stay
       // queued rather than being dropped as replayed.
       //
-      // Two measurements, in order of cost. The plan's own deletions are
-      // already in hand, so they are checked first as a cheap pre-check. The
-      // GATE is the second one: the deletions git has actually staged. The
-      // two differ exactly where it matters: a path
-      // the working copy was already missing is not something the plan
-      // "deletes", it never reads as a deletion at all, and yet the
-      // `git add -A` inside commitAll stages and publishes it. Measuring the
-      // index makes the guard's numerator the plan that is really about to
-      // be committed.
-      assertNoMassDelete({
-        config,
-        baseMap: snapshot.baseFiles,
-        deletedPaths: result.plannedDeletions,
-        allowMassDelete: options.allowMassDelete
-      });
+      // One measurement, and deliberately the later one: the deletions git
+      // has actually staged. The merge's own plan is a strict subset of them
+      // and differs exactly where it matters, since a path the working copy
+      // was already missing is not something the plan "deletes" at all,
+      // while the `git add -A` inside commitAll stages and publishes it.
+      // Checking the plan as well changes no outcome the staged check does
+      // not already produce (measured: removing it leaves the whole suite
+      // green), so the numerator is the index and nothing else.
       const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
       assertNoMassDelete({
         config,
@@ -588,12 +581,6 @@ function previewPush(
 
     for (const snapshot of snapshots) {
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
-      assertNoMassDelete({
-        config,
-        baseMap: snapshot.baseFiles,
-        deletedPaths: result.plannedDeletions,
-        allowMassDelete: options.allowMassDelete
-      });
       const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
       assertNoMassDelete({
         config,
@@ -670,7 +657,6 @@ function applySnapshotToWorkingCopy(
   const appliedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
-  const plannedDeletions: string[] = [];
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const repositoryPath = toRepositoryRelativePath(config, remoteRelativePath);
@@ -694,21 +680,15 @@ function applySnapshotToWorkingCopy(
     }
 
     if (mergeResult.content === null) {
-      // Only a path the working copy actually holds counts as a PLANNED
-      // deletion: removing a path that is not there is a no-op of this
-      // merge's own, so counting it here would report a deletion this plan
-      // did not make. What such a path costs is measured where it really
-      // happens instead, in the index (collectStagedDeletions), which is the
-      // guard's gate.
+      // What a removed path costs is measured where it really happens, in
+      // the index (collectStagedDeletions), which is the guard's gate: a
+      // path the working copy is already missing never reads as a deletion
+      // here at all, and that is exactly the shape a wiped checkout has.
       //
-      // Deliberately kept out of appliedFiles too: a run that
-      // removes files reported them as "applied" with an empty deletedFiles
-      // list, which reads as a successful sync of those paths. appliedFiles
-      // is the files this snapshot WROTE; deletions are reported as
-      // deletions.
-      if (remoteContent !== null) {
-        plannedDeletions.push(remoteRelativePath);
-      }
+      // Deliberately kept out of appliedFiles too: a run that removes files
+      // reported them as "applied" with an empty deletedFiles list, which
+      // reads as a successful sync of those paths. appliedFiles is the files
+      // this snapshot WROTE; deletions are reported as deletions.
       gitClient.deleteFile(repoDir, repositoryPath);
       continue;
     }
@@ -720,8 +700,7 @@ function applySnapshotToWorkingCopy(
   return {
     appliedFiles,
     mergedFiles,
-    conflictFiles,
-    plannedDeletions
+    conflictFiles
   };
 }
 
