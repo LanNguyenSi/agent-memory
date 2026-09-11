@@ -286,7 +286,7 @@ async function executeMode(
       skippedFiles: unique([...(pullResult.skippedFiles || []), ...(pushResult.skippedFiles || [])]),
       protectedFiles: unique([...(pullResult.protectedFiles || []), ...(pushResult.protectedFiles || [])]),
       queuedSnapshotId: pushResult.queuedSnapshotId || null,
-      notes: [...(pullResult.notes || []), ...(pushResult.notes || [])]
+      notes: unique([...(pullResult.notes || []), ...(pushResult.notes || [])])
     };
   } catch (error: unknown) {
     // Root cause of the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run

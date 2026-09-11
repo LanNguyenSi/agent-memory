@@ -62,6 +62,25 @@ interface CollectLocalSyncFilesOptions {
   warnings?: string[];
 }
 
+// D-006 (task e104c9f2, review round 2, 05-review-findings.md): the exact
+// text pull's own D-002 warning (src/memory-sync/pull.ts's own-file-mismatch
+// loop) and this collector's own-file-mismatch warning below report for the
+// identical condition, so `--mode sync` (which concatenates pull's and
+// push's notes) reports it once, not twice under two slightly different
+// wordings.
+function ownerMismatchNote(
+  profile: string | undefined,
+  ownerFileName: string,
+  fileCount: number,
+  absoluteSource: string,
+  destination: string
+): string {
+  return (
+    `profile '${profile}': own file '${ownerFileName}' not found among ${fileCount} file(s) in '${absoluteSource}'; ` +
+    `this machine will publish no '${destination}' state - check the profile positional matches this machine`
+  );
+}
+
 function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFilesOptions = {}): LocalSyncFile[] {
   const results: LocalSyncFile[] = [];
   const ownerFileName = options.ownerFilter && config.profile ? `${config.profile}.json` : null;
@@ -108,8 +127,7 @@ function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFiles
         const peerFiles = walkFiles(absoluteSource);
         if (peerFiles.length > 0 && options.warnings) {
           options.warnings.push(
-            `profile '${config.profile}': own file '${ownerFileName}' not found among ${peerFiles.length} file(s) in '${absoluteSource}'; ` +
-              `this machine will publish no '${destination}' state — check the profile positional matches this machine`
+            ownerMismatchNote(config.profile, ownerFileName, peerFiles.length, absoluteSource, destination)
           );
         }
       }
@@ -404,6 +422,7 @@ module.exports = {
   filterUnmappedBaseMap,
   mapRemotePathToLocalAbsolute,
   normalizeRemoteRelativePath,
+  ownerMismatchNote,
   resolveSyncPathEntries,
   toRepositoryRelativePath
 };

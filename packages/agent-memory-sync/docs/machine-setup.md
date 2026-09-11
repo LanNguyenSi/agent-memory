@@ -485,10 +485,12 @@ machine's file — this makes *content* conflicts on this path structurally
 impossible (`inline-markers` conflict resolution is never invoked here in
 practice, unlike the `memory` tree where concurrent edits are expected).
 In practice stale inline markers did once reach a peer's file on this path
-regardless, an incident recorded in `CHANGELOG.md`'s `[Unreleased]` entry
-(not repeated here). Since that fix, `pull` mirrors a peer's file here from
-the remote unconditionally instead of 3-way merging it, which is what
-keeps a peer's stale local markers from ever winning again.
+regardless, an incident whose class is recorded in `CHANGELOG.md`'s
+`[Unreleased]` entry, with the dated base/local/remote triple in the run
+files under `.ai/runs/2026-09-11-sync-peer-file-conflict`. Since that fix,
+`pull` mirrors a peer's file here from the remote unconditionally instead
+of 3-way merging it, which is what keeps a peer's stale local markers from
+ever winning again.
 Only `<profile>.json` belongs in `~/.harness/machine-state`, and never any
 secret: the whole directory is synced into a shared, committed remote, so
 every file dropped there ends up in git history on every peer. The consumer

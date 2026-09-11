@@ -367,6 +367,173 @@ test("D-002: a profile positional that does not match this machine's own file ge
   );
 });
 
+test("D-002: profile mismatch overwrite shape - the mismatched own file is mirrored from the remote as a peer file, and the note still fires exactly once", () => {
+  const root = createSandbox("stale-marker-note-profile-mismatch-overwrite");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "config.json");
+  const machineStateSource = path.join(root, "harness-state");
+
+  writeProjectConfig(
+    configPath,
+    ownerScopedPullConfig(
+      workspaceRoot,
+      remoteDir,
+      stateDir,
+      "wrong-profile",
+      machineStateSource,
+    ),
+  );
+
+  // Seed base == remote == v1 for mac-mini.json under the CORRECT profile
+  // positional first, so the base store carries a snapshot for it.
+  const peerSeed = path.join(root, "peer-seed");
+  git(["clone", remoteDir, peerSeed], root);
+  git(["config", "user.name", "peer"], peerSeed);
+  git(["config", "user.email", "peer@example.invalid"], peerSeed);
+  writeText(
+    path.join(peerSeed, "shared", "machine-state", "mac-mini.json"),
+    "v1\n",
+  );
+  git(["add", "."], peerSeed);
+  git(["commit", "-m", "seed mac-mini.json"], peerSeed);
+  git(["push", "origin", "HEAD:main"], peerSeed);
+
+  const seed = runCli([
+    "run",
+    "mac-mini",
+    "--config",
+    configPath,
+    "--mode",
+    "pull",
+    "--output",
+    "json",
+  ]);
+  assert.ok(
+    JSON.parse(seed.stdout).runs[0].appliedFiles.includes(
+      "machine-state/mac-mini.json",
+    ),
+  );
+  assert.equal(
+    readText(path.join(machineStateSource, "mac-mini.json")),
+    "v1\n",
+  );
+
+  // The hub moves on ...
+  const peerUpdate = path.join(root, "peer-update");
+  git(["clone", remoteDir, peerUpdate], root);
+  git(["config", "user.name", "peer"], peerUpdate);
+  git(["config", "user.email", "peer@example.invalid"], peerUpdate);
+  writeText(
+    path.join(peerUpdate, "shared", "machine-state", "mac-mini.json"),
+    "v2 from hub\n",
+  );
+  git(["add", "."], peerUpdate);
+  git(["commit", "-m", "hub updates mac-mini.json"], peerUpdate);
+  git(["push", "origin", "HEAD:main"], peerUpdate);
+
+  // ... and, independently, local also diverges.
+  writeText(
+    path.join(machineStateSource, "mac-mini.json"),
+    "v3 stale local content\n",
+  );
+
+  // Now pull under the MISMATCHED profile positional: mac-mini.json reads
+  // as a peer file (wrong-profile.json is the expected own filename), so
+  // the AC-002 mirror rule overwrites it from the remote instead of 3-way
+  // merging the local divergence.
+  const pull = runCli([
+    "run",
+    "wrong-profile",
+    "--config",
+    configPath,
+    "--mode",
+    "pull",
+    "--output",
+    "json",
+  ]);
+  const payload = JSON.parse(pull.stdout).runs[0];
+
+  assert.equal(
+    readText(path.join(machineStateSource, "mac-mini.json")),
+    "v2 from hub\n",
+    "the mismatched own file, now classified as a peer file, is mirrored from the remote",
+  );
+  assert.ok(
+    payload.appliedFiles.includes("machine-state/mac-mini.json"),
+    `expected machine-state/mac-mini.json in appliedFiles: ${JSON.stringify(payload.appliedFiles)}`,
+  );
+
+  const expectedMismatchNote =
+    "profile 'wrong-profile': own file 'wrong-profile.json' not found among 1 file(s) in " +
+    `'${machineStateSource}'; this machine will publish no 'machine-state' state - check the profile positional matches this machine`;
+  const matchingNotes = (payload.notes || []).filter(
+    (note: string) => note === expectedMismatchNote,
+  );
+  assert.equal(
+    matchingNotes.length,
+    1,
+    `expected exactly one mismatch note despite the file being mirrored: ${JSON.stringify(payload.notes)}`,
+  );
+});
+
+test("D-006: --mode sync reports the profile-mismatch note exactly once (pull's and push's own copies must share text, not just meaning)", () => {
+  const root = createSandbox("stale-marker-note-sync-mismatch-dedupe");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "config.json");
+  const machineStateSource = path.join(root, "harness-state");
+
+  writeProjectConfig(
+    configPath,
+    ownerScopedPullConfig(
+      workspaceRoot,
+      remoteDir,
+      stateDir,
+      "wrong-profile",
+      machineStateSource,
+    ),
+  );
+
+  mkdirSync(machineStateSource, { recursive: true });
+  writeText(
+    path.join(machineStateSource, "mac-mini.json"),
+    "this machine's own content\n",
+  );
+
+  const expectedNote =
+    "profile 'wrong-profile': own file 'wrong-profile.json' not found among 1 file(s) in " +
+    `'${machineStateSource}'; this machine will publish no 'machine-state' state - check the profile positional matches this machine`;
+
+  const syncResult = runCli([
+    "run",
+    "wrong-profile",
+    "--config",
+    configPath,
+    "--mode",
+    "sync",
+    "--output",
+    "json",
+  ]);
+  const payload = JSON.parse(syncResult.stdout).runs[0];
+
+  const anyWording = (payload.notes || []).filter((note: string) =>
+    note.includes("own file 'wrong-profile.json' not found among 1 file(s)"),
+  );
+  assert.equal(
+    anyWording.length,
+    1,
+    `expected exactly one profile-mismatch note in the combined sync payload, whatever its wording (pull's loop and push's warning must not each contribute their own copy): ${JSON.stringify(payload.notes)}`,
+  );
+  assert.equal(
+    anyWording[0],
+    expectedNote,
+    `expected the single surviving note to use the shared (hyphen) wording, not an em-dash variant: ${JSON.stringify(payload.notes)}`,
+  );
+});
+
 test("D-003: a base-less protected peer file left with stale markers gets the peer-specific note", () => {
   const root = createSandbox("stale-marker-note-peer-protected");
   const remoteDir = initBareRemote(root);

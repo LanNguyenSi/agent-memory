@@ -5,6 +5,7 @@ const {
   filterUnmappedBaseMap,
   mapRemotePathToLocalAbsolute,
   normalizeRemoteRelativePath,
+  ownerMismatchNote,
   resolveSyncPathEntries
 } = require("./config");
 const { GitClient } = require("./git-client");
@@ -174,9 +175,10 @@ async function performPull(config: PullConfig, options: PullOptions) {
       continue;
     }
 
-    // AC-002 mirror rule (task e104c9f2, pandora run
-    // .ai/runs/2026-09-11-sync-peer-file-conflict; incident record and dates
-    // are in CHANGELOG.md's [Unreleased] entry, not repeated here): a peer's
+    // AC-002 mirror rule (task e104c9f2; the incident class is recorded in
+    // CHANGELOG.md's [Unreleased] entry, and the dated base/local/remote
+    // triple is in the run files under
+    // .ai/runs/2026-09-11-sync-peer-file-conflict): a peer's
     // file inside an ownerScoped directory destination is never this
     // machine's own state, so a 3-way merge over it (and the inline-markers
     // fallback that comes with one) is the wrong operation. This machine
@@ -305,8 +307,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
     ).length;
     if (peerFileCount > 0) {
       notes.push(
-        `profile '${config.profile}': own file '${ownerFileName}' not found among ${peerFileCount} file(s) in '${entry.absoluteSource}'; ` +
-          `this machine will publish no '${entry.destination}' state - check the profile positional matches this machine`
+        ownerMismatchNote(config.profile, ownerFileName, peerFileCount, entry.absoluteSource, entry.destination)
       );
     }
   }

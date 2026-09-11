@@ -544,4 +544,41 @@ test("AC-002/D-001: a peer file whose remote content itself carries conflict mar
     payload.conflictFiles.includes("machine-state/linux.json"),
     `a markered remote peer file must be reported as a conflict, not conflicts=0: ${JSON.stringify(payload.conflictFiles)}`,
   );
+
+  // D-003 shape (1) (05-review-findings.md round 2): a second pull with
+  // nothing else changing (base == remote == local, all markered) must
+  // leave the file untouched (nothing left to mirror) while still naming
+  // it, once, as an unresolved peer file, not report a silent conflicts=0.
+  const secondPull = runCli([
+    "run",
+    "mac-mini",
+    "--config",
+    configPath,
+    "--mode",
+    "pull",
+    "--output",
+    "json",
+  ]);
+  const secondPayload = JSON.parse(secondPull.stdout).runs[0];
+
+  assert.deepEqual(
+    secondPayload.appliedFiles,
+    [],
+    `a second, no-op pull must apply nothing: ${JSON.stringify(secondPayload.appliedFiles)}`,
+  );
+  assert.deepEqual(
+    secondPayload.conflictFiles,
+    [],
+    `a second, no-op pull must not re-report a conflict for content it never re-mirrors: ${JSON.stringify(secondPayload.conflictFiles)}`,
+  );
+  const staleNotes = (secondPayload.notes || []).filter(
+    (note: string) =>
+      note ===
+      "stale conflict markers in machine-state/linux.json; the remote owns this file, fix it at the hub or restore --from-commit",
+  );
+  assert.equal(
+    staleNotes.length,
+    1,
+    `expected exactly one peer-specific stale-marker note on the second pull: ${JSON.stringify(secondPayload.notes)}`,
+  );
 });
