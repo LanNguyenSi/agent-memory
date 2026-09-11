@@ -9,6 +9,7 @@ const {
   RemoteUnavailableError,
   formatErrorMessage
 } = require("../errors");
+const { acquireStateDirLock } = require("../memory-sync/lock");
 const { performPull } = require("../memory-sync/pull");
 const { performPush } = require("../memory-sync/push");
 const { summarizeOperation } = require("../memory-sync/preview");
@@ -119,6 +120,18 @@ function registerRunCommand(program: import("commander").Command): void {
           writeDryRun(`executing ${runConfig.mode} for profile '${runConfig.profile}'`, outputOptions);
         }
 
+        // Taken before anything reads or writes rootDir, the base snapshots,
+        // the queue or a working copy under stateDir/tmp, and released again
+        // between scheduled ticks rather than held across the sleep: a run
+        // that cannot have the lock has to leave all of them untouched, and
+        // a scheduled run must not lock out the watch job while it waits for
+        // its next tick. See src/memory-sync/lock.ts.
+        const lock = acquireStateDirLock({
+          stateDir: runConfig.stateDir,
+          command: `run --mode ${runConfig.mode}${options.dryRun ? " --dry-run" : ""}`,
+          staleMs: runConfig.lockStaleMs
+        });
+
         let execution: Record<string, unknown>;
         try {
           execution = await executeMode(
@@ -160,6 +173,8 @@ function registerRunCommand(program: import("commander").Command): void {
             queuedSnapshotId: null,
             notes: [formatErrorMessage(error)]
           };
+        } finally {
+          lock.release();
         }
 
         runs.push(execution);

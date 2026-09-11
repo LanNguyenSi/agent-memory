@@ -9,7 +9,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { mkdirSync, readdirSync, readFileSync, writeFileSync } = require("node:fs");
+const { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { StateStore } = require("../../src/memory-sync/state-store");
@@ -111,4 +111,30 @@ test("oldestQueuedSnapshotAgeMs: clears back to null after removeQueuedSnapshot 
 
   store.removeQueuedSnapshot(id);
   assert.equal(store.oldestQueuedSnapshotAgeMs(), null);
+});
+
+// The 2026-09-11 wipe began with StateStore.clearTemp() removing the WHOLE
+// stateDir/tmp tree while a concurrent run held a checked-out working copy
+// under it (agent-tasks cda5b12c, pandora run
+// .ai/runs/2026-09-11-memory-sync-wipe). A caller may only clear the subtree
+// it created.
+test("clearTemp removes only the caller's own label", () => {
+  const root = sandbox("clear-temp-scope");
+  const store = new StateStore(root, "default");
+  store.ensure();
+
+  const pullRepo = path.join(store.tempDir(), "pull", "repo");
+  const watchRepo = path.join(store.tempDir(), "watch", "repo");
+  mkdirSync(pullRepo, { recursive: true });
+  mkdirSync(watchRepo, { recursive: true });
+  writeFileSync(path.join(pullRepo, "MEMORY.md"), "pull copy\n", "utf8");
+  writeFileSync(path.join(watchRepo, "MEMORY.md"), "watch copy\n", "utf8");
+
+  store.clearTemp("pull");
+
+  assert.equal(existsSync(path.join(store.tempDir(), "pull")), false);
+  assert.equal(readFileSync(path.join(watchRepo, "MEMORY.md"), "utf8"), "watch copy\n");
+  // The tmp root itself survives, so a concurrent caller's next
+  // createTempRepoDir does not race a missing parent.
+  assert.equal(existsSync(store.tempDir()), true);
 });

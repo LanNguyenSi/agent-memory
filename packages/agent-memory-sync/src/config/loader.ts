@@ -5,6 +5,7 @@ const { CliError } = require("../errors");
 const { DEFAULT_REACHABILITY_TIMEOUT_MS } = require("../memory-sync/reachability");
 const { DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("../memory-sync/state-store");
 const { DEFAULT_MASS_DELETE_GUARD } = require("../memory-sync/guards");
+const { DEFAULT_LOCK_STALE_MS } = require("../memory-sync/lock");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -50,6 +51,10 @@ interface UserConfig {
   // key it omits, so a profile can tighten one rule without restating the
   // other.
   massDeleteGuard?: MassDeleteGuardConfig | null;
+  // How long the stateDir advisory lock (src/memory-sync/lock.ts) may sit
+  // before a later run treats it as abandoned and takes it over. See
+  // DEFAULT_LOCK_STALE_MS for how the default is sized.
+  lockStaleMs?: number;
 }
 
 interface MassDeleteGuardConfig {
@@ -82,6 +87,7 @@ interface RunConfig extends UserConfig {
   reachabilityCheckCommand: string[] | null;
   queueEscalationThresholdMs: number | null;
   massDeleteGuard: Required<MassDeleteGuardConfig>;
+  lockStaleMs: number;
 }
 
 interface RunConfigOverrides {
@@ -104,6 +110,7 @@ interface RunConfigOverrides {
   reachabilityCheckCommand?: string[] | null;
   queueEscalationThresholdMs?: number | null;
   massDeleteGuard?: MassDeleteGuardConfig | null;
+  lockStaleMs?: number;
 }
 
 const DEFAULT_SYNC_PATHS: SyncPathConfig[] = [
@@ -127,7 +134,8 @@ const DEFAULTS: Omit<RunConfig, "repositorySubdir" | "stateDir" | "remoteUrl" | 
   reachabilityTimeoutMs: DEFAULT_REACHABILITY_TIMEOUT_MS,
   reachabilityCheckCommand: null,
   queueEscalationThresholdMs: DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS,
-  massDeleteGuard: DEFAULT_MASS_DELETE_GUARD
+  massDeleteGuard: DEFAULT_MASS_DELETE_GUARD,
+  lockStaleMs: DEFAULT_LOCK_STALE_MS
 };
 
 function defaultConfigPath(): string {
@@ -193,7 +201,8 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
     ),
     reachabilityCheckCommand: normalizeReachabilityCheckCommand(merged.reachabilityCheckCommand),
     queueEscalationThresholdMs: validateQueueEscalationThresholdMs(merged.queueEscalationThresholdMs),
-    massDeleteGuard: normalizeMassDeleteGuard(merged.massDeleteGuard)
+    massDeleteGuard: normalizeMassDeleteGuard(merged.massDeleteGuard),
+    lockStaleMs: validatePositiveInteger(merged.lockStaleMs, "lockStaleMs", DEFAULT_LOCK_STALE_MS)
   };
 }
 
@@ -267,7 +276,8 @@ function listConfigKeys(): string[] {
     "reachabilityTimeoutMs",
     "reachabilityCheckCommand",
     "queueEscalationThresholdMs",
-    "massDeleteGuard"
+    "massDeleteGuard",
+    "lockStaleMs"
   ];
 }
 
@@ -342,6 +352,13 @@ function readEnvConfig(): UserConfig {
       Number(env.AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS),
       "AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS",
       DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS
+    );
+  }
+  if (env.AGENT_MEMORY_SYNC_LOCK_STALE_MS) {
+    config.lockStaleMs = validatePositiveInteger(
+      Number(env.AGENT_MEMORY_SYNC_LOCK_STALE_MS),
+      "AGENT_MEMORY_SYNC_LOCK_STALE_MS",
+      DEFAULT_LOCK_STALE_MS
     );
   }
   if (env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND) {
@@ -433,7 +450,9 @@ function normalizeUserConfig(raw: Record<string, unknown>): UserConfig {
     queue_escalation_threshold_ms: "queueEscalationThresholdMs",
     queueEscalationThresholdMs: "queueEscalationThresholdMs",
     mass_delete_guard: "massDeleteGuard",
-    massDeleteGuard: "massDeleteGuard"
+    massDeleteGuard: "massDeleteGuard",
+    lock_stale_ms: "lockStaleMs",
+    lockStaleMs: "lockStaleMs"
   };
 
   for (const [key, value] of Object.entries(raw)) {
@@ -621,6 +640,8 @@ function parseConfigValue(key: string, value: string): unknown {
       return validateConflictStrategy(value as ConflictStrategy);
     case "reachabilityTimeoutMs":
       return validatePositiveInteger(Number(value), "reachabilityTimeoutMs", DEFAULT_REACHABILITY_TIMEOUT_MS);
+    case "lockStaleMs":
+      return validatePositiveInteger(Number(value), "lockStaleMs", DEFAULT_LOCK_STALE_MS);
     case "queueEscalationThresholdMs":
       return value === "null"
         ? null

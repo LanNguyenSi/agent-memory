@@ -5,7 +5,13 @@ const {
   requireRemoteUrl,
   resolveRunConfig
 } = require("../config/loader");
-const { CliError, MassDeleteRefusedError, UnreliableCheckoutError } = require("../errors");
+const {
+  CliError,
+  MassDeleteRefusedError,
+  StateDirLockedError,
+  UnreliableCheckoutError
+} = require("../errors");
+const { acquireStateDirLock } = require("../memory-sync/lock");
 const { buildCommitMessage } = require("../memory-sync/snapshot");
 const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
@@ -197,11 +203,40 @@ function registerWatchCommand(program: import("commander").Command): void {
         if (shouldExit) {
           return;
         }
-        const message = takePendingMessage();
-        if (!message) {
+        if (pendingChanges.size === 0 && pendingDeletes.size === 0) {
           return;
         }
+
+        // Taken BEFORE the pending changes are consumed, so a tick that
+        // cannot have the lock leaves them pending and reschedules instead
+        // of swallowing them: they would otherwise sit unpushed until the
+        // next unrelated edit. The whole tick runs under the lock, including
+        // the push's own commit, which is the window the sync job used to be
+        // free to wipe (see src/memory-sync/lock.ts).
+        let lock: { release: () => void };
         try {
+          lock = acquireStateDirLock({
+            stateDir: runConfig.stateDir,
+            command: "watch",
+            staleMs: runConfig.lockStaleMs
+          });
+        } catch (error) {
+          if (!(error instanceof StateDirLockedError)) {
+            handleSnapshotError(error);
+            await maybeShutdown();
+            return;
+          }
+
+          writeWarning(`watch tick deferred: ${(error as Error).message}`, outputOptions);
+          scheduleFlush();
+          return;
+        }
+
+        try {
+          const message = takePendingMessage();
+          if (!message) {
+            return;
+          }
           await pushSnapshot(message);
         } catch (error) {
           // A refused deletion plan or an unreliable working copy
@@ -221,6 +256,8 @@ function registerWatchCommand(program: import("commander").Command): void {
           }
 
           writeWarning(`watch tick refused: ${(error as Error).message}`, outputOptions);
+        } finally {
+          lock.release();
         }
 
         // Counts every tick that completed a pushSnapshot() call, whether
@@ -277,21 +314,46 @@ function registerWatchCommand(program: import("commander").Command): void {
         }
         workChain = workChain
           .then(async () => {
-            const finalMessage = takePendingMessage();
-            if (finalMessage) {
-              try {
-                await pushSnapshot(finalMessage);
-              } catch (error) {
-                // Same treatment as a refused tick above: a guard refusal on
-                // the final flush is a decision about the pending snapshot,
-                // not a watcher failure, so it must not turn a clean
-                // SIGINT/SIGTERM shutdown into a non-zero exit.
-                if (isGuardRefusal(error)) {
-                  writeWarning(`watch tick refused: ${(error as Error).message}`, outputOptions);
-                } else {
-                  handleSnapshotError(error);
+            // The shutdown flush is a tick like any other and takes the same
+            // lock. A lock it cannot have leaves the pending edits on disk,
+            // where the next watch start or the next periodic run picks them
+            // up: it is never a reason to fail a clean shutdown.
+            let lock: { release: () => void };
+            try {
+              lock = acquireStateDirLock({
+                stateDir: runConfig.stateDir,
+                command: "watch (shutdown flush)",
+                staleMs: runConfig.lockStaleMs
+              });
+            } catch (error) {
+              if (error instanceof StateDirLockedError) {
+                writeWarning(`watch shutdown flush deferred: ${(error as Error).message}`, outputOptions);
+              } else {
+                handleSnapshotError(error);
+              }
+              await maybeShutdown();
+              return;
+            }
+
+            try {
+              const finalMessage = takePendingMessage();
+              if (finalMessage) {
+                try {
+                  await pushSnapshot(finalMessage);
+                } catch (error) {
+                  // Same treatment as a refused tick above: a guard refusal on
+                  // the final flush is a decision about the pending snapshot,
+                  // not a watcher failure, so it must not turn a clean
+                  // SIGINT/SIGTERM shutdown into a non-zero exit.
+                  if (isGuardRefusal(error)) {
+                    writeWarning(`watch tick refused: ${(error as Error).message}`, outputOptions);
+                  } else {
+                    handleSnapshotError(error);
+                  }
                 }
               }
+            } finally {
+              lock.release();
             }
             await maybeShutdown();
           })

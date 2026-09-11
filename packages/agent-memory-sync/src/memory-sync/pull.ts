@@ -13,6 +13,11 @@ const { mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore } = require("./state-store");
 
+// The label of pull's own working copy under stateDir/tmp. Named once so
+// the directory this run creates and the directory it clears afterwards
+// cannot drift apart (see StateStore.clearTemp).
+const PULL_TEMP_LABEL = "pull";
+
 interface PullOptions {
   dryRun: boolean;
   // Deliberately no allowMassDelete (D-004, D-008): --allow-mass-delete is
@@ -73,7 +78,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const workingCopy = gitClient.prepareWorkingCopy(
     config.remoteUrl,
     config.branch,
-    gitClient.createTempRepoDir(config.stateDir, "pull")
+    gitClient.createTempRepoDir(config.stateDir, PULL_TEMP_LABEL)
   );
 
   const localFiles = collectLocalSyncFiles(config);
@@ -226,7 +231,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
     // the remote as a false "local wins".
     stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, remoteMap));
     stateStore.saveState(state);
-    stateStore.clearTemp();
+    stateStore.clearTemp(PULL_TEMP_LABEL);
 
     return {
       kind: "pull",

@@ -6,6 +6,7 @@ const {
   resolveRunConfig
 } = require("../config/loader");
 const { CliError } = require("../errors");
+const { acquireStateDirLock } = require("../memory-sync/lock");
 const { mapRemotePathToLocalAbsolute } = require("../memory-sync/config");
 const { GitClient } = require("../memory-sync/git-client");
 const { writeDryRun, writeInfo, writeResult } = require("../output");
@@ -82,94 +83,108 @@ function registerRestoreCommand(program: import("commander").Command): void {
         verbose: runConfig.verbose
       };
 
-      const gitClient = new GitClient(runConfig.gitBinary);
-      const workingCopy = gitClient.prepareWorkingCopy(
-        runConfig.remoteUrl,
-        runConfig.branch,
-        gitClient.createTempRepoDir(runConfig.stateDir, "restore")
-      );
+      // restore writes into the same workspace a sync or watch tick reads,
+      // and checks out into the same stateDir/tmp they use, so it takes the
+      // same advisory lock they do (src/memory-sync/lock.ts). A recovery
+      // command racing a tick is the one race this package must not have.
+      const lock = acquireStateDirLock({
+        stateDir: runConfig.stateDir,
+        command: "restore",
+        staleMs: runConfig.lockStaleMs
+      });
 
-      // Skip the network-only fetchRef path entirely when `sha` (full or
-      // abbreviated) already resolves against objects prepareWorkingCopy
-      // just fetched (the whole branch history) — this is what makes an
-      // abbreviated sha work at all, since fetchRef's own `git fetch origin
-      // <ref>` cannot resolve one against the remote (see git-client.ts).
-      // Capture the resolved FULL sha and use it for every subsequent git
-      // call and in the reported payload below, instead of re-resolving the
-      // (possibly abbreviated) `sha` the operator typed on every call and
-      // reporting the abbreviation rather than the commit actually restored
-      // from. `|| sha` is a defensive fallback for the practically-unreachable
-      // case where fetchRef succeeds but the ref still doesn't resolve
-      // locally afterwards (e.g. it named a non-commit object) — preserves
-      // this file's prior behavior (operate on the as-typed ref) rather than
-      // introducing a new failure mode for that corner.
-      let resolvedSha = gitClient.resolveLocalCommit(workingCopy.repoDir, sha);
-      if (!resolvedSha) {
-        gitClient.fetchRef(workingCopy.repoDir, sha);
-        resolvedSha = gitClient.resolveLocalCommit(workingCopy.repoDir, sha) || sha;
-      }
-
-      const targetRepoPaths = options.path
-        ? [normalizeRequestedPath(runConfig.repositorySubdir, options.path)]
-        : gitClient
-            .listTreePaths(workingCopy.repoDir, resolvedSha, runConfig.repositorySubdir)
-            .filter((p: string) => p.startsWith(`${runConfig.repositorySubdir}/`));
-
-      if (targetRepoPaths.length === 0) {
-        throw new CliError(
-          `no files to restore at ${sha}${options.path ? ` for path '${options.path}'` : ""} under '${runConfig.repositorySubdir}/'.`,
-          5
+      try {
+        const gitClient = new GitClient(runConfig.gitBinary);
+        const workingCopy = gitClient.prepareWorkingCopy(
+          runConfig.remoteUrl,
+          runConfig.branch,
+          gitClient.createTempRepoDir(runConfig.stateDir, "restore")
         );
-      }
 
-      const restored: Array<{ remoteRelativePath: string; absoluteLocalPath: string; bytes: number }> = [];
-
-      for (const repoRelativePath of targetRepoPaths) {
-        const remoteRelativePath = repoRelativePath.slice(runConfig.repositorySubdir.length + 1);
-        const absoluteLocalPath = mapRemotePathToLocalAbsolute(runConfig, remoteRelativePath);
-        if (!absoluteLocalPath) {
-          throw new CliError(
-            `cannot map remote path '${remoteRelativePath}' to a local sync target. Update syncPaths or use --path.`,
-            3
-          );
+        // Skip the network-only fetchRef path entirely when `sha` (full or
+        // abbreviated) already resolves against objects prepareWorkingCopy
+        // just fetched (the whole branch history). That is what makes an
+        // abbreviated sha work at all, since fetchRef's own `git fetch origin
+        // <ref>` cannot resolve one against the remote (see git-client.ts).
+        // Capture the resolved FULL sha and use it for every subsequent git
+        // call and in the reported payload below, instead of re-resolving the
+        // (possibly abbreviated) `sha` the operator typed on every call and
+        // reporting the abbreviation rather than the commit actually restored
+        // from. `|| sha` is a defensive fallback for the practically-unreachable
+        // case where fetchRef succeeds but the ref still doesn't resolve
+        // locally afterwards (e.g. it named a non-commit object): it keeps
+        // this file's prior behavior (operate on the as-typed ref) rather than
+        // introducing a new failure mode for that corner.
+        let resolvedSha = gitClient.resolveLocalCommit(workingCopy.repoDir, sha);
+        if (!resolvedSha) {
+          gitClient.fetchRef(workingCopy.repoDir, sha);
+          resolvedSha = gitClient.resolveLocalCommit(workingCopy.repoDir, sha) || sha;
         }
 
-        const content = gitClient.showAtRef(workingCopy.repoDir, resolvedSha, repoRelativePath);
-        if (content === null) {
+        const targetRepoPaths = options.path
+          ? [normalizeRequestedPath(runConfig.repositorySubdir, options.path)]
+          : gitClient
+              .listTreePaths(workingCopy.repoDir, resolvedSha, runConfig.repositorySubdir)
+              .filter((p: string) => p.startsWith(`${runConfig.repositorySubdir}/`));
+
+        if (targetRepoPaths.length === 0) {
           throw new CliError(
-            `file '${repoRelativePath}' does not exist at ${sha}.`,
+            `no files to restore at ${sha}${options.path ? ` for path '${options.path}'` : ""} under '${runConfig.repositorySubdir}/'.`,
             5
           );
         }
 
-        if (options.dryRun) {
-          writeDryRun(`would restore ${remoteRelativePath} -> ${absoluteLocalPath} (${content.length} bytes)`, outputOptions);
-        } else {
-          mkdirSync(path.dirname(absoluteLocalPath), { recursive: true });
-          writeFileSync(absoluteLocalPath, content, "utf8");
-          writeInfo(`restored ${remoteRelativePath} -> ${absoluteLocalPath}`, outputOptions);
+        const restored: Array<{ remoteRelativePath: string; absoluteLocalPath: string; bytes: number }> = [];
+
+        for (const repoRelativePath of targetRepoPaths) {
+          const remoteRelativePath = repoRelativePath.slice(runConfig.repositorySubdir.length + 1);
+          const absoluteLocalPath = mapRemotePathToLocalAbsolute(runConfig, remoteRelativePath);
+          if (!absoluteLocalPath) {
+            throw new CliError(
+              `cannot map remote path '${remoteRelativePath}' to a local sync target. Update syncPaths or use --path.`,
+              3
+            );
+          }
+
+          const content = gitClient.showAtRef(workingCopy.repoDir, resolvedSha, repoRelativePath);
+          if (content === null) {
+            throw new CliError(
+              `file '${repoRelativePath}' does not exist at ${sha}.`,
+              5
+            );
+          }
+
+          if (options.dryRun) {
+            writeDryRun(`would restore ${remoteRelativePath} -> ${absoluteLocalPath} (${content.length} bytes)`, outputOptions);
+          } else {
+            mkdirSync(path.dirname(absoluteLocalPath), { recursive: true });
+            writeFileSync(absoluteLocalPath, content, "utf8");
+            writeInfo(`restored ${remoteRelativePath} -> ${absoluteLocalPath}`, outputOptions);
+          }
+
+          restored.push({
+            remoteRelativePath,
+            absoluteLocalPath,
+            bytes: Buffer.byteLength(content, "utf8")
+          });
         }
 
-        restored.push({
-          remoteRelativePath,
-          absoluteLocalPath,
-          bytes: Buffer.byteLength(content, "utf8")
-        });
+        const payload = {
+          command: "restore",
+          sha: resolvedSha,
+          dryRun: options.dryRun,
+          repositorySubdir: runConfig.repositorySubdir,
+          restored
+        };
+
+        writeResult(payload, runConfig.outputFormat, () =>
+          restored
+            .map((entry) => `${options.dryRun ? "[dry-run] " : ""}${entry.remoteRelativePath}`)
+            .join("\n")
+        );
+      } finally {
+        lock.release();
       }
-
-      const payload = {
-        command: "restore",
-        sha: resolvedSha,
-        dryRun: options.dryRun,
-        repositorySubdir: runConfig.repositorySubdir,
-        restored
-      };
-
-      writeResult(payload, runConfig.outputFormat, () =>
-        restored
-          .map((entry) => `${options.dryRun ? "[dry-run] " : ""}${entry.remoteRelativePath}`)
-          .join("\n")
-      );
     });
 }
 

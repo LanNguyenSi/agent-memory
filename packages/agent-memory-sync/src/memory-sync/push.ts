@@ -287,7 +287,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // comment in config.ts for the full three-call-site writeup.
     stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, finalRemoteFiles));
     stateStore.saveState(state);
-    stateStore.clearTemp();
+    stateStore.clearTemp(options.tempDirLabel || "push");
 
     for (const queuedSnapshot of queuedSnapshots) {
       stateStore.removeQueuedSnapshot(queuedSnapshot.id);

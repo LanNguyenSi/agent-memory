@@ -95,6 +95,23 @@ class UnreliableCheckoutError extends CliError {
   }
 }
 
+// Thrown when another agent-memory-sync process already holds the advisory
+// lock on this stateDir (src/memory-sync/lock.ts). Exit code 8, distinct
+// from every other refusal so a launchd/systemd log tells "someone else is
+// working on this state directory right now" apart from a refused plan (5)
+// or an untrustworthy working copy (7).
+//
+// Not an error condition in the usual sense: the run stopped before reading
+// or writing anything, and the same invocation a moment later is expected to
+// succeed. `watch` treats it as a deferred tick and keeps watching rather
+// than shutting down.
+class StateDirLockedError extends CliError {
+  constructor(message: string, exitCode = 8) {
+    super(message, exitCode);
+    this.name = "StateDirLockedError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -113,6 +130,7 @@ module.exports = {
   RemoteQueueEscalationError,
   MassDeleteRefusedError,
   UnreliableCheckoutError,
+  StateDirLockedError,
   isCliError,
   formatErrorMessage
 };
