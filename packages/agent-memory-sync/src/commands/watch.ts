@@ -54,8 +54,8 @@ function registerWatchCommand(program: import("commander").Command): void {
     )
     .option(
       "--allow-mass-delete",
-      "Push a plan the mass-delete guard would refuse, and merge a working copy it considers unreliable " +
-        "(see massDeleteGuard in the config)",
+      "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
+        "override an unreliable checkout: a working copy that came back missing files is still refused",
       false
     )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
@@ -174,7 +174,12 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
 
-        if (result.appliedFiles.length === 0) {
+        // Gated on writes AND deletions, not on writes alone: a tick whose
+        // whole outcome is a deletion has no applied file to count, and used
+        // to report "no remote changes" while the remote really did shrink.
+        // The count is in the result line for the same reason.
+        const deletedCount = (result.deletedFiles || []).length;
+        if (result.appliedFiles.length === 0 && deletedCount === 0) {
           writeInfo("watch tick produced no remote changes", outputOptions);
           return;
         }
@@ -182,6 +187,7 @@ function registerWatchCommand(program: import("commander").Command): void {
         writeInfo(
           `pushed snapshot ${result.remoteHeadAfter ? result.remoteHeadAfter.slice(0, 7) : "?"} ` +
             `(${result.appliedFiles.length} file(s) applied` +
+            `${deletedCount ? `, ${deletedCount} deletion(s)` : ""}` +
             `${result.conflictFiles.length ? `, ${result.conflictFiles.length} conflict(s)` : ""})`,
           outputOptions
         );

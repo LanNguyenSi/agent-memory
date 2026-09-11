@@ -982,6 +982,13 @@ test("push --dry-run: an over-threshold plan is refused rather than previewed (A
   assert.match(result.stderr, /3 of 12/);
   assert.doesNotMatch(result.stdout, /"status": "dry-run"/);
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run"), 12);
+
+  // The preview's throwaway working copy is removed on the refusal path
+  // too, not only when the preview completes (R2 low).
+  assert.equal(
+    fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "tmp", "push-preview")),
+    false
+  );
 });
 
 // R1 medium, the reporting half: once a run really does remove paths, the
@@ -1030,4 +1037,166 @@ test("push: deletedFiles reports what the commit removed, not what the plan inte
   assert.ok(payload.runs[0].deletedFiles.includes("MEMORY.md"));
   assert.ok(payload.runs[0].deletedFiles.includes("logs/note-000.md"));
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-staged-reporting"), 0);
+});
+
+// git reports success for every subcommand, but `checkout` leaves the
+// working copy without the paths OUTSIDE the configured repositorySubdir.
+// That is the shape a shared remote has when a second tool (or a second
+// profile) keeps its own subtree next to this one: nothing the sync
+// destinations claim is missing, and `git add -A` still publishes every one
+// of those paths as a deletion.
+function writeStubGitWipingSiblingSubtree(root: string, siblingDir: string): string {
+  const stubPath = path.join(root, `stub-git-wipes-${siblingDir}.sh`);
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "checkout" ]; then',
+      '  git "$@" || exit $?',
+      `  rm -rf "$PWD/${siblingDir}"`,
+      "  exit 0",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+// A path no configured destination claims has no base denominator, so
+// neither per-destination rule can see it. Pre-fix the push dropped it from
+// the count entirely and published the whole sibling subtree's removal at
+// exit 0, silently.
+test("push: staged deletions outside the repository subdir are counted and refused (AC-003)", () => {
+  const root = createSandbox("outside-subdir-deletions");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stubConfigPath = path.join(root, "config-stub-git.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  seedLogFiles(workspaceRoot, 5);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // 50 files in a sibling subtree of 'shared/', owned by nothing this
+  // profile syncs.
+  const peerCheckout = cloneRemote(remoteDir, root, "peer-outside");
+  for (let index = 0; index < 50; index += 1) {
+    writeText(path.join(peerCheckout, "other", `file-${String(index).padStart(3, "0")}.md`), `other ${index}\n`);
+  }
+  git(["add", "."], peerCheckout);
+  git(["commit", "-m", "sibling subtree"], peerCheckout);
+  git(["push", "origin", "HEAD:main"], peerCheckout);
+
+  writeProjectConfig(stubConfigPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitWipingSiblingSubtree(root, "other")
+  });
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+  const result = runCli(
+    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
+  assert.match(result.stderr, /50 file\(s\)/);
+  assert.match(result.stderr, /50 outside 'shared\/'/);
+
+  // Nothing was published: the sibling subtree is still there, and so is
+  // the edit this run would otherwise have pushed.
+  const inspection = cloneRemote(remoteDir, root, "inspect-outside");
+  assert.equal(fs.readdirSync(path.join(inspection, "other")).length, 50);
+  assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "memory root\n");
+});
+
+// R2 medium (docs): the flag overrides the PLAN guard. It has never been an
+// answer to "the working copy this run fetched is not the remote", and the
+// help text said it was.
+test("run and watch help: --allow-mass-delete does not promise to merge an unreliable working copy", () => {
+  for (const command of ["run", "watch"]) {
+    const result = runCli([command, "--help"]);
+    const flattened = result.stdout.replace(/\s+/g, " ");
+
+    assert.match(flattened, /--allow-mass-delete/);
+    assert.doesNotMatch(flattened, /merge a working copy/);
+    assert.match(flattened, /does not override an unreliable checkout/);
+  }
+});
+
+// RV7 (R2 low): previewPush commits each snapshot into its throwaway working
+// copy, so snapshot N is measured against a HEAD that already carries
+// snapshot N-1. Without that commit the preview re-counts the earlier
+// snapshot's deletions and refuses a plan the real push accepts, which is
+// exactly backwards for the command an operator uses to check a plan first.
+test("push --dry-run: queued snapshots are measured one commit at a time (AC-003)", () => {
+  const root = createSandbox("dry-run-queued-replay");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const offlineConfigPath = path.join(root, "config-offline.json");
+
+  // maxRatio 1 switches the proportional rule off for this fixture, so the
+  // arithmetic under test is the absolute rule alone.
+  const guarded = { massDeleteGuard: { maxFiles: 20, maxRatio: 1 } };
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  const seeded = seedLogFiles(workspaceRoot, 100);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir, guarded));
+  writeProjectConfig(
+    offlineConfigPath,
+    createConfig(workspaceRoot, path.join(root, "absent-remote.git"), guarded)
+  );
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // Snapshot A: 12 deletions, queued because the remote is unreachable.
+  for (const relativePath of seeded.slice(0, 12)) {
+    fs.rmSync(path.join(workspaceRoot, relativePath));
+  }
+  const queuedA = runCli(
+    ["run", "default", "--config", offlineConfigPath, "--mode", "push", "--output", "json"]
+  );
+  assert.equal(JSON.parse(queuedA.stdout).runs[0].status, "queued");
+
+  // Snapshot B: the first batch is back byte-identical, a disjoint batch of
+  // 11 is gone instead.
+  for (let index = 0; index < 12; index += 1) {
+    writeText(path.join(workspaceRoot, seeded[index]), `entry ${index}\n`);
+  }
+  for (const relativePath of seeded.slice(12, 23)) {
+    fs.rmSync(path.join(workspaceRoot, relativePath));
+  }
+  const queuedB = runCli(
+    ["run", "default", "--config", offlineConfigPath, "--mode", "push", "--output", "json"]
+  );
+  assert.equal(JSON.parse(queuedB.stdout).runs[0].status, "queued");
+  assert.equal(fs.readdirSync(path.join(workspaceRoot, ".agent-memory-sync", "default", "queue")).length, 2);
+
+  // 12 and 11 are each under the limit of 20; 23 is not. The preview must
+  // measure them the way the real push does.
+  const result = runCli([
+    "run",
+    "default",
+    "--config",
+    configPath,
+    "--mode",
+    "push",
+    "--dry-run",
+    "--output",
+    "json"
+  ]);
+
+  assert.equal(result.status, 0, `expected a clean preview. stderr: ${result.stderr}`);
+  assert.equal(JSON.parse(result.stdout).runs[0].status, "dry-run");
+
+  // A preview publishes nothing and leaves no working copy behind.
+  assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run-queued"), 100);
+  assert.equal(
+    fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "tmp", "push-preview")),
+    false
+  );
 });

@@ -517,3 +517,33 @@ test("watch tick updates the local base snapshot to the post-merge remote conten
   assert.equal(readText(baseFile), "seed\nupdated\n");
   assert.equal(baseMeta.deleted, false);
 });
+
+// R2 medium: a tick whose only outcome is a deletion reported "watch tick
+// produced no remote changes" while the remote really did shrink, because
+// the report gated on appliedFiles alone and a deletion is never an applied
+// file. An operator reading a launchd log had no signal at all that the tick
+// removed anything.
+test("watch tick reports a delete-only tick as a deletion, not as no remote changes", async () => {
+  const root = createSandbox("watch-delete-only-report");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "base\n");
+  writeText(path.join(workspaceRoot, "logs", "mine.md"), "mine v1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const { exitCode, stderr } = await runWatchTick(configPath, () => {
+    fs.rmSync(path.join(workspaceRoot, "logs", "mine.md"));
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+
+  assert.doesNotMatch(stderr, /produced no remote changes/);
+  assert.match(stderr, /pushed snapshot [0-9a-f]{7} \(0 file\(s\) applied, 1 deletion\(s\)\)/);
+
+  const inspection = cloneRemote(remoteDir, root, "inspect-delete-only");
+  assert.equal(fileExists(path.join(inspection, "shared", "logs", "mine.md")), false);
+  assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "base\n");
+});

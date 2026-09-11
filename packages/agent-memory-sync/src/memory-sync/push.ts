@@ -1,4 +1,4 @@
-const { readdirSync } = require("node:fs");
+const { readdirSync, rmSync } = require("node:fs");
 const {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
@@ -255,13 +255,14 @@ async function performPush(config: PushConfig, options: PushOptions) {
       assertNoMassDelete({
         config,
         baseMap: snapshot.baseFiles,
-        deletedPaths: stagedDeletions,
+        deletedPaths: stagedDeletions.claimed,
+        unmappedDeletedPaths: stagedDeletions.unclaimed,
         allowMassDelete: options.allowMassDelete
       });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
-      deletedFiles.push(...stagedDeletions);
+      deletedFiles.push(...stagedDeletions.claimed);
       gitClient.commitAll(workingCopy.repoDir, snapshot.message);
     }
 
@@ -500,12 +501,20 @@ function previewPush(
   }>,
   options: { allowMassDelete?: boolean } = {}
 ) {
+  // Removed again in the finally below, on every exit: a completed preview,
+  // a refusal, and a preview that gave up on an unreachable remote all used
+  // to leave a full checkout (with commits in it, see the per-snapshot
+  // commit further down) sitting under stateDir/tmp until some later run
+  // happened to reuse the label.
+  let previewRepoDir: string | null = null;
+
   try {
     const gitClient = new GitClient(config.gitBinary);
+    previewRepoDir = gitClient.createTempRepoDir(config.stateDir, "push-preview");
     const workingCopy = gitClient.prepareWorkingCopy(
       config.remoteUrl,
       config.branch,
-      gitClient.createTempRepoDir(config.stateDir, "push-preview")
+      previewRepoDir
     );
 
     // Same two guards as the real push: a dry-run that quietly previews a
@@ -535,13 +544,14 @@ function previewPush(
       assertNoMassDelete({
         config,
         baseMap: snapshot.baseFiles,
-        deletedPaths: stagedDeletions,
+        deletedPaths: stagedDeletions.claimed,
+        unmappedDeletedPaths: stagedDeletions.unclaimed,
         allowMassDelete: options.allowMassDelete
       });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
-      deletedFiles.push(...stagedDeletions);
+      deletedFiles.push(...stagedDeletions.claimed);
       // Committed even though nothing here is ever pushed: this working copy
       // is a throwaway under stateDir/tmp/push-preview, and the staged
       // measurement above is taken against HEAD. Without a commit between
@@ -584,6 +594,10 @@ function previewPush(
       queuedSnapshotId: null,
       notes: ["remote unavailable; this run would enqueue a snapshot instead of pushing immediately"]
     };
+  } finally {
+    if (previewRepoDir) {
+      rmSync(previewRepoDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -664,26 +678,31 @@ function applySnapshotToWorkingCopy(
 // path the working copy lacks, whether the merge plan asked for it or not,
 // so the plan is not what gets committed and must not be what gets checked.
 //
-// A staged deletion outside repositorySubdir is not part of any configured
-// sync destination and is skipped here, the same way collectRemoteFiles
-// skips it when reading the remote tree.
+// A staged deletion outside repositorySubdir maps to no sync destination, so
+// it is returned separately, as a repository-relative path, rather than
+// dropped: the commit carries it whatever this profile claims to sync, and
+// the guard's plan-wide rule has to count it (see findMassDelete's
+// `unmappedDeletedPaths`). Only the per-destination rules cannot say anything
+// about it, since there is no base snapshot to be a share of.
 function collectStagedDeletions(
   config: { repositorySubdir: string },
   gitClient: InstanceType<typeof GitClient>,
   repoDir: string
-): string[] {
+): { claimed: string[]; unclaimed: string[] } {
   gitClient.stageAll(repoDir);
 
   const prefix = `${config.repositorySubdir}/`;
-  const deletions: string[] = [];
+  const claimed: string[] = [];
+  const unclaimed: string[] = [];
   for (const repoRelativePath of gitClient.listStagedDeletions(repoDir)) {
     if (!repoRelativePath.startsWith(prefix)) {
+      unclaimed.push(repoRelativePath);
       continue;
     }
-    deletions.push(repoRelativePath.slice(prefix.length));
+    claimed.push(repoRelativePath.slice(prefix.length));
   }
 
-  return deletions;
+  return { claimed, unclaimed };
 }
 
 function collectRemoteFiles(

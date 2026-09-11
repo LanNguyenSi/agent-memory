@@ -177,13 +177,20 @@ interface MassDeleteFinding {
 // three configured destinations, maxFiles refuses 21 deletions in one of
 // them and accepts 60 spread evenly across all three (R1 medium, D-007).
 // AC-003's text is unqualified about the count, so the total is checked too.
+//
+// `unmappedDeletedPaths` are staged deletions no configured destination
+// claims (a path outside repositorySubdir in the same remote repository).
+// They have no base denominator, so neither per-destination rule can say
+// anything about them, and `git add -A` publishes them exactly like any
+// other deletion. Only the absolute plan-wide rule applies to them.
 function findMassDelete(
   config: GuardConfig,
   baseMap: Record<string, string | null>,
   deletedPaths: string[],
-  guard: MassDeleteGuardConfig
+  guard: MassDeleteGuardConfig,
+  unmappedDeletedPaths: string[] = []
 ): MassDeleteFinding | null {
-  if (deletedPaths.length === 0) {
+  if (deletedPaths.length === 0 && unmappedDeletedPaths.length === 0) {
     return null;
   }
 
@@ -208,10 +215,11 @@ function findMassDelete(
     }
   }
 
-  // Only deletions that map to a configured destination count, the same way
-  // the per-destination rules above ignore an unmapped path: a path no
-  // syncPaths entry claims is not part of any tracked corpus.
-  let totalDeleted = 0;
+  // Two contributions: the deletions that map to a configured destination,
+  // and the ones no destination claims. The per-destination rules above can
+  // only see the first kind, since the second has no tracked denominator to
+  // be a share of, but the commit carries both.
+  let totalDeleted = unmappedDeletedPaths.length;
   for (const count of deletedCounts.values()) {
     totalDeleted += count;
   }
@@ -231,11 +239,19 @@ function formatPercent(value: number): string {
   return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(1)}%`;
 }
 
-function describeMassDelete(finding: MassDeleteFinding, guard: MassDeleteGuardConfig): string {
+function describeMassDelete(
+  finding: MassDeleteFinding,
+  guard: MassDeleteGuardConfig,
+  config: GuardConfig,
+  unmappedDeleted = 0
+): string {
   if (finding.rule === "total") {
+    const mapped = finding.deleted - unmappedDeleted;
+    const outside =
+      unmappedDeleted > 0 ? `, plus ${unmappedDeleted} outside '${config.repositorySubdir}/'` : "";
     return (
       `refusing to push a plan that deletes ${finding.deleted} file(s) across all sync destinations ` +
-      `(${finding.deleted} of ${finding.tracked} tracked), over the mass-delete limit of ` +
+      `(${mapped} of ${finding.tracked} tracked${outside}), over the mass-delete limit of ` +
       `${guard.maxFiles} file(s).`
     );
   }
@@ -272,20 +288,29 @@ function assertNoMassDelete(input: {
   config: GuardConfig;
   baseMap: Record<string, string | null>;
   deletedPaths: string[];
+  unmappedDeletedPaths?: string[];
   allowMassDelete?: boolean;
 }): void {
   if (input.allowMassDelete) {
     return;
   }
 
+  const unmappedDeletedPaths = input.unmappedDeletedPaths || [];
   const guard = resolveMassDeleteGuard(input.config.massDeleteGuard);
-  const finding = findMassDelete(input.config, input.baseMap, input.deletedPaths, guard);
+  const finding = findMassDelete(
+    input.config,
+    input.baseMap,
+    input.deletedPaths,
+    guard,
+    unmappedDeletedPaths
+  );
   if (!finding) {
     return;
   }
 
   throw new MassDeleteRefusedError(
-    `${describeMassDelete(finding, guard)} Nothing was pushed. If this deletion is intended, re-run with ` +
+    `${describeMassDelete(finding, guard, input.config, unmappedDeletedPaths.length)} Nothing was pushed. ` +
+      `If this deletion is intended, re-run with ` +
       `--allow-mass-delete; otherwise check whether the local workspace or the working copy was emptied by ` +
       `another process first.`
   );

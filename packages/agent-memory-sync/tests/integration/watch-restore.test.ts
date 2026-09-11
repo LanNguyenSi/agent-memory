@@ -110,8 +110,12 @@ test("watch produces a single-file commit message when only one path changed", a
   // writeInfo call to just before the (already-passing) result line would
   // still satisfy the assertion above without actually giving
   // withTickDeadline's inactivity mode a mid-tick signal to poll.
+  // The result line this tick must produce is the pushed-snapshot one: it
+  // edited exactly one file against a reachable remote. Accepting the
+  // queued or the no-changes line here would let a tick that silently
+  // stopped pushing satisfy the ordering assertion below (R2 medium).
   const pushStartIndex = stderr.indexOf("watch tick pushing snapshot");
-  const resultIndex = stderr.search(/pushed snapshot|watch tick queued locally|watch tick produced no remote changes/);
+  const resultIndex = stderr.search(/pushed snapshot [0-9a-f]{7} \(1 file\(s\) applied\)/);
   assert.ok(pushStartIndex >= 0, `push-start line missing from stderr: ${stderr}`);
   assert.ok(resultIndex >= 0, `result line missing from stderr: ${stderr}`);
   assert.ok(

@@ -494,3 +494,76 @@ test("assertReliableCheckout: allowMassDelete does not skip the check", () => {
     }
   );
 });
+
+// A staged deletion that no configured destination claims (a path outside
+// repositorySubdir in the same remote repository) has no base denominator,
+// so neither per-destination rule can see it, while `git add -A` publishes
+// it exactly like any other. Only the absolute plan-wide rule applies to it.
+function outsidePaths(count: number): string[] {
+  const result: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    result.push(`other/file-${String(index).padStart(3, "0")}.md`);
+  }
+  return result;
+}
+
+test("findMassDelete: deletions no destination claims count toward the plan-wide total", () => {
+  const guardConfig = config();
+  const baseMap = tracked("memory", 400);
+
+  // Nothing inside a configured destination is deleted at all, so the
+  // plan-wide total is the only rule that can fire here.
+  assert.deepEqual(findMassDelete(guardConfig, baseMap, [], DEFAULT_MASS_DELETE_GUARD, outsidePaths(50)), {
+    destination: null,
+    deleted: 50,
+    tracked: 400,
+    rule: "total"
+  });
+
+  // Negative control: exactly 20 is at the limit, not over it.
+  assert.equal(
+    findMassDelete(guardConfig, baseMap, [], DEFAULT_MASS_DELETE_GUARD, outsidePaths(20)),
+    null
+  );
+
+  // They add to the mapped deletions rather than replacing them: 15 inside
+  // 'memory' is acceptable on its own (under both per-destination rules) and
+  // 6 outside is acceptable on its own, 21 together is not.
+  assert.equal(
+    findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD),
+    null
+  );
+  assert.deepEqual(
+    findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD, outsidePaths(6)),
+    { destination: null, deleted: 21, tracked: 400, rule: "total" }
+  );
+});
+
+test("assertNoMassDelete: a refusal driven by unclaimed paths names them and where they are", () => {
+  assert.throws(
+    () =>
+      assertNoMassDelete({
+        config: config(),
+        baseMap: tracked("memory", 400),
+        deletedPaths: [],
+        unmappedDeletedPaths: outsidePaths(50)
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "MassDeleteRefusedError");
+      assert.equal(error.exitCode, 5);
+      assert.match(error.message, /50 file\(s\)/);
+      assert.match(error.message, /50 outside 'shared\/'/);
+      return true;
+    }
+  );
+});
+
+test("assertNoMassDelete: allowMassDelete also covers unclaimed paths", () => {
+  assertNoMassDelete({
+    config: config(),
+    baseMap: tracked("memory", 400),
+    deletedPaths: [],
+    unmappedDeletedPaths: outsidePaths(50),
+    allowMassDelete: true
+  });
+});

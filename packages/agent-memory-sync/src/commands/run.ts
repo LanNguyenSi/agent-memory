@@ -62,8 +62,8 @@ function registerRunCommand(program: import("commander").Command): void {
     )
     .option(
       "--allow-mass-delete",
-      "Apply a plan the mass-delete guard would refuse, and merge a working copy it considers unreliable " +
-        "(see massDeleteGuard in the config)",
+      "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
+        "override an unreliable checkout: a working copy that came back missing files is still refused",
       false
     )
     .option("--dry-run", "Preview without making changes", false)
