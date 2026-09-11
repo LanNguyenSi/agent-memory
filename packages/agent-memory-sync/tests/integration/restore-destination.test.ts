@@ -491,7 +491,7 @@ test("restore exits 10 when the named source has nothing to restore (AC-007)", (
   assert.equal(JSON.parse(found.stdout).restored.length, 2);
 });
 
-// R4 high (D-022): without `-z`, `git ls-tree --name-only` C-quotes a path
+// Without `-z`, `git ls-tree --name-only` C-quotes a path
 // that carries a byte above 0x7F, a double quote, a backslash or a control
 // character ("shared/logs/\303\274mlaut.md"). listTreePaths handed that quoted
 // form to the `startsWith('shared/')` filter, which the leading quote defeats,

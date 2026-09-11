@@ -318,7 +318,7 @@ class GitClient {
   // and that quoted form fails every caller's `startsWith(subdir/)` filter,
   // so the file read as absent from the commit. For the destination restore
   // that meant removing a local file the commit holds, which the next sync
-  // published as a deletion (agent-tasks cda5b12c, D-022).
+  // published as a deletion (see the origin note above).
   listTreePaths(repoDir: string, ref: string, subdir: string): string[] {
     const args = ["ls-tree", "-r", "--name-only", "-z", ref];
     if (subdir) {

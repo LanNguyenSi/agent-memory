@@ -1276,7 +1276,7 @@ test("push: a refusal after an accepted adoption counts what the run started wit
     gitBinary: writeStubGitWipingWorkTree(root)
   });
 
-  // The preview first (R4 low, D-023): previewPush measures the adopted
+  // The preview first: previewPush measures the adopted
   // plan against the same denominator the real run uses (guardBaseFiles,
   // the base the run started with), not against the base map the adoption
   // just emptied. A dry run of the acceptance refuses with the same count
