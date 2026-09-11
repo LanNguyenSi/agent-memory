@@ -7,19 +7,21 @@
 // stateDir/tmp tree. git had already reported a successful fetch+checkout,
 // so the pull read an empty working copy, every remote path came back null,
 // and mergeText's "local === base adopts remote" fast path resolved each one
-// to a deletion: 404 local files removed from disk. The follow-up push then
-// saw local empty against a full base snapshot and published 406 deletions,
-// which the Linux peer mirrored one tick later.
+// to a deletion: the local corpus was removed from disk. The follow-up push
+// then saw local empty against a full base snapshot and published the same
+// deletions, which the Linux peer mirrored one tick later.
 //
 // Neither half was a merge bug. mergeText answered exactly what it was
 // asked; the inputs were wrong, and nothing checked whether the ANSWER was
 // plausible. These two guards do that check:
 //
 //   assertReliableCheckout  the inputs: a destination the base snapshot says
-//                           holds files came back with none, so the checkout
-//                           itself is not trustworthy and no merge may run.
+//                           holds files came back missing enough of them
+//                           that the checkout itself is not trustworthy, so
+//                           no merge may run against it.
 //   assertNoMassDelete      the plan: a push that would remove a large share
-//                           of a destination stops and asks, instead of
+//                           of a destination, or a large number of files
+//                           across the whole plan, stops and asks instead of
 //                           publishing the removal.
 const { resolveSyncPathEntries } = require("./config");
 const { MassDeleteRefusedError, UnreliableCheckoutError } = require("../errors");
@@ -32,15 +34,19 @@ interface MassDeleteGuardConfig {
 // Defaults, overridable per profile via the `massDeleteGuard` config key
 // (src/config/loader.ts).
 //
-// maxFiles 20: the mini's real memory destination holds roughly 400 files
-// and grows by a handful a day, so a single tick removing more than 20 of
-// them is already far outside the observed steady state. It is also the rule
-// that catches the incident shape directly (406 deletions in one plan).
+// maxFiles bounds a single run's absolute damage: a tick removing more than
+// this many files at once is far outside the steady state of a corpus that
+// grows and shrinks by a handful of files a day, and it is the rule that
+// catches the incident shape directly.
 //
-// maxRatio 0.1: the absolute rule alone is blind on a small destination (a
-// 15-file destination losing all 15 stays under 20). The proportional rule
-// covers that range, and above roughly 200 tracked files it is the looser of
+// maxRatio covers the range where the absolute rule is blind: a destination
+// small enough to lose everything it has while staying under maxFiles.
+// Above a few hundred tracked files the proportional rule is the looser of
 // the two, so the two together stay meaningful across corpus sizes.
+//
+// The measured corpus sizes and deletion counts these numbers were chosen
+// against belong to the incident record, not to shipped source: see the
+// CHANGELOG entry for this change and the pandora run it points to.
 const DEFAULT_MASS_DELETE_GUARD: MassDeleteGuardConfig = {
   maxRatio: 0.1,
   maxFiles: 20
@@ -150,17 +156,27 @@ function countPathsByDestination(destinations: string[], paths: string[]): Map<s
   return counts;
 }
 
+// `destination: null` marks the plan-wide total rule, which is about the
+// plan as a whole rather than about any one destination.
 interface MassDeleteFinding {
-  destination: string;
+  destination: string | null;
   deleted: number;
   tracked: number;
-  rule: "absolute" | "proportional";
+  rule: "absolute" | "proportional" | "total";
 }
 
-// Pure decision half of assertNoMassDelete: returns the first destination
-// whose deletion count trips a rule, or null when the plan is acceptable.
-// Split out from the throwing wrapper so it can be unit-tested and reused by
-// a caller that wants to report rather than refuse.
+// Pure decision half of assertNoMassDelete: returns the first rule the plan
+// trips, or null when the plan is acceptable. Split out from the throwing
+// wrapper so it can be unit-tested and reused by a caller that wants to
+// report rather than refuse.
+//
+// Per-destination rules are evaluated first, because they produce the more
+// specific message. The plan-wide total is evaluated last and exists because
+// both per-destination rules are, by construction, blind to a plan that
+// stays just under the limit in each of several destinations at once: with
+// three configured destinations, maxFiles refuses 21 deletions in one of
+// them and accepts 60 spread evenly across all three (R1 medium, D-007).
+// AC-003's text is unqualified about the count, so the total is checked too.
 function findMassDelete(
   config: GuardConfig,
   baseMap: Record<string, string | null>,
@@ -192,6 +208,21 @@ function findMassDelete(
     }
   }
 
+  // Only deletions that map to a configured destination count, the same way
+  // the per-destination rules above ignore an unmapped path: a path no
+  // syncPaths entry claims is not part of any tracked corpus.
+  let totalDeleted = 0;
+  for (const count of deletedCounts.values()) {
+    totalDeleted += count;
+  }
+  if (totalDeleted > guard.maxFiles) {
+    let totalTracked = 0;
+    for (const count of trackedCounts.values()) {
+      totalTracked += count;
+    }
+    return { destination: null, deleted: totalDeleted, tracked: totalTracked, rule: "total" };
+  }
+
   return null;
 }
 
@@ -201,6 +232,14 @@ function formatPercent(value: number): string {
 }
 
 function describeMassDelete(finding: MassDeleteFinding, guard: MassDeleteGuardConfig): string {
+  if (finding.rule === "total") {
+    return (
+      `refusing to push a plan that deletes ${finding.deleted} file(s) across all sync destinations ` +
+      `(${finding.deleted} of ${finding.tracked} tracked), over the mass-delete limit of ` +
+      `${guard.maxFiles} file(s).`
+    );
+  }
+
   if (finding.rule === "absolute") {
     return (
       `refusing to push a plan that deletes ${finding.deleted} file(s) under '${finding.destination}' ` +
@@ -218,8 +257,17 @@ function describeMassDelete(finding: MassDeleteFinding, guard: MassDeleteGuardCo
 }
 
 // Throws MassDeleteRefusedError when the push plan removes more of a
-// destination than the guard allows. Call this BEFORE the plan is committed
-// or pushed, once per snapshot: the remote must be untouched when it throws.
+// destination, or of the plan as a whole, than the guard allows.
+//
+// `deletedPaths` must be the deletions the commit will ACTUALLY carry, not
+// the deletions the 3-way merge intended: push.ts stages the working copy
+// and reads them back out of the index (GitClient.listStagedDeletions)
+// before calling this. A plan-derived list is a strict subset and misses
+// every path that was already missing from the working copy, which is the
+// exact shape a wiped temp checkout produces (R1 critical, D-006).
+//
+// Call this BEFORE the plan is committed or pushed, once per snapshot: the
+// remote must be untouched when it throws.
 function assertNoMassDelete(input: {
   config: GuardConfig;
   baseMap: Record<string, string | null>;
@@ -246,15 +294,23 @@ function assertNoMassDelete(input: {
 interface CheckoutFinding {
   destination: string;
   tracked: number;
+  present: number;
+  lost: number;
+  rule: "absolute" | "proportional";
 }
 
 // Pure decision half of assertReliableCheckout.
 //
-// A destination that the base snapshot says holds `tracked >=
-// MIN_PROPORTIONAL_DELETIONS` files, and that the freshly fetched working
-// copy reports as holding none, is the signature of a checkout that never
-// materialized (or was wiped underneath this process) rather than of a
-// remote that genuinely dropped every file at once. The same
+// A destination the base snapshot says holds files, and that the freshly
+// fetched working copy reports as having lost a large share of them, is the
+// signature of a checkout that never materialized (or was wiped underneath
+// this process) rather than of a remote that genuinely dropped that many
+// files at once.
+//
+// The thresholds are the mass-delete guard's own (R1 critical, D-006): the
+// original check fired only on a destination that came back with EXACTLY
+// zero files, which a partially wiped working copy walks straight past, and
+// a partial wipe is not a milder failure than a total one. The same
 // MIN_PROPORTIONAL_DELETIONS floor applies as for the proportional rule: a
 // destination that tracked a single file and now reports none is an ordinary
 // single-file deletion, which this package has always applied and which its
@@ -263,16 +319,12 @@ interface CheckoutFinding {
 // `remoteHead === null` means the remote branch has no commits at all (a
 // freshly initialized remote before the first push), where an empty working
 // copy is the correct, expected state and never an anomaly.
-//
-// The check is deliberately limited to "empty". A PARTIAL checkout cannot be
-// told apart from a partial remote deletion by reading the tree alone; on
-// the push side that case is covered proportionally by assertNoMassDelete
-// above, since a partially-read remote resolves to a deletion plan.
 function findUnreliableCheckout(
   config: GuardConfig,
   baseMap: Record<string, string | null>,
   remoteMap: Record<string, string | null>,
-  remoteHead: string | null
+  remoteHead: string | null,
+  guard: MassDeleteGuardConfig = resolveMassDeleteGuard(config.massDeleteGuard)
 ): CheckoutFinding | null {
   if (!remoteHead) {
     return null;
@@ -280,36 +332,95 @@ function findUnreliableCheckout(
 
   const destinations = destinationsOf(config);
   const trackedCounts = countByDestination(destinations, baseMap);
-  const remoteCounts = countByDestination(destinations, remoteMap);
+  const presentCounts = countByDestination(destinations, remoteMap);
+  // Counted per path rather than as tracked-minus-present: a checkout that
+  // dropped ten tracked files while carrying ten new ones has still lost
+  // ten, and a difference of counts would report zero.
+  const lostCounts = countLostByDestination(destinations, baseMap, remoteMap);
 
   for (const destination of Array.from(trackedCounts.keys()).sort()) {
     const tracked = trackedCounts.get(destination) || 0;
-    if (tracked < MIN_PROPORTIONAL_DELETIONS) {
-      continue;
+    const present = presentCounts.get(destination) || 0;
+    const lost = lostCounts.get(destination) || 0;
+
+    if (lost > guard.maxFiles) {
+      return { destination, tracked, present, lost, rule: "absolute" };
     }
-    if ((remoteCounts.get(destination) || 0) === 0) {
-      return { destination, tracked };
+
+    if (
+      lost >= MIN_PROPORTIONAL_DELETIONS &&
+      tracked > 0 &&
+      lost > tracked * guard.maxRatio
+    ) {
+      return { destination, tracked, present, lost, rule: "proportional" };
     }
   }
 
   return null;
 }
 
+// How many of the files the base snapshot tracks under each destination the
+// working copy no longer has. A tombstone (null) on either side is not a
+// file: it is neither tracked nor lost.
+function countLostByDestination(
+  destinations: string[],
+  baseMap: Record<string, string | null>,
+  remoteMap: Record<string, string | null>
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const destination of destinations) {
+    counts.set(destination, 0);
+  }
+
+  for (const [key, value] of Object.entries(baseMap)) {
+    if (value === null) {
+      continue;
+    }
+    const destination = destinationOf(destinations, key);
+    if (destination === null) {
+      continue;
+    }
+    const remoteValue = Object.prototype.hasOwnProperty.call(remoteMap, key) ? remoteMap[key] : null;
+    if (remoteValue === null) {
+      counts.set(destination, (counts.get(destination) || 0) + 1);
+    }
+  }
+
+  return counts;
+}
+
+function describeUnreliableCheckout(finding: CheckoutFinding): string {
+  if (finding.present === 0) {
+    return (
+      `has no files under '${finding.destination}', but the base snapshot tracks ${finding.tracked} file(s) ` +
+      `there`
+    );
+  }
+
+  return (
+    `is missing ${finding.lost} of the ${finding.tracked} file(s) the base snapshot tracks under ` +
+    `'${finding.destination}' (${finding.present} still present)`
+  );
+}
+
 // Throws UnreliableCheckoutError when the working copy cannot be trusted.
 // Call this after prepareWorkingCopy and before any merge, on both the pull
 // and the push side: pull must not delete local files from it, push must not
 // build a deletion plan out of it.
+//
+// Deliberately takes no override (D-004, D-008). --allow-mass-delete is an
+// operator's answer to "yes, delete these files"; it is not an answer to
+// "the working copy this run fetched is not the remote", which is a question
+// about the inputs, not about the plan. An operator reaching for the flag on
+// a wiped working copy would publish the wipe, which is the live path the
+// incident took. A genuine full removal goes through `restore` or a fresh
+// base snapshot instead.
 function assertReliableCheckout(input: {
   config: GuardConfig;
   baseMap: Record<string, string | null>;
   remoteMap: Record<string, string | null>;
   remoteHead: string | null;
-  allowMassDelete?: boolean;
 }): void {
-  if (input.allowMassDelete) {
-    return;
-  }
-
   const finding = findUnreliableCheckout(
     input.config,
     input.baseMap,
@@ -321,11 +432,12 @@ function assertReliableCheckout(input: {
   }
 
   throw new UnreliableCheckoutError(
-    `unreliable checkout: the fetched working copy for remote head ${input.remoteHead} has no files under ` +
-      `'${finding.destination}', but the base snapshot tracks ${finding.tracked} file(s) there. Nothing was ` +
-      `deleted locally and nothing was pushed. This is usually a temporary working copy that was wiped or ` +
-      `never materialized (a concurrent watch/sync run sharing stateDir/tmp); re-run the command. If the ` +
-      `remote really did drop every file under '${finding.destination}', re-run with --allow-mass-delete.`
+    `unreliable checkout: the fetched working copy for remote head ${input.remoteHead} ` +
+      `${describeUnreliableCheckout(finding)}. Nothing was deleted locally and nothing was pushed. This is ` +
+      `usually a temporary working copy that was wiped or never materialized (a concurrent watch/sync run ` +
+      `sharing stateDir/tmp), so re-run the command once nothing else is touching stateDir/tmp. If the ` +
+      `remote really did drop those files, recover the destination with ` +
+      `'agent-memory-sync restore <commit>' and let the next run push from the restored tree.`
   );
 }
 

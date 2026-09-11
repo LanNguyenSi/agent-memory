@@ -214,13 +214,14 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // Guard 1 (agent-tasks cda5b12c): a working copy that does not represent
     // the remote produces a deletion plan for every path it fails to show.
     // Checked here, against the freshly fetched tree and before any merge,
-    // so nothing is committed or pushed from it. See ./guards.ts.
+    // so nothing is committed or pushed from it. See ./guards.ts. Takes no
+    // --allow-mass-delete override (D-004/D-008): the flag answers "yes,
+    // delete these files", not "trust this working copy".
     assertReliableCheckout({
       config,
       baseMap: currentBaseMap,
       remoteMap: collectRemoteFiles(config, gitClient, workingCopy.repoDir),
-      remoteHead: workingCopy.remoteHead,
-      allowMassDelete: options.allowMassDelete
+      remoteHead: workingCopy.remoteHead
     });
 
     const appliedFiles: string[] = [];
@@ -234,16 +235,33 @@ async function performPush(config: PushConfig, options: PushOptions) {
       // BEFORE this snapshot's commit, so a refusal leaves the remote
       // untouched (the push below never runs) and the queued snapshots stay
       // queued rather than being dropped as replayed.
+      //
+      // Two measurements, in order of cost. The plan's own deletions are
+      // already in hand, so they are checked first as a cheap pre-check. The
+      // GATE is the second one: the deletions git has actually staged. The
+      // two differ exactly where it matters (R1 critical, D-006) - a path
+      // the working copy was already missing is not something the plan
+      // "deletes", it never reads as a deletion at all, and yet the
+      // `git add -A` inside commitAll stages and publishes it. Measuring the
+      // index makes the guard's numerator the plan that is really about to
+      // be committed.
       assertNoMassDelete({
         config,
         baseMap: snapshot.baseFiles,
-        deletedPaths: result.deletedFiles,
+        deletedPaths: result.plannedDeletions,
+        allowMassDelete: options.allowMassDelete
+      });
+      const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
+      assertNoMassDelete({
+        config,
+        baseMap: snapshot.baseFiles,
+        deletedPaths: stagedDeletions,
         allowMassDelete: options.allowMassDelete
       });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
-      deletedFiles.push(...result.deletedFiles);
+      deletedFiles.push(...stagedDeletions);
       gitClient.commitAll(workingCopy.repoDir, snapshot.message);
     }
 
@@ -474,7 +492,12 @@ function formatDurationMs(ms: number): string {
 
 function previewPush(
   config: PushConfig,
-  snapshots: Array<{ id: string; localFiles: Record<string, string>; baseFiles: Record<string, string | null> }>,
+  snapshots: Array<{
+    id: string;
+    localFiles: Record<string, string>;
+    baseFiles: Record<string, string | null>;
+    message: string;
+  }>,
   options: { allowMassDelete?: boolean } = {}
 ) {
   try {
@@ -492,8 +515,7 @@ function previewPush(
       config,
       baseMap: snapshots[snapshots.length - 1]?.baseFiles || {},
       remoteMap: collectRemoteFiles(config, gitClient, workingCopy.repoDir),
-      remoteHead: workingCopy.remoteHead,
-      allowMassDelete: options.allowMassDelete
+      remoteHead: workingCopy.remoteHead
     });
 
     const appliedFiles: string[] = [];
@@ -506,13 +528,28 @@ function previewPush(
       assertNoMassDelete({
         config,
         baseMap: snapshot.baseFiles,
-        deletedPaths: result.deletedFiles,
+        deletedPaths: result.plannedDeletions,
+        allowMassDelete: options.allowMassDelete
+      });
+      const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
+      assertNoMassDelete({
+        config,
+        baseMap: snapshot.baseFiles,
+        deletedPaths: stagedDeletions,
         allowMassDelete: options.allowMassDelete
       });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
-      deletedFiles.push(...result.deletedFiles);
+      deletedFiles.push(...stagedDeletions);
+      // Committed even though nothing here is ever pushed: this working copy
+      // is a throwaway under stateDir/tmp/push-preview, and the staged
+      // measurement above is taken against HEAD. Without a commit between
+      // snapshots, snapshot N would be measured against a HEAD that still
+      // predates snapshot N-1 and would re-count its deletions, so a dry-run
+      // could refuse a plan the real push accepts. Committing keeps the
+      // preview's arithmetic identical to the real run's.
+      gitClient.commitAll(workingCopy.repoDir, snapshot.message);
     }
 
     return {
@@ -563,7 +600,7 @@ function applySnapshotToWorkingCopy(
   const appliedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
-  const deletedFiles: string[] = [];
+  const plannedDeletions: string[] = [];
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const repositoryPath = toRepositoryRelativePath(config, remoteRelativePath);
@@ -579,8 +616,6 @@ function applySnapshotToWorkingCopy(
       continue;
     }
 
-    appliedFiles.push(remoteRelativePath);
-
     if (mergeResult.status === "merged") {
       mergedFiles.push(remoteRelativePath);
     }
@@ -589,16 +624,26 @@ function applySnapshotToWorkingCopy(
     }
 
     if (mergeResult.content === null) {
-      // Only a path the working copy actually holds counts as a deletion:
-      // removing a path that is not there is a no-op, and counting it would
-      // inflate the mass-delete guard's numerator with phantom deletions.
+      // Only a path the working copy actually holds counts as a PLANNED
+      // deletion: removing a path that is not there is a no-op of this
+      // merge's own, so counting it here would report a deletion this plan
+      // did not make. What such a path costs is measured where it really
+      // happens instead, in the index (collectStagedDeletions), which is the
+      // guard's gate.
+      //
+      // Deliberately kept out of appliedFiles too (R1 medium): a run that
+      // removes files reported them as "applied" with an empty deletedFiles
+      // list, which reads as a successful sync of those paths. appliedFiles
+      // is the files this snapshot WROTE; deletions are reported as
+      // deletions.
       if (remoteContent !== null) {
-        deletedFiles.push(remoteRelativePath);
+        plannedDeletions.push(remoteRelativePath);
       }
       gitClient.deleteFile(repoDir, repositoryPath);
       continue;
     }
 
+    appliedFiles.push(remoteRelativePath);
     gitClient.writeFile(repoDir, repositoryPath, mergeResult.content);
   }
 
@@ -606,8 +651,39 @@ function applySnapshotToWorkingCopy(
     appliedFiles,
     mergedFiles,
     conflictFiles,
-    deletedFiles
+    plannedDeletions
   };
+}
+
+// Stages the working copy and reads back the deletions the next commit would
+// carry, as remote-relative paths (the key space the guards, the base
+// snapshot store and the result payload all use).
+//
+// This is the mass-delete guard's real numerator (agent-tasks cda5b12c, R1
+// critical, D-006). `git add -A` inside GitClient.commitAll publishes every
+// path the working copy lacks, whether the merge plan asked for it or not,
+// so the plan is not what gets committed and must not be what gets checked.
+//
+// A staged deletion outside repositorySubdir is not part of any configured
+// sync destination and is skipped here, the same way collectRemoteFiles
+// skips it when reading the remote tree.
+function collectStagedDeletions(
+  config: { repositorySubdir: string },
+  gitClient: InstanceType<typeof GitClient>,
+  repoDir: string
+): string[] {
+  gitClient.stageAll(repoDir);
+
+  const prefix = `${config.repositorySubdir}/`;
+  const deletions: string[] = [];
+  for (const repoRelativePath of gitClient.listStagedDeletions(repoDir)) {
+    if (!repoRelativePath.startsWith(prefix)) {
+      continue;
+    }
+    deletions.push(repoRelativePath.slice(prefix.length));
+  }
+
+  return deletions;
 }
 
 function collectRemoteFiles(

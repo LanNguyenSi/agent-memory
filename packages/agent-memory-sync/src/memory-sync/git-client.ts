@@ -106,8 +106,70 @@ class GitClient {
     return Boolean(result.stdout.trim());
   }
 
-  commitAll(repoDir: string, message: string): string | null {
+  // Stages the whole working copy, exactly as commitAll does on its way to a
+  // commit. Split out as its own method so a caller can stage FIRST and then
+  // inspect what the commit would actually contain (see listStagedDeletions
+  // below) before deciding whether to commit at all. Idempotent: commitAll
+  // re-runs it, which is a no-op on an already-staged tree.
+  stageAll(repoDir: string): void {
     this.run(["add", "-A"], repoDir);
+  }
+
+  // Repository-relative paths the INDEX currently records as deletions
+  // against HEAD, i.e. the deletions the next commit would actually carry.
+  //
+  // Origin (agent-tasks cda5b12c, R1 critical): the push-side mass-delete
+  // guard used to count the deletions its own 3-way merge plan intended,
+  // which is not the same set as the deletions `git add -A` commits. A path
+  // the working copy was already missing (a temp checkout wiped underneath
+  // the process) is not something the plan "deletes": it never reads as a
+  // deletion at all, and yet `git add -A` stages and publishes it. Measuring
+  // the index instead makes the guard's numerator the plan that is really
+  // about to be committed.
+  //
+  // `--no-renames`: with rename detection on (git's default for `git diff`),
+  // a delete-plus-add pair of identical content is reported as a single R
+  // entry and would vanish from a --diff-filter=D listing. For a deletion
+  // guard the conservative reading is the right one, so rename detection is
+  // turned off and such a pair counts as the deletion it physically is.
+  //
+  // `-z`: NUL-separated, so a path carrying a space, a quote or a non-ASCII
+  // byte is returned verbatim instead of being C-quoted by core.quotePath.
+  // The stream is a flat run of `D\0<path>\0` fields; every second field is
+  // the path.
+  //
+  // A working copy with no HEAD commit at all (prepareWorkingCopy's orphan
+  // branch, used for a remote that has never been pushed to) has nothing a
+  // deletion could be measured against, and `git diff --cached HEAD` would
+  // fail there rather than report "no deletions". Checked explicitly instead
+  // of being swallowed by an allowFailure, so a genuine git failure in this
+  // call still raises rather than silently reporting an empty, permissive
+  // deletion set to the guard.
+  listStagedDeletions(repoDir: string): string[] {
+    const head = this.run(["rev-parse", "--verify", "--quiet", "HEAD"], repoDir, true);
+    if (head.exitCode !== 0) {
+      return [];
+    }
+
+    const result = this.run(
+      ["diff", "--cached", "--name-status", "--no-renames", "-z", "--diff-filter=D"],
+      repoDir
+    );
+
+    const fields = result.stdout.split("\0");
+    const deletions: string[] = [];
+    for (let index = 0; index + 1 < fields.length; index += 2) {
+      const repoRelativePath = fields[index + 1];
+      if (repoRelativePath) {
+        deletions.push(repoRelativePath);
+      }
+    }
+
+    return deletions;
+  }
+
+  commitAll(repoDir: string, message: string): string | null {
+    this.stageAll(repoDir);
     if (!this.hasChanges(repoDir)) {
       return null;
     }

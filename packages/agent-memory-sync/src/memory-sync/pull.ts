@@ -15,10 +15,14 @@ const { StateStore } = require("./state-store");
 
 interface PullOptions {
   dryRun: boolean;
-  // Operator override for the deletion guards (--allow-mass-delete on `run`
-  // and `watch`). Only ever set on an interactive invocation: the periodic
-  // jobs never pass it, which is the point. See ./guards.ts.
-  allowMassDelete?: boolean;
+  // Deliberately no allowMassDelete (D-004, D-008): --allow-mass-delete is
+  // the operator's override for the PUSH-side plan guard, and pull has no
+  // plan of its own to override. The one guard pull runs, the checkout
+  // check, is about whether the fetched working copy is the remote at all,
+  // which no flag can answer. The pull-side accept flag AC-007 describes
+  // (--accept-mass-delete, for a remote change that really does delete a
+  // large share of a destination) is a separate, still-to-come decision,
+  // deliberately not this flag.
 }
 
 interface PullConfig {
@@ -88,12 +92,17 @@ async function performPull(config: PullConfig, options: PullOptions) {
   // checkout, so every remote path read as null and the merge below deleted
   // 404 real local files. This throws UnreliableCheckoutError before the
   // loop, so no local file is touched and no base snapshot is rewritten.
+  //
+  // The check covers a partially wiped copy too, not just an empty one
+  // (D-006), which is why it sits here rather than inside the loop: this is
+  // pull's only rmSync path, and it must refuse BEFORE the first deletion,
+  // not after counting the deletions it already made. It takes no
+  // --allow-mass-delete override (D-004, D-008); see ./guards.ts.
   assertReliableCheckout({
     config,
     baseMap,
     remoteMap,
-    remoteHead: workingCopy.remoteHead,
-    allowMassDelete: options.allowMassDelete
+    remoteHead: workingCopy.remoteHead
   });
 
   const targetPaths = new Set<string>([
