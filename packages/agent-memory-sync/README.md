@@ -536,11 +536,11 @@ change.
 - a **hub-side** path that carries a literal backslash (committed by a foreign writer, or
   synced from a win32 machine into a name darwin/linux cannot map back) is a different case:
   this machine did not create it and cannot rename it, so `pull` does not abort the run for
-  it. It is skipped, and a note in the result names the hub path (`notes`, and
-  `--output text`'s note lines); every other file in the same run still pulls, and the run
-  still exits `0`. `restore --from-commit`'s own base-snapshot bookkeeping for such a path is
-  skipped the same way, reported as a warning line rather than a `notes` entry (`restore`'s
-  JSON payload has no `notes` field). `restore --from-commit` restoring the backslash-named
+it. It is skipped, and a note in the result names the hub path (`notes`, and
+`--output text`'s note lines); every other file in the same run still pulls, and the run
+still exits `0`. `restore --from-commit`'s own base-snapshot bookkeeping for such a path is
+skipped the same way; destination-form restore reports the warning in its additive `notes`
+array in JSON/YAML output, including under `--quiet`. `restore --from-commit` restoring the backslash-named
   path itself to a local destination is still refused outright: every source path is mapped
   and validated before the destination's pre-apply snapshot is taken or any file is written,
   so an unmappable backslash path anywhere in the source list aborts the whole destination

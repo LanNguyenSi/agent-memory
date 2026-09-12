@@ -441,6 +441,7 @@ async function restoreDestination(
   const removable = currentFiles.filter(
     (file: { remoteRelativePath: string }) => !sourcePaths.has(file.remoteRelativePath)
   );
+  let notes: string[] = [];
 
   // Every source path is mapped and validated here, before the pre-apply
   // snapshot is taken or the write loop below touches the filesystem at
@@ -512,7 +513,7 @@ async function restoreDestination(
     }
 
     if (mode.kind === "commit" && workingCopy) {
-      moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination, outputOptions);
+      notes = moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination, outputOptions);
     }
   }
 
@@ -526,7 +527,8 @@ async function restoreDestination(
         ? { kind: "commit", commit: resolvedSha }
         : { kind: "snapshot", snapshot: resolvedSha },
     restored: sourceFiles.map((file) => file.remoteRelativePath).sort(),
-    removed: removable.map((file: { remoteRelativePath: string }) => file.remoteRelativePath).sort()
+    removed: removable.map((file: { remoteRelativePath: string }) => file.remoteRelativePath).sort(),
+    notes
   };
 
   writeResult(payload, runConfig.outputFormat, () =>
@@ -554,9 +556,10 @@ function moveBaseToCurrentRemote(
   repoDir: string,
   destination: string,
   outputOptions: { color: boolean; quiet: boolean; verbose: boolean }
-): void {
+): string[] {
   const stateStore = new StateStore(runConfig.stateDir, runConfig.profile);
   const stored = stateStore.readBaseSnapshots();
+  const notes: string[] = [];
 
   for (const key of Object.keys(stored)) {
     if (belongsToDestination(key, destination)) {
@@ -582,17 +585,18 @@ function moveBaseToCurrentRemote(
     // same hub-side-skip idiom pull.ts's collectRemoteFiles uses (agent-tasks
     // 73ea60bf).
     if (process.platform !== "win32" && remoteRelativePath.includes("\\")) {
-      writeWarning(
+      const note =
         `skipped ${remoteRelativePath}; contains a backslash and cannot be mapped to a portable local ` +
-          "path on this platform - fix the name at the hub",
-        outputOptions
-      );
+        "path on this platform - fix the name at the hub";
+      notes.push(note);
+      writeWarning(note, outputOptions);
       continue;
     }
     stored[remoteRelativePath] = gitClient.readFile(repoDir, repoRelativePath);
   }
 
   stateStore.replaceBaseSnapshots(stored);
+  return notes;
 }
 
 function belongsToDestination(remoteRelativePath: string, destination: string): boolean {
