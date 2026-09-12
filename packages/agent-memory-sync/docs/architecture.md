@@ -99,22 +99,14 @@ The output module respects:
 - `--no-color` flag
 - TTY detection: disable color when stdout is piped
 
-### 4. Error Handling and Exit Codes
+### 4. Error Handling and Exit Codes {#exit-codes}
 
 All errors are caught at the top-level command runner and translated to appropriate exit codes.
 Commands signal failure by raising/returning an error - they never call `os.exit()` directly.
 
-#### Exit Code Reference
-
-| Code | Meaning |
-|------|---------|
-| `0` | Success |
-| `1` | General / unspecified error |
-| `2` | Invalid arguments or usage error |
-| `3` | Configuration error (bad config file, missing required setting) |
-| `4` | Runtime error (external service unavailable, permission denied) |
-| `5` | Not found (resource the command expected does not exist) |
-| `6` | Queue escalation (the local queue has not drained within queueEscalationThresholdMs) |
+Every distinguished exit code, its meaning and what to do about it is documented in one place,
+[the README's Exit codes table](../README.md#exit-codes) - that table is canonical; this file does
+not keep a second copy that could drift out of sync with the `CliError` subclasses in `src/errors.ts`.
 
 Error messages follow the pattern: `error: <what went wrong>. <how to fix it>.`
 
