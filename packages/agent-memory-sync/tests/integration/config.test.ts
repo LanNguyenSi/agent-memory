@@ -49,6 +49,6 @@ test("config get on a supported key that was never set exits non-zero with a cle
 
   const result = runCli(["config", "get", "branch", "--config", configPath], { expectFailure: true });
 
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, 11);
   assert.match(result.stderr, /config key 'branch' is not set/);
 });

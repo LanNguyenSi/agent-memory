@@ -40,7 +40,7 @@ function registerConfigCommand(program: import("commander").Command): void {
       const value = getConfigValue(persisted.settings, key);
 
       if (typeof value === "undefined") {
-        throw new CliError(`config key '${key}' is not set in ${persisted.path}.`, 5);
+        throw new CliError(`config key '${key}' is not set in ${persisted.path}.`, 11);
       }
 
       process.stdout.write(`${typeof value === "string" ? value : JSON.stringify(value)}\n`);
