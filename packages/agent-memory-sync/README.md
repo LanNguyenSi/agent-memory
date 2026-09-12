@@ -517,6 +517,14 @@ change.
   itself was unreachable): a completed run can list entries in `skippedFiles` for individual paths
   while its own `status` is `applied`
 - `--dry-run` previews the result without changing local files or the remote repository
+- a `syncPaths` destination, or a local file name underneath one, that contains a literal
+  backslash is refused with exit `3` naming the offending path, on every platform except
+  win32. There, every backslash IS a path separator (NTFS disallows one inside a real file
+  name), so converting it to the `/` form the hub always uses is exact. On darwin/linux
+  `path.sep` is `/`, so a backslash reaching this check is always part of an actual name;
+  silently rewriting it to `/` would flatten e.g. `logs/back\slash.md` into
+  `shared/logs/back/slash.md` on the hub, a name `pull` and `restore --from-commit` can
+  never map back to the original file. Rename the file (or the config value) instead.
 
 ### Unmapped remote paths and base snapshots
 
