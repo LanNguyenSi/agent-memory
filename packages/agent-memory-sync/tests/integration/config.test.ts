@@ -55,7 +55,7 @@ test("config get on a supported key that was never set exits 11 with a clear err
 
 // validateConfigKey (src/config/loader.ts) rejects an unsupported key before
 // getConfigValue ever runs, so this must stay on exit `3` even though an
-// unset-but-supported key (test above) now exits `11` — the two are
+// unset-but-supported key (test above) now exits `11`; the two are
 // distinguished by exit code alone per the README's exit-code table.
 test("config get on an unsupported key exits 3, distinct from an unset supported key", () => {
   const root = createSandbox("config-unsupported-key");
