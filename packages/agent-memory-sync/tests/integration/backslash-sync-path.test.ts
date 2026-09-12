@@ -23,6 +23,7 @@ const {
   writeProjectConfig,
   writeText
 } = require("../helpers/cli.ts");
+const { StateStore } = require("../../src/memory-sync/state-store");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
   return {
@@ -171,4 +172,131 @@ test("pull skips a hub-side backslash-named path with a note, applying the rest 
   );
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "back")), false);
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "back\\slash.md")), false);
+});
+
+// moveBaseToCurrentRemote's own hub-side skip (restore.ts, review round 2
+// finding #2): a backslash-named path a foreign writer added to the hub
+// AFTER the commit this restore targets must not become a base-snapshot
+// key. `restore --from-commit <seed sha>` restores the destination back to
+// the pre-backslash state, but moveBaseToCurrentRemote still walks the
+// CURRENT remote tree (which by then holds the backslash file) to rebuild
+// the base map; it must skip that entry rather than record it raw or
+// mangled.
+test("restore --from-commit skips a hub-side backslash path when rebuilding the base snapshot", () => {
+  const root = createSandbox("backslash-restore-base-skip");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stateDir = path.join(workspaceRoot, ".agent-memory-sync", "default");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeText(path.join(workspaceRoot, "logs", "plain.md"), "plain entry\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  // The clean seed: this is the commit `restore --from-commit` targets.
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  const seedCheckout = cloneRemote(remoteDir, root, "seed");
+  const seedSha = git(["rev-parse", "HEAD"], seedCheckout).trim();
+
+  // A foreign writer adds a backslash-named file on top of the seed. The
+  // remote tip now carries it; the seed commit does not.
+  writeText(path.join(seedCheckout, "shared", "logs", "back\\slash.md"), "hub-only backslash entry\n");
+  git(["add", "-A"], seedCheckout);
+  git(["commit", "-m", "foreign writer adds a backslash-named file after the seed"], seedCheckout);
+  git(["push", "origin", "HEAD:main"], seedCheckout);
+
+  const result = runCli(
+    ["restore", "default", "logs", "--config", configPath, "--from-commit", seedSha, "--yes", "--output", "json"]
+  );
+  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+
+  // The seed's plain file is restored.
+  assert.equal(
+    fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"),
+    "plain entry\n"
+  );
+
+  const stateStore = new StateStore(stateDir, "default");
+  const baseSnapshots = stateStore.readBaseSnapshots();
+  assert.equal(Object.prototype.hasOwnProperty.call(baseSnapshots, "logs/back\\slash.md"), false, JSON.stringify(Object.keys(baseSnapshots)));
+  assert.equal(Object.prototype.hasOwnProperty.call(baseSnapshots, "logs/back/slash.md"), false, JSON.stringify(Object.keys(baseSnapshots)));
+});
+
+// The legacy single-commit form's --path guard (normalizeRequestedPath,
+// restore.ts, review round 2 finding #3): an operator-typed --path value
+// carrying a literal backslash is refused outright on non-win32, the same
+// way a local sync path is, before this command even looks at the commit.
+test("restore <sha> --path with a backslash is refused (exit 3)", () => {
+  const root = createSandbox("backslash-restore-path-flag-refuse");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeText(path.join(workspaceRoot, "logs", "plain.md"), "plain entry\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  const checkout = cloneRemote(remoteDir, root, "verify");
+  const sha = git(["rev-parse", "HEAD"], checkout).trim();
+
+  const result = runCli(
+    ["restore", sha, "--path", "logs/back\\slash.md", "--config", configPath, "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 3, `stderr: ${result.stderr}`);
+  assert.match(result.stderr, /back\\slash\.md/);
+  assert.match(result.stderr, /backslash/i);
+});
+
+// The legacy whole-commit form (no --path, restore.ts's file-mode write
+// loop, review round 2 finding #5): every target path is now mapped and
+// validated before the first write. Before that fix, a commit containing a
+// backslash-named path aborted mid-loop after already overwriting an
+// earlier-sorted local file with the loop still holding a local-only edit.
+// "MEMORY.md" sorts before "logs/back\slash.md" in git's own tree order, so
+// this reproduces the exact ordering the bug depended on.
+test("legacy restore <sha> --yes with a backslash path in the commit aborts before writing anything (exit 3)", () => {
+  const root = createSandbox("backslash-restore-legacy-atomic");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory v1\n");
+  writeText(path.join(workspaceRoot, "logs", "plain.md"), "plain v1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // A local-only edit that must survive an aborted restore untouched.
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "local edit only\n");
+
+  // A foreign writer adds a backslash-named file to the hub, on top of the
+  // files already pushed above.
+  const checkout = cloneRemote(remoteDir, root, "foreign-writer");
+  writeText(path.join(checkout, "shared", "logs", "back\\slash.md"), "hub-only backslash entry\n");
+  git(["add", "-A"], checkout);
+  git(["commit", "-m", "foreign writer adds a backslash-named file"], checkout);
+  git(["push", "origin", "HEAD:main"], checkout);
+  const sha = git(["rev-parse", "HEAD"], checkout).trim();
+
+  const result = runCli(
+    ["restore", sha, "--yes", "--config", configPath, "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 3, `stderr: ${result.stderr}`);
+  assert.match(result.stderr, /back\\slash\.md/);
+  assert.match(result.stderr, /backslash/i);
+
+  // Nothing was written: the local-only edit to the earlier-sorted MEMORY.md
+  // survives exactly as it was before this restore ran.
+  assert.equal(
+    fs.readFileSync(path.join(workspaceRoot, "MEMORY.md"), "utf8"),
+    "local edit only\n"
+  );
+  assert.equal(
+    fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"),
+    "plain v1\n"
+  );
 });

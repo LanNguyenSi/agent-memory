@@ -135,13 +135,13 @@ function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFiles
     }
 
     for (const nestedFile of walkFiles(absoluteSource)) {
-      // The value being validated (path.relative(absoluteSource, ...)) is
-      // scoped to this one syncPaths entry's own source directory and is
-      // what remoteRelativePath below is actually built from below - it
-      // must not change. Reviewer finding (round 1, LOW #4): an operator
-      // reading the thrown error only sees that fragment, not which
-      // directory holds the file. displayPath carries the rootDir-relative
-      // path instead, for the error message alone.
+      // An operator reading the thrown error must be able to tell which
+      // directory holds the file, so displayPath carries the rootDir-relative
+      // path for the error message alone (agent-tasks 73ea60bf). The value
+      // being validated (path.relative(absoluteSource, ...)) is scoped to
+      // this one syncPaths entry's own source directory and is what
+      // remoteRelativePath below is actually built from - it must not
+      // change.
       const nestedRelative = assertPortablePathSegment(
         path.relative(absoluteSource, nestedFile),
         "sync path",

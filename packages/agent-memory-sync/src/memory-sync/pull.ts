@@ -512,15 +512,15 @@ function isOwnerScopedPeerPath(
   return ownerScopedEntry !== null && remoteRelativePath !== `${ownerScopedEntry.destination}/${profile}.json`;
 }
 
-// Review round 1, MEDIUM #1: git-client.ts's listFiles now returns a
-// hub-relative path exactly as git holds it on non-win32 (no blanket
-// backslash-to-slash flattening), so a hub-side name a foreign writer
-// committed with a literal backslash reaches here raw. That name cannot be
-// mapped to a portable local path on this platform (assertPortablePathSegment
-// inside normalizeRemoteRelativePath throws for it), but a hub-side naming
-// problem this machine cannot fix must not abort the whole pull the way the
-// local push/sync/restore direction refuses outright - it is skipped and
-// reported in `notes`, naming the hub path, and every other file still pulls.
+// A hub-side naming problem this machine cannot fix must not abort the whole
+// pull the way the local push/sync/restore direction refuses outright - it
+// is skipped and reported in `notes`, naming the hub path, and every other
+// file still pulls. git-client.ts's listFiles returns a hub-relative path
+// exactly as git holds it on non-win32 (no blanket backslash-to-slash
+// flattening), so a hub-side name a foreign writer committed with a literal
+// backslash reaches here raw; that name cannot be mapped to a portable local
+// path on this platform (assertPortablePathSegment inside
+// normalizeRemoteRelativePath throws for it) (agent-tasks 73ea60bf).
 function collectRemoteFiles(
   config: { repositorySubdir: string },
   gitClient: InstanceType<typeof GitClient>,

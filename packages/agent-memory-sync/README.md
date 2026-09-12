@@ -535,7 +535,7 @@ change.
   it. It is skipped, and a note in the result names the hub path (`notes`, and
   `--output text`'s note lines); every other file in the same run still pulls, and the run
   still exits `0`. `restore --from-commit`'s own base-snapshot bookkeeping for such a path is
-  skipped the same way, reported as an info line rather than a `notes` entry (`restore`'s
+  skipped the same way, reported as a warning line rather than a `notes` entry (`restore`'s
   JSON payload has no `notes` field). `restore --from-commit` restoring the backslash-named
   path itself to a local destination is still refused outright (same as the local-name case
   above), since writing it locally is exactly the local-mapping problem, not the hub-side one.
