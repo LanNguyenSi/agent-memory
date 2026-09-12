@@ -529,7 +529,10 @@ change.
   synced, or restored until the local name is fixed (`run --mode pull` collects local sync
   files too, to merge against the remote, so it refuses the same way), and a `watch` service
   hits it on every tick, so it exits `3` repeatedly until the file is renamed or removed. The
-  same platform-specific backslash check applies to an operator-typed `restore --path` value.
+  same platform-specific backslash check applies to an operator-typed `restore --path` value
+  and to the `repositorySubdir` config value (a backslash there is refused with exit `3` as
+  a configuration error rather than silently rewritten to `/`). A `--dry-run` restore runs
+  the same validation before it prints its preview, so it refuses the same way.
 - a **hub-side** path that carries a literal backslash (committed by a foreign writer, or
   synced from a win32 machine into a name darwin/linux cannot map back) is a different case:
   this machine did not create it and cannot rename it, so `pull` does not abort the run for
