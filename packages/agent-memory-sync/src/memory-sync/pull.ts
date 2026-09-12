@@ -101,12 +101,13 @@ async function performPull(config: PullConfig, options: PullOptions) {
     ])
   );
   const baseMap = stateStore.readBaseSnapshots();
-  // Declared here, ahead of collectRemoteFiles, so its hub-side backslash
-  // notes (review round 1, MEDIUM #1: a hub-side name that cannot be mapped
-  // to a portable local path on this platform is skipped and reported here,
-  // never a whole-run abort - only the local push/sync/restore direction
-  // refuses the whole run) land in the same array the rest of this function
-  // already appends its diagnostics to below.
+  // A hub-side name that cannot be mapped to a portable local path on this
+  // platform is skipped and reported here, never a whole-run abort - only
+  // the local push/sync/restore/pull direction (a name this machine could
+  // rename) refuses the whole run (agent-tasks 73ea60bf). Declared here,
+  // ahead of collectRemoteFiles, so its hub-side backslash notes land in
+  // the same array the rest of this function already appends its
+  // diagnostics to below.
   const notes: string[] = [];
   const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir, notes);
   // Guard 1: never merge against a working copy that cannot be trusted to

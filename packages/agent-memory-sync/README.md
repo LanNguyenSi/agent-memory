@@ -525,10 +525,11 @@ change.
   silently rewriting it to `/` would flatten e.g. `logs/back\slash.md` into
   `shared/logs/back/slash.md` on the hub, a name `pull` and `restore --from-commit` can
   never map back to the original file. Rename the file (or the config value) instead. This
-  refusal aborts the whole run, not just the offending path: nothing is pushed, synced, or
-  restored until the local name is fixed, and a `watch` service hits it on every tick, so it
-  exits `3` repeatedly until the file is renamed or removed. The same platform-specific
-  backslash check applies to an operator-typed `restore --path` value.
+  refusal aborts the whole run, not just the offending path: nothing is pushed, pulled,
+  synced, or restored until the local name is fixed (`run --mode pull` collects local sync
+  files too, to merge against the remote, so it refuses the same way), and a `watch` service
+  hits it on every tick, so it exits `3` repeatedly until the file is renamed or removed. The
+  same platform-specific backslash check applies to an operator-typed `restore --path` value.
 - a **hub-side** path that carries a literal backslash (committed by a foreign writer, or
   synced from a win32 machine into a name darwin/linux cannot map back) is a different case:
   this machine did not create it and cannot rename it, so `pull` does not abort the run for
@@ -537,8 +538,11 @@ change.
   still exits `0`. `restore --from-commit`'s own base-snapshot bookkeeping for such a path is
   skipped the same way, reported as a warning line rather than a `notes` entry (`restore`'s
   JSON payload has no `notes` field). `restore --from-commit` restoring the backslash-named
-  path itself to a local destination is still refused outright (same as the local-name case
-  above), since writing it locally is exactly the local-mapping problem, not the hub-side one.
+  path itself to a local destination is still refused outright: every source path is mapped
+  and validated before the destination's pre-apply snapshot is taken or any file is written,
+  so an unmappable backslash path anywhere in the source list aborts the whole destination
+  restore before it touches the filesystem (same as the local-name case above), since writing
+  it locally is exactly the local-mapping problem, not the hub-side one.
 
 ### Unmapped remote paths and base snapshots
 

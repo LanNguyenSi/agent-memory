@@ -129,10 +129,10 @@ test("restore --from-commit refuses a backslash-named path from the commit inste
   );
 });
 
-// The pull-side half (review round 1, MEDIUM #1): a hub-side backslash-named
-// path this machine cannot rename must not abort the whole pull the way a
-// local backslash-named path aborts the whole push above. It is skipped,
-// named in a note, and every other file in the same run still applies.
+// The pull-side half: a hub-side backslash-named path this machine cannot
+// rename must not abort the whole pull the way a local backslash-named path
+// aborts the whole push above. It is skipped, named in a note, and every
+// other file in the same run still applies (agent-tasks 73ea60bf).
 test("pull skips a hub-side backslash-named path with a note, applying the rest of the run", () => {
   const root = createSandbox("backslash-pull-skip");
   const remoteDir = initBareRemote(root);
@@ -174,14 +174,14 @@ test("pull skips a hub-side backslash-named path with a note, applying the rest 
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "back\\slash.md")), false);
 });
 
-// moveBaseToCurrentRemote's own hub-side skip (restore.ts, review round 2
-// finding #2): a backslash-named path a foreign writer added to the hub
-// AFTER the commit this restore targets must not become a base-snapshot
-// key. `restore --from-commit <seed sha>` restores the destination back to
-// the pre-backslash state, but moveBaseToCurrentRemote still walks the
-// CURRENT remote tree (which by then holds the backslash file) to rebuild
-// the base map; it must skip that entry rather than record it raw or
-// mangled.
+// A backslash-named path a foreign writer added to the hub AFTER the commit
+// this restore targets must not become a base-snapshot key
+// (moveBaseToCurrentRemote's own hub-side skip, restore.ts, agent-tasks
+// 73ea60bf). `restore --from-commit <seed sha>` restores the destination
+// back to the pre-backslash state, but moveBaseToCurrentRemote still walks
+// the CURRENT remote tree (which by then holds the backslash file) to
+// rebuild the base map; it must skip that entry rather than record it raw
+// or mangled.
 test("restore --from-commit skips a hub-side backslash path when rebuilding the base snapshot", () => {
   const root = createSandbox("backslash-restore-base-skip");
   const remoteDir = initBareRemote(root);
@@ -222,10 +222,10 @@ test("restore --from-commit skips a hub-side backslash path when rebuilding the 
   assert.equal(Object.prototype.hasOwnProperty.call(baseSnapshots, "logs/back/slash.md"), false, JSON.stringify(Object.keys(baseSnapshots)));
 });
 
-// The legacy single-commit form's --path guard (normalizeRequestedPath,
-// restore.ts, review round 2 finding #3): an operator-typed --path value
-// carrying a literal backslash is refused outright on non-win32, the same
-// way a local sync path is, before this command even looks at the commit.
+// An operator-typed --path value carrying a literal backslash is refused
+// outright on non-win32, the same way a local sync path is, before this
+// command even looks at the commit (the legacy single-commit form's --path
+// guard, normalizeRequestedPath, restore.ts, agent-tasks 73ea60bf).
 test("restore <sha> --path with a backslash is refused (exit 3)", () => {
   const root = createSandbox("backslash-restore-path-flag-refuse");
   const remoteDir = initBareRemote(root);
@@ -250,9 +250,9 @@ test("restore <sha> --path with a backslash is refused (exit 3)", () => {
   assert.match(result.stderr, /backslash/i);
 });
 
-// The legacy whole-commit form (no --path, restore.ts's file-mode write
-// loop, review round 2 finding #5): every target path is now mapped and
-// validated before the first write. Before that fix, a commit containing a
+// Every target path is now mapped and validated before the first write (the
+// legacy whole-commit form, no --path, restore.ts's file-mode write loop,
+// agent-tasks 73ea60bf). Before that fix, a commit containing a
 // backslash-named path aborted mid-loop after already overwriting an
 // earlier-sorted local file with the loop still holding a local-only edit.
 // "MEMORY.md" sorts before "logs/back\slash.md" in git's own tree order, so
@@ -299,4 +299,108 @@ test("legacy restore <sha> --yes with a backslash path in the commit aborts befo
     fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"),
     "plain v1\n"
   );
+});
+
+// The destination-restore form's own write loop (restoreDestination,
+// restore.ts, review round 3 MEDIUM #1): every source path must be mapped
+// and validated before the pre-apply snapshot is taken or the first write
+// happens, the same invariant the legacy whole-commit form above pins.
+// "logs/aaa.md" sorts before "logs/zzz\back.md" in git's own tree order, so
+// the unfixed code overwrote aaa.md with the commit's version, destroying a
+// local-only edit, before it ever reached the unmappable path and aborted
+// (agent-tasks 73ea60bf).
+test("restore <profile> <destination> --from-commit aborts before writing anything when a backslash path sorts after a plain one (exit 3)", () => {
+  const root = createSandbox("backslash-restore-destination-atomic");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeText(path.join(workspaceRoot, "logs", "aaa.md"), "aaa v1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // A local-only edit that must survive an aborted restore untouched.
+  writeText(path.join(workspaceRoot, "logs", "aaa.md"), "LOCAL EDIT ONLY\n");
+
+  // A foreign writer adds a backslash-named file that sorts AFTER aaa.md.
+  const checkout = cloneRemote(remoteDir, root, "foreign-writer");
+  writeText(path.join(checkout, "shared", "logs", "zzz\\back.md"), "hub-only backslash entry\n");
+  git(["add", "-A"], checkout);
+  git(["commit", "-m", "foreign writer adds a late-sorting backslash-named file"], checkout);
+  git(["push", "origin", "HEAD:main"], checkout);
+  const sha = git(["rev-parse", "HEAD"], checkout).trim();
+
+  const result = runCli(
+    ["restore", "default", "logs", "--config", configPath, "--from-commit", sha, "--yes", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 3, `stderr: ${result.stderr}`);
+  assert.match(result.stderr, /zzz\\back\.md/);
+  assert.match(result.stderr, /backslash/i);
+
+  // Nothing was written: the local-only edit to the earlier-sorted aaa.md
+  // survives exactly as it was before this restore ran, and the backslash
+  // path was not mangled into a sibling file.
+  assert.equal(
+    fs.readFileSync(path.join(workspaceRoot, "logs", "aaa.md"), "utf8"),
+    "LOCAL EDIT ONLY\n"
+  );
+  assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "zzz")), false);
+});
+
+// The pull direction refuses the same as push/sync/restore (review round 3
+// LOW #2): `run --mode pull` also collects local sync files to merge
+// against the remote, so a local backslash-named file must abort it too,
+// not just push/sync/restore (agent-tasks 73ea60bf).
+test("run --mode pull refuses a local file name that contains a backslash, naming the path (exit 3)", () => {
+  const root = createSandbox("backslash-pull-refuse");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeText(path.join(workspaceRoot, "logs", "plain.md"), "plain entry\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // A local file whose own name carries a literal backslash, added after
+  // the push above so it never reached the remote.
+  writeText(path.join(workspaceRoot, "logs", "back\\slash.md"), "local backslash entry\n");
+
+  const result = runCli(
+    ["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 3, `stderr: ${result.stderr}`);
+  assert.match(result.stderr, /back\\slash\.md/);
+  assert.match(result.stderr, /backslash/i);
+});
+
+// The repositorySubdir config value goes through the same portable-path
+// check as a sync destination now (normalizeRelativePath, src/config/loader.ts,
+// review round 3 LOW #3): a backslash in it is refused the same way, rather
+// than being silently flattened into "/" (agent-tasks 73ea60bf).
+test("a repositorySubdir config value containing a backslash is refused (exit 3)", () => {
+  const root = createSandbox("backslash-repository-subdir-refuse");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    repositorySubdir: "sha\\red"
+  });
+
+  const result = runCli(
+    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 3, `stderr: ${result.stderr}`);
+  assert.match(result.stderr, /sha\\red/);
+  assert.match(result.stderr, /backslash/i);
 });

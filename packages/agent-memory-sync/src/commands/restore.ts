@@ -216,9 +216,9 @@ function registerRestoreCommand(program: import("commander").Command): void {
         // failing to map (e.g. a backslash-named path a foreign writer
         // committed to the hub) must not leave the run half-applied, with
         // some files already overwritten and others never reached. This
-        // package's own destination-restore path (restoreDestination) is
-        // already all-writes-after-all-reads for the same reason (agent-tasks
-        // 73ea60bf).
+        // package's own destination-restore path (restoreDestination) maps
+        // and validates its own sourceFiles list the same way, before its
+        // pre-apply snapshot or write loop runs (agent-tasks 73ea60bf).
         const resolvedTargets: Array<{ repoRelativePath: string; remoteRelativePath: string; absoluteLocalPath: string }> = [];
         for (const repoRelativePath of targetRepoPaths) {
           const remoteRelativePath = repoRelativePath.slice(runConfig.repositorySubdir.length + 1);
@@ -442,6 +442,35 @@ async function restoreDestination(
     (file: { remoteRelativePath: string }) => !sourcePaths.has(file.remoteRelativePath)
   );
 
+  // Every source path is mapped and validated here, before the pre-apply
+  // snapshot is taken or the write loop below touches the filesystem at
+  // all: a later path in sourceFiles failing to map (e.g. a backslash-named
+  // path a foreign writer committed to the hub, sorting after an
+  // already-written plain file) must not leave the destination
+  // half-restored. The legacy file-form write loop above already does this;
+  // this form did not, so a source list with an unmappable path sorted
+  // after a mappable one wrote the mappable one, snapshotted it, and only
+  // then aborted, matching README's "refused outright" for this case
+  // (agent-tasks 73ea60bf).
+  const resolvedSourceFiles = sourceFiles.map((file) => {
+    const absolutePath = mapRemotePathToLocalAbsolute(runConfig, file.remoteRelativePath, resolvedEntries);
+    if (!absolutePath) {
+      if (process.platform !== "win32" && file.remoteRelativePath.includes("\\")) {
+        throw new CliError(
+          `cannot restore '${file.remoteRelativePath}': it contains a backslash and cannot be mapped to a ` +
+            "portable local path on this platform. Fix the name at the hub, or use --path to restore " +
+            "an unaffected file.",
+          3
+        );
+      }
+      throw new CliError(
+        `cannot map '${file.remoteRelativePath}' to a local sync target. Update syncPaths.`,
+        3
+      );
+    }
+    return { ...file, absolutePath };
+  });
+
   if (options.dryRun) {
     for (const file of sourceFiles) {
       writeDryRun(`would restore ${file.remoteRelativePath}`, outputOptions);
@@ -460,14 +489,8 @@ async function restoreDestination(
       generations: runConfig.snapshotGenerations
     });
 
-    for (const file of sourceFiles) {
-      const absolutePath = mapRemotePathToLocalAbsolute(runConfig, file.remoteRelativePath, resolvedEntries);
-      if (!absolutePath) {
-        throw new CliError(
-          `cannot map '${file.remoteRelativePath}' to a local sync target. Update syncPaths.`,
-          3
-        );
-      }
+    for (const file of resolvedSourceFiles) {
+      const { absolutePath } = file;
       mkdirSync(path.dirname(absolutePath), { recursive: true });
       // Written as a Buffer, never through a decode-and-re-encode of this
       // command's own. What that buys depends on the source. A snapshot

@@ -403,11 +403,11 @@ function assertPortablePathSegment(value: string, sourceDescription: string, dis
   }
 
   if (value.includes("\\")) {
-    // Direction-neutral wording (review round 1, LOW #4): this same throw is
-    // reached from the push side (a local name that would be published
-    // mangled) and from restore's local-mapping check (mapRemotePathToLocalAbsolute
-    // -> normalizeRemoteRelativePath), so the message names neither
-    // direction specifically.
+    // This same throw is reached from the push side (a local name that
+    // would be published mangled) and from restore's local-mapping check
+    // (mapRemotePathToLocalAbsolute -> normalizeRemoteRelativePath), so the
+    // message stays direction-neutral, naming neither side specifically
+    // (agent-tasks 73ea60bf).
     throw new CliError(
       `${sourceDescription} '${displayPath}' cannot be mapped to a portable remote path: it contains a ` +
         "backslash, which agent-memory-sync does not sync on this platform. Rename it.",
@@ -467,6 +467,7 @@ function isHiddenEntryName(name: string): boolean {
 }
 
 module.exports = {
+  assertPortablePathSegment,
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
   filterUnmappedBaseMap,

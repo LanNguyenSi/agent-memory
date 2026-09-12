@@ -2,6 +2,7 @@ const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("
 const { homedir, hostname } = require("node:os");
 const path = require("node:path");
 const { CliError } = require("../errors");
+const { assertPortablePathSegment } = require("../memory-sync/config");
 const { DEFAULT_REACHABILITY_TIMEOUT_MS } = require("../memory-sync/reachability");
 const { DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("../memory-sync/state-store");
 const { DEFAULT_MASS_DELETE_GUARD } = require("../memory-sync/guards");
@@ -720,7 +721,15 @@ function sanitizeSegment(value: string): string {
 }
 
 function normalizeRelativePath(value: string): string {
-  const normalized = value.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+  // Routed through the same portable-path check push/pull/restore use for a
+  // sync destination (assertPortablePathSegment, src/memory-sync/config.ts):
+  // on darwin/linux a literal backslash in this config value is not a path
+  // separator, so a blanket replace here would silently retarget every file
+  // under this subdir at a mangled hub path, the same failure mode the
+  // sync-path check exists to refuse (agent-tasks 73ea60bf).
+  const normalized = assertPortablePathSegment(value, "repository subdir")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
   if (!normalized || normalized.startsWith("..")) {
     throw new CliError(`repository subdir '${value}' is invalid.`, 3);
   }
