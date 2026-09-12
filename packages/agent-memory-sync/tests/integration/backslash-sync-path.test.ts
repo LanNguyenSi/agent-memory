@@ -206,9 +206,26 @@ test("restore --from-commit skips a hub-side backslash path when rebuilding the 
   git(["push", "origin", "HEAD:main"], seedCheckout);
 
   const result = runCli(
-    ["restore", "default", "logs", "--config", configPath, "--from-commit", seedSha, "--yes", "--output", "json"]
+    [
+      "restore",
+      "default",
+      "logs",
+      "--config",
+      configPath,
+      "--from-commit",
+      seedSha,
+      "--yes",
+      "--quiet",
+      "--output",
+      "json"
+    ]
   );
   assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.ok(
+    payload.notes.some((note: string) => note.includes("logs/back\\slash.md")),
+    JSON.stringify(payload.notes)
+  );
 
   // The seed's plain file is restored.
   assert.equal(
@@ -348,6 +365,47 @@ test("restore <profile> <destination> --from-commit aborts before writing anythi
     "LOCAL EDIT ONLY\n"
   );
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "zzz")), false);
+});
+
+// A destination restore performs the same complete source-path validation
+// before its preview as before a real write. `--dry-run` therefore cannot
+// make an unmappable late-sorting hub path look safe, and it cannot create a
+// pre-apply snapshot or alter the earlier plain file.
+test("restore <profile> <destination> --from-commit --dry-run refuses a late-sorting hub backslash path before previewing or writing (exit 3)", () => {
+  const root = createSandbox("backslash-restore-destination-dry-run-atomic");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stateDir = path.join(workspaceRoot, ".agent-memory-sync", "default");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  writeText(path.join(workspaceRoot, "logs", "aaa.md"), "aaa v1\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  writeText(path.join(workspaceRoot, "logs", "aaa.md"), "LOCAL EDIT ONLY\n");
+
+  const checkout = cloneRemote(remoteDir, root, "foreign-writer");
+  writeText(path.join(checkout, "shared", "logs", "zzz\\back.md"), "hub-only backslash entry\n");
+  git(["add", "-A"], checkout);
+  git(["commit", "-m", "foreign writer adds a late-sorting backslash-named file"], checkout);
+  git(["push", "origin", "HEAD:main"], checkout);
+  const sha = git(["rev-parse", "HEAD"], checkout).trim();
+
+  const result = runCli(
+    ["restore", "default", "logs", "--config", configPath, "--from-commit", sha, "--dry-run", "--output", "json"],
+    { expectFailure: true }
+  );
+
+  assert.equal(result.status, 3, `stderr: ${result.stderr}`);
+  assert.match(result.stderr, /zzz\\back\.md/);
+  assert.match(result.stderr, /fix the name at the hub/i);
+  assert.equal(
+    fs.readFileSync(path.join(workspaceRoot, "logs", "aaa.md"), "utf8"),
+    "LOCAL EDIT ONLY\n"
+  );
+  assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "zzz")), false);
+  assert.equal(fs.existsSync(path.join(stateDir, "snapshots")), false);
 });
 
 // The pull direction refuses the same as push/sync/restore (review round 3
