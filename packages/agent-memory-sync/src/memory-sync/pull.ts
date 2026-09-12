@@ -8,6 +8,7 @@ const {
   ownerMismatchNote,
   resolveSyncPathEntries
 } = require("./config");
+const { CliError } = require("../errors");
 const { GitClient } = require("./git-client");
 const { assertNoRemoteMassDelete, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
@@ -100,7 +101,15 @@ async function performPull(config: PullConfig, options: PullOptions) {
     ])
   );
   const baseMap = stateStore.readBaseSnapshots();
-  const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
+  // A hub-side name that cannot be mapped to a portable local path on this
+  // platform is skipped and reported here, never a whole-run abort - only
+  // the local push/sync/restore/pull direction (a name this machine could
+  // rename) refuses the whole run (agent-tasks 73ea60bf). Declared here,
+  // ahead of collectRemoteFiles, so its hub-side backslash notes land in
+  // the same array the rest of this function already appends its
+  // diagnostics to below.
+  const notes: string[] = [];
+  const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir, notes);
   // Guard 1: never merge against a working copy that cannot be trusted to
   // represent the remote. In the 2026-09-11 wipe (agent-tasks cda5b12c,
   // pandora run .ai/runs/2026-09-11-memory-sync-wipe) the fetched copy under
@@ -282,7 +291,6 @@ async function performPull(config: PullConfig, options: PullOptions) {
   // every other case (fix by editing the file), since a peer file's fix
   // path is never a local edit.
   const plannedPaths = new Set(plan.map((entry) => entry.remoteRelativePath));
-  const notes: string[] = [];
 
   // D-002 (task e104c9f2, review R1 medium): the CLI's [profile] positional
   // can silently not match this machine's actual owner filename (loader.ts's
@@ -505,10 +513,20 @@ function isOwnerScopedPeerPath(
   return ownerScopedEntry !== null && remoteRelativePath !== `${ownerScopedEntry.destination}/${profile}.json`;
 }
 
+// A hub-side naming problem this machine cannot fix must not abort the whole
+// pull the way the local push/sync/restore direction refuses outright - it
+// is skipped and reported in `notes`, naming the hub path, and every other
+// file still pulls. git-client.ts's listFiles returns a hub-relative path
+// exactly as git holds it on non-win32 (no blanket backslash-to-slash
+// flattening), so a hub-side name a foreign writer committed with a literal
+// backslash reaches here raw; that name cannot be mapped to a portable local
+// path on this platform (assertPortablePathSegment inside
+// normalizeRemoteRelativePath throws for it) (agent-tasks 73ea60bf).
 function collectRemoteFiles(
   config: { repositorySubdir: string },
   gitClient: InstanceType<typeof GitClient>,
-  repoDir: string
+  repoDir: string,
+  notes: string[]
 ): Record<string, string | null> {
   const repoRelativeFiles = gitClient.listFiles(repoDir, config.repositorySubdir);
   const result: Record<string, string | null> = {};
@@ -518,9 +536,20 @@ function collectRemoteFiles(
       continue;
     }
 
-    const remoteRelativePath = normalizeRemoteRelativePath(
-      repoRelativeFile.slice(config.repositorySubdir.length + 1)
-    );
+    const hubRelativePath = repoRelativeFile.slice(config.repositorySubdir.length + 1);
+    let remoteRelativePath: string;
+    try {
+      remoteRelativePath = normalizeRemoteRelativePath(hubRelativePath);
+    } catch (error) {
+      if (error instanceof CliError && process.platform !== "win32" && hubRelativePath.includes("\\")) {
+        notes.push(
+          `hub path '${hubRelativePath}' contains a backslash and cannot be mapped to a portable local ` +
+            "path on this platform; skipped - fix the name at the hub"
+        );
+        continue;
+      }
+      throw error;
+    }
     result[remoteRelativePath] = gitClient.readFile(repoDir, repoRelativeFile);
   }
 

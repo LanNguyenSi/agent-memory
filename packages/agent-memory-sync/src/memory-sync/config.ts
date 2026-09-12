@@ -135,7 +135,18 @@ function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFiles
     }
 
     for (const nestedFile of walkFiles(absoluteSource)) {
-      const nestedRelative = path.relative(absoluteSource, nestedFile).replace(/\\/g, "/");
+      // An operator reading the thrown error must be able to tell which
+      // directory holds the file, so displayPath carries the rootDir-relative
+      // path for the error message alone (agent-tasks 73ea60bf). The value
+      // being validated (path.relative(absoluteSource, ...)) is scoped to
+      // this one syncPaths entry's own source directory and is what
+      // remoteRelativePath below is actually built from - it must not
+      // change.
+      const nestedRelative = assertPortablePathSegment(
+        path.relative(absoluteSource, nestedFile),
+        "sync path",
+        path.relative(config.rootDir, nestedFile)
+      );
       results.push({
         absolutePath: nestedFile,
         localRelativePath: normalizeLocalRelativePath(config.rootDir, nestedFile),
@@ -353,7 +364,9 @@ function toRepositoryRelativePath(config: RunConfig, remoteRelativePath: string)
 }
 
 function normalizeRemoteRelativePath(value: string): string {
-  const normalized = value.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+  const normalized = assertPortablePathSegment(value, "sync destination")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
   if (!normalized || normalized.startsWith("..")) {
     throw new CliError(`sync destination '${value}' is invalid.`, 3);
   }
@@ -365,7 +378,44 @@ function resolveWorkspacePath(rootDir: string, candidate: string): string {
 }
 
 function normalizeLocalRelativePath(rootDir: string, absolutePath: string): string {
-  return path.relative(rootDir, absolutePath).replace(/\\/g, "/");
+  return assertPortablePathSegment(path.relative(rootDir, absolutePath), "sync path");
+}
+
+// Every filesystem separator this package produces (path.relative output, or
+// a "\"-joined destination a config author typed) needs to become the "/"
+// form the hub always uses. On win32 that conversion is exact: "\" IS the
+// separator there, path.sep is "\", and NTFS disallows a literal backslash
+// inside a file name, so every backslash path.relative returns is a
+// directory boundary, never part of a real name.
+//
+// On darwin/linux the same blanket replace is not exact: path.sep is "/", so
+// path.relative/readdirSync never put a "\" in their output as a separator,
+// which means any "\" reaching here is part of an actual file or directory
+// name (POSIX allows it). Silently rewriting it to "/" would flatten
+// "logs/back\slash.md" into "shared/logs/back/slash.md", publishing the
+// file's content under a name the hub never held and that push, pull and
+// `restore --from-commit` can never map back to the original file (see
+// pandora .ai/runs/2026-09-11-memory-sync-wipe review R5, agent-tasks
+// 73ea60bf). Refuse instead of guessing.
+function assertPortablePathSegment(value: string, sourceDescription: string, displayPath: string = value): string {
+  if (process.platform === "win32") {
+    return value.replace(/\\/g, "/");
+  }
+
+  if (value.includes("\\")) {
+    // This same throw is reached from the push side (a local name that
+    // would be published mangled) and from restore's local-mapping check
+    // (mapRemotePathToLocalAbsolute -> normalizeRemoteRelativePath), so the
+    // message stays direction-neutral, naming neither side specifically
+    // (agent-tasks 73ea60bf).
+    throw new CliError(
+      `${sourceDescription} '${displayPath}' cannot be mapped to a portable remote path: it contains a ` +
+        "backslash, which agent-memory-sync does not sync on this platform. Rename it.",
+      3
+    );
+  }
+
+  return value;
 }
 
 function resolveSyncPathKind(absoluteSource: string, entry: SyncPathConfig): "file" | "directory" {
@@ -417,6 +467,7 @@ function isHiddenEntryName(name: string): boolean {
 }
 
 module.exports = {
+  assertPortablePathSegment,
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
   filterUnmappedBaseMap,

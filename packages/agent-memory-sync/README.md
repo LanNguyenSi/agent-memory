@@ -179,7 +179,7 @@ and the lock are described under [Deletion guards](#deletion-guards).
 | `0` | Success, including a tick that queued locally because the remote was unreachable. | Nothing. |
 | `1` | An unrecognized flag or argument, or another commander-level usage error (the parser exits before any command code runs). | Fix the invocation; `--help` on the subcommand lists what it accepts. |
 | `2` | A flag combination or value this command rejects: `--accept-mass-delete` together with `--allow-mass-delete`, an invalid `--mode`, a destination `restore` without `--yes`, a malformed sha or cron expression. | Fix the invocation. |
-| `3` | Configuration error: an unsupported key, or a config value that is present but invalid. For a supported key that simply has no value persisted yet, see `11` below. | Fix the config file or the flag. |
+| `3` | Configuration error: an unsupported key, or a config value that is present but invalid. For a supported key that simply has no value persisted yet, see `11` below. Also a local sync path (or an operator-typed `--path`) whose name contains a literal backslash on a non-win32 platform, naming the path; see [Sync behavior](#sync-behavior). | Fix the config file or the flag; for a backslash name, rename the file. |
 | `4` | A git or remote operation failed. | Read the message; a push/fetch failure is queued instead of exiting, so this is usually a local git problem. |
 | `5` | A push plan was refused by the mass-delete guard: it would remove more of a destination, or of the plan as a whole, than the thresholds allow. | Check whether the local workspace was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. |
 | `6` | The replay queue has been failing to drain for longer than `queueEscalationThresholdMs`. | The remote is probably misconfigured rather than temporarily offline; check `remoteUrl`, `branch` and `repositorySubdir`. |
@@ -517,6 +517,35 @@ change.
   itself was unreachable): a completed run can list entries in `skippedFiles` for individual paths
   while its own `status` is `applied`
 - `--dry-run` previews the result without changing local files or the remote repository
+- a `syncPaths` destination, or a local file name underneath one, that contains a literal
+  backslash is refused with exit `3` naming the offending path, on every platform except
+  win32. There, every backslash IS a path separator (NTFS disallows one inside a real file
+  name), so converting it to the `/` form the hub always uses is exact. On darwin/linux
+  `path.sep` is `/`, so a backslash reaching this check is always part of an actual name;
+  silently rewriting it to `/` would flatten e.g. `logs/back\slash.md` into
+  `shared/logs/back/slash.md` on the hub, a name `pull` and `restore --from-commit` can
+  never map back to the original file. Rename the file (or the config value) instead. This
+  refusal aborts the whole run, not just the offending path: nothing is pushed, pulled,
+  synced, or restored until the local name is fixed (`run --mode pull` collects local sync
+  files too, to merge against the remote, so it refuses the same way), and a `watch` service
+  hits it on every tick, so it exits `3` repeatedly until the file is renamed or removed. The
+  same platform-specific backslash check applies to an operator-typed `restore --path` value
+  and to the `repositorySubdir` config value (a backslash there is refused with exit `3` as
+  a configuration error rather than silently rewritten to `/`). A `--dry-run` restore runs
+  the same validation before it prints its preview, so it refuses the same way.
+- a **hub-side** path that carries a literal backslash (committed by a foreign writer, or
+  synced from a win32 machine into a name darwin/linux cannot map back) is a different case:
+  this machine did not create it and cannot rename it, so `pull` does not abort the run for
+  it. It is skipped, and a note in the result names the hub path (`notes`, and
+  `--output text`'s note lines); every other file in the same run still pulls, and the run
+  still exits `0`. `restore --from-commit`'s own base-snapshot bookkeeping for such a path is
+  skipped the same way, reported as a warning line rather than a `notes` entry (`restore`'s
+  JSON payload has no `notes` field). `restore --from-commit` restoring the backslash-named
+  path itself to a local destination is still refused outright: every source path is mapped
+  and validated before the destination's pre-apply snapshot is taken or any file is written,
+  so an unmappable backslash path anywhere in the source list aborts the whole destination
+  restore before it touches the filesystem (same as the local-name case above), since writing
+  it locally is exactly the local-mapping problem, not the hub-side one.
 
 ### Unmapped remote paths and base snapshots
 

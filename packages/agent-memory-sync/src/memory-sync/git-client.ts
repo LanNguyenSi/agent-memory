@@ -96,9 +96,20 @@ class GitClient {
       return [];
     }
 
-    return walkFiles(absoluteDir).map((absolutePath) =>
-      path.relative(repoDir, absolutePath).replace(/\\/g, "/")
-    );
+    // This method returns the tree exactly as git holds it; refusing or
+    // skipping a raw backslash-named entry is the caller's job (
+    // collectRemoteFiles in pull.ts, and restore.ts's own listFiles
+    // callers), not this one's. path.sep is "\" only on win32, so the
+    // blanket replace below is exact there (every "\" path.relative returns
+    // IS a directory boundary). On darwin/linux path.relative/readdirSync
+    // never put a "\" in their output as a separator, so a "\" that shows up
+    // here is part of a real hub-side file or directory name; the replace
+    // used to flatten it into a mangled "/" path silently (pandora
+    // .ai/runs/2026-09-11-memory-sync-wipe review R5, agent-tasks 73ea60bf).
+    return walkFiles(absoluteDir).map((absolutePath) => {
+      const relative = path.relative(repoDir, absolutePath);
+      return process.platform === "win32" ? relative.replace(/\\/g, "/") : relative;
+    });
   }
 
   hasChanges(repoDir: string): boolean {

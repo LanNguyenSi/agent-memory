@@ -15,7 +15,7 @@ const {
 const { GitClient } = require("../memory-sync/git-client");
 const { readPreApplySnapshot, writePreApplySnapshot } = require("../memory-sync/pre-apply-snapshot");
 const { StateStore } = require("../memory-sync/state-store");
-const { writeDryRun, writeInfo, writeResult } = require("../output");
+const { writeDryRun, writeInfo, writeResult, writeWarning } = require("../output");
 
 type OutputFormat = "text" | "json" | "yaml";
 
@@ -211,18 +211,38 @@ function registerRestoreCommand(program: import("commander").Command): void {
           );
         }
 
-        const restored: Array<{ remoteRelativePath: string; absoluteLocalPath: string; bytes: number }> = [];
-
+        // Every target path is mapped and validated here, before the write
+        // loop below touches the filesystem at all: a later path in the list
+        // failing to map (e.g. a backslash-named path a foreign writer
+        // committed to the hub) must not leave the run half-applied, with
+        // some files already overwritten and others never reached. This
+        // package's own destination-restore path (restoreDestination) maps
+        // and validates its own sourceFiles list the same way, before its
+        // pre-apply snapshot or write loop runs (agent-tasks 73ea60bf).
+        const resolvedTargets: Array<{ repoRelativePath: string; remoteRelativePath: string; absoluteLocalPath: string }> = [];
         for (const repoRelativePath of targetRepoPaths) {
           const remoteRelativePath = repoRelativePath.slice(runConfig.repositorySubdir.length + 1);
           const absoluteLocalPath = mapRemotePathToLocalAbsolute(runConfig, remoteRelativePath);
           if (!absoluteLocalPath) {
+            if (process.platform !== "win32" && remoteRelativePath.includes("\\")) {
+              throw new CliError(
+                `cannot restore '${remoteRelativePath}': it contains a backslash and cannot be mapped to a ` +
+                  "portable local path on this platform. Fix the name at the hub, or use --path to restore " +
+                  "an unaffected file.",
+                3
+              );
+            }
             throw new CliError(
               `cannot map remote path '${remoteRelativePath}' to a local sync target. Update syncPaths or use --path.`,
               3
             );
           }
+          resolvedTargets.push({ repoRelativePath, remoteRelativePath, absoluteLocalPath });
+        }
 
+        const restored: Array<{ remoteRelativePath: string; absoluteLocalPath: string; bytes: number }> = [];
+
+        for (const { repoRelativePath, remoteRelativePath, absoluteLocalPath } of resolvedTargets) {
           const content = gitClient.showAtRef(workingCopy.repoDir, resolvedSha, repoRelativePath);
           if (content === null) {
             throw new RestoreSourceNotFoundError(`file '${repoRelativePath}' does not exist at ${sha}.`);
@@ -422,6 +442,35 @@ async function restoreDestination(
     (file: { remoteRelativePath: string }) => !sourcePaths.has(file.remoteRelativePath)
   );
 
+  // Every source path is mapped and validated here, before the pre-apply
+  // snapshot is taken or the write loop below touches the filesystem at
+  // all: a later path in sourceFiles failing to map (e.g. a backslash-named
+  // path a foreign writer committed to the hub, sorting after an
+  // already-written plain file) must not leave the destination
+  // half-restored. The legacy file-form write loop above already does this;
+  // this form did not, so a source list with an unmappable path sorted
+  // after a mappable one wrote the mappable one, snapshotted it, and only
+  // then aborted, matching README's "refused outright" for this case
+  // (agent-tasks 73ea60bf).
+  const resolvedSourceFiles = sourceFiles.map((file) => {
+    const absolutePath = mapRemotePathToLocalAbsolute(runConfig, file.remoteRelativePath, resolvedEntries);
+    if (!absolutePath) {
+      if (process.platform !== "win32" && file.remoteRelativePath.includes("\\")) {
+        throw new CliError(
+          `cannot restore '${file.remoteRelativePath}': it contains a backslash and cannot be mapped to a ` +
+            "portable local path on this platform. Fix the name at the hub, or use --path to restore " +
+            "an unaffected file.",
+          3
+        );
+      }
+      throw new CliError(
+        `cannot map '${file.remoteRelativePath}' to a local sync target. Update syncPaths.`,
+        3
+      );
+    }
+    return { ...file, absolutePath };
+  });
+
   if (options.dryRun) {
     for (const file of sourceFiles) {
       writeDryRun(`would restore ${file.remoteRelativePath}`, outputOptions);
@@ -440,14 +489,8 @@ async function restoreDestination(
       generations: runConfig.snapshotGenerations
     });
 
-    for (const file of sourceFiles) {
-      const absolutePath = mapRemotePathToLocalAbsolute(runConfig, file.remoteRelativePath, resolvedEntries);
-      if (!absolutePath) {
-        throw new CliError(
-          `cannot map '${file.remoteRelativePath}' to a local sync target. Update syncPaths.`,
-          3
-        );
-      }
+    for (const file of resolvedSourceFiles) {
+      const { absolutePath } = file;
       mkdirSync(path.dirname(absolutePath), { recursive: true });
       // Written as a Buffer, never through a decode-and-re-encode of this
       // command's own. What that buys depends on the source. A snapshot
@@ -469,7 +512,7 @@ async function restoreDestination(
     }
 
     if (mode.kind === "commit" && workingCopy) {
-      moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination);
+      moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination, outputOptions);
     }
   }
 
@@ -509,7 +552,8 @@ function moveBaseToCurrentRemote(
   runConfig: { profile: string; stateDir: string; repositorySubdir: string },
   gitClient: InstanceType<typeof GitClient>,
   repoDir: string,
-  destination: string
+  destination: string,
+  outputOptions: { color: boolean; quiet: boolean; verbose: boolean }
 ): void {
   const stateStore = new StateStore(runConfig.stateDir, runConfig.profile);
   const stored = stateStore.readBaseSnapshots();
@@ -529,6 +573,22 @@ function moveBaseToCurrentRemote(
     if (!belongsToDestination(remoteRelativePath, destination)) {
       continue;
     }
+    // A base-snapshot key must always have a local counterpart, or the next
+    // push's 3-way merge reads it as a local deletion. git-client.ts's
+    // listFiles no longer flattens a real "\" in a hub-side name into "/" on
+    // this platform, so a foreign writer's backslash-named path reaches here
+    // raw; it cannot become a base-snapshot key here any more than it could
+    // become a written local file in the loop above. Skip it and say so, the
+    // same hub-side-skip idiom pull.ts's collectRemoteFiles uses (agent-tasks
+    // 73ea60bf).
+    if (process.platform !== "win32" && remoteRelativePath.includes("\\")) {
+      writeWarning(
+        `skipped ${remoteRelativePath}; contains a backslash and cannot be mapped to a portable local ` +
+          "path on this platform - fix the name at the hub",
+        outputOptions
+      );
+      continue;
+    }
     stored[remoteRelativePath] = gitClient.readFile(repoDir, repoRelativePath);
   }
 
@@ -540,6 +600,20 @@ function belongsToDestination(remoteRelativePath: string, destination: string): 
 }
 
 function normalizeRequestedPath(repositorySubdir: string, requested: string): string {
+  // Silently flattening an operator-typed "\" would target the wrong file
+  // with no error at all, so this refuses outright instead of guessing. On
+  // win32 the blanket replace below is exact (a typed "\" IS a separator
+  // there), but on darwin/linux an operator-typed "\" is legal inside a real
+  // path segment; unlike the internal call sites, this function's sibling
+  // paths route through assertPortablePathSegment (agent-tasks 73ea60bf).
+  if (process.platform !== "win32" && requested.includes("\\")) {
+    throw new CliError(
+      `--path value '${requested}' contains a backslash and cannot be mapped to a portable remote path ` +
+        "on this platform. Rename the file, or pass its actual remote path segments.",
+      3
+    );
+  }
+
   const normalized = requested.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
   const segments = normalized.split("/");
   if (!normalized || segments.includes("..") || segments.includes("")) {
