@@ -473,6 +473,11 @@ function parsePositiveInteger(value: string | undefined, flag: string): number |
 }
 
 function relativeForMessage(absolutePath: string, rootDir: string): string {
+  // Review round 1, LOW #5: not routed through assertPortablePathSegment.
+  // This value is display-only text for a commit message / log line, never
+  // a key push/pull maps back to a file, so a raw "\" surviving here (on
+  // darwin/linux) is cosmetic, not a correctness path - the actual push
+  // still refuses the same file's real sync path elsewhere.
   const relative = path.relative(rootDir, absolutePath).replace(/\\/g, "/");
   if (!relative || relative.startsWith("../")) {
     return path.basename(absolutePath);

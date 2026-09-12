@@ -135,9 +135,17 @@ function collectLocalSyncFiles(config: RunConfig, options: CollectLocalSyncFiles
     }
 
     for (const nestedFile of walkFiles(absoluteSource)) {
+      // The value being validated (path.relative(absoluteSource, ...)) is
+      // scoped to this one syncPaths entry's own source directory and is
+      // what remoteRelativePath below is actually built from below - it
+      // must not change. Reviewer finding (round 1, LOW #4): an operator
+      // reading the thrown error only sees that fragment, not which
+      // directory holds the file. displayPath carries the rootDir-relative
+      // path instead, for the error message alone.
       const nestedRelative = assertPortablePathSegment(
         path.relative(absoluteSource, nestedFile),
-        "sync path"
+        "sync path",
+        path.relative(config.rootDir, nestedFile)
       );
       results.push({
         absolutePath: nestedFile,
@@ -389,15 +397,20 @@ function normalizeLocalRelativePath(rootDir: string, absolutePath: string): stri
 // `restore --from-commit` can never map back to the original file (see
 // pandora .ai/runs/2026-09-11-memory-sync-wipe review R5, agent-tasks
 // 73ea60bf). Refuse instead of guessing.
-function assertPortablePathSegment(value: string, sourceDescription: string): string {
+function assertPortablePathSegment(value: string, sourceDescription: string, displayPath: string = value): string {
   if (process.platform === "win32") {
     return value.replace(/\\/g, "/");
   }
 
   if (value.includes("\\")) {
+    // Direction-neutral wording (review round 1, LOW #4): this same throw is
+    // reached from the push side (a local name that would be published
+    // mangled) and from restore's local-mapping check (mapRemotePathToLocalAbsolute
+    // -> normalizeRemoteRelativePath), so the message names neither
+    // direction specifically.
     throw new CliError(
-      `${sourceDescription} '${value}' contains a backslash, which agent-memory-sync does not sync on ` +
-        "this platform (it would be published under a different, mangled remote path). Rename it.",
+      `${sourceDescription} '${displayPath}' cannot be mapped to a portable remote path: it contains a ` +
+        "backslash, which agent-memory-sync does not sync on this platform. Rename it.",
       3
     );
   }

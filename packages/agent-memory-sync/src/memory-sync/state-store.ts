@@ -249,6 +249,13 @@ function readSnapshotTree(rootDir: string): Record<string, string | null> {
   const result: Record<string, string | null> = {};
 
   for (const filePath of walkFiles(rootDir)) {
+    // Review round 1, LOW #5: not routed through assertPortablePathSegment.
+    // rootDir here is this store's own internal snapshot tree, populated
+    // solely from remoteRelativePath keys that already passed that check
+    // upstream (collectLocalSyncFiles/pull's skip-with-note); a "\" in a
+    // relative path under rootDir can only be a directory boundary this
+    // tool itself created, never a raw file-name character, on any
+    // platform.
     if (filePath.endsWith(".meta.json")) {
       const relative = path.relative(rootDir, filePath).replace(/\\/g, "/");
       const key = relative.replace(/\.meta\.json$/, "");

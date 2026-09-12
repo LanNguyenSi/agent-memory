@@ -469,7 +469,7 @@ async function restoreDestination(
     }
 
     if (mode.kind === "commit" && workingCopy) {
-      moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination);
+      moveBaseToCurrentRemote(runConfig, gitClient, workingCopy.repoDir, mode.destination, outputOptions);
     }
   }
 
@@ -509,7 +509,8 @@ function moveBaseToCurrentRemote(
   runConfig: { profile: string; stateDir: string; repositorySubdir: string },
   gitClient: InstanceType<typeof GitClient>,
   repoDir: string,
-  destination: string
+  destination: string,
+  outputOptions: { color: boolean; quiet: boolean; verbose: boolean }
 ): void {
   const stateStore = new StateStore(runConfig.stateDir, runConfig.profile);
   const stored = stateStore.readBaseSnapshots();
@@ -529,6 +530,22 @@ function moveBaseToCurrentRemote(
     if (!belongsToDestination(remoteRelativePath, destination)) {
       continue;
     }
+    // Review round 1, MEDIUM #1: git-client.ts's listFiles no longer
+    // flattens a real "\" in a hub-side name into "/" on this platform, so a
+    // foreign writer's backslash-named path reaches here raw. It cannot
+    // become a base-snapshot key here any more than it could become a
+    // written local file in the loop above: recording it would leave a
+    // base entry with no local counterpart, which the next push's 3-way
+    // merge would read as a local deletion. Skip it and say so, the same
+    // hub-side-skip idiom pull.ts's collectRemoteFiles now uses.
+    if (process.platform !== "win32" && remoteRelativePath.includes("\\")) {
+      writeInfo(
+        `skipped ${remoteRelativePath}; contains a backslash and cannot be mapped to a portable local ` +
+          "path on this platform - fix the name at the hub",
+        outputOptions
+      );
+      continue;
+    }
     stored[remoteRelativePath] = gitClient.readFile(repoDir, repoRelativePath);
   }
 
@@ -540,6 +557,20 @@ function belongsToDestination(remoteRelativePath: string, destination: string): 
 }
 
 function normalizeRequestedPath(repositorySubdir: string, requested: string): string {
+  // Review round 1, LOW #5: on win32 the blanket replace below is exact (a
+  // typed "\" IS a separator there), but on darwin/linux an operator-typed
+  // "\" is legal inside a real path segment. Unlike the internal call sites
+  // this function's sibling paths route through assertPortablePathSegment,
+  // silently flattening it here would target the wrong file with no error
+  // at all, so refuse outright instead - simpler than leaving it unrouted.
+  if (process.platform !== "win32" && requested.includes("\\")) {
+    throw new CliError(
+      `--path value '${requested}' contains a backslash and cannot be mapped to a portable remote path ` +
+        "on this platform. Rename the file, or pass its actual remote path segments.",
+      2
+    );
+  }
+
   const normalized = requested.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
   const segments = normalized.split("/");
   if (!normalized || segments.includes("..") || segments.includes("")) {
