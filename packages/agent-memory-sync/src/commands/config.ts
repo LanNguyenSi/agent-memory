@@ -8,7 +8,7 @@ const {
   setConfigValue,
   writePersistedConfig
 } = require("../config/loader");
-const { CliError } = require("../errors");
+const { CliError, ConfigKeyNotSetError } = require("../errors");
 const { writeResult } = require("../output");
 
 function registerConfigCommand(program: import("commander").Command): void {
@@ -40,7 +40,7 @@ function registerConfigCommand(program: import("commander").Command): void {
       const value = getConfigValue(persisted.settings, key);
 
       if (typeof value === "undefined") {
-        throw new CliError(`config key '${key}' is not set in ${persisted.path}.`, 5);
+        throw new ConfigKeyNotSetError(`config key '${key}' is not set in ${persisted.path}.`);
       }
 
       process.stdout.write(`${typeof value === "string" ? value : JSON.stringify(value)}\n`);

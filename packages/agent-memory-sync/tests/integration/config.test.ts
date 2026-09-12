@@ -39,7 +39,7 @@ test("config get on a non-string-typed key (verbose, a boolean) prints its JSON.
 // getConfigValue throws when the key exists in the schema (validateConfigKey
 // passes) but was never persisted — distinct from an unsupported key
 // entirely, which validateConfigKey itself rejects earlier.
-test("config get on a supported key that was never set exits non-zero with a clear error", () => {
+test("config get on a supported key that was never set exits 11 with a clear error", () => {
   const root = createSandbox("config-unset-key");
   const configPath = path.join(root, "config.json");
 
@@ -49,6 +49,22 @@ test("config get on a supported key that was never set exits non-zero with a cle
 
   const result = runCli(["config", "get", "branch", "--config", configPath], { expectFailure: true });
 
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, 11);
   assert.match(result.stderr, /config key 'branch' is not set/);
+});
+
+// validateConfigKey (src/config/loader.ts) rejects an unsupported key before
+// getConfigValue ever runs, so this must stay on exit `3` even though an
+// unset-but-supported key (test above) now exits `11`; the two are
+// distinguished by exit code alone per the README's exit-code table.
+test("config get on an unsupported key exits 3, distinct from an unset supported key", () => {
+  const root = createSandbox("config-unsupported-key");
+  const configPath = path.join(root, "config.json");
+
+  runCli(["config", "set", "remoteUrl", "/tmp/remote.git", "--config", configPath]);
+
+  const result = runCli(["config", "get", "notARealKey", "--config", configPath], { expectFailure: true });
+
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /config key 'notARealKey' is not supported/);
 });

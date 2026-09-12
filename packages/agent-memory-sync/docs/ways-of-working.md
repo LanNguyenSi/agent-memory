@@ -20,7 +20,7 @@ These rules govern how the tool behaves from a user perspective. All contributor
 
 ### Exit Codes
 
-Always use the canonical exit codes from [docs/architecture.md](architecture.md#exit-codes).
+Always use the canonical exit codes from [the README's Exit codes table](../README.md#exit-codes).
 
 - Exit `0` on success, even if there is nothing to do
 - Exit `2` for usage errors (wrong argument types, mutually exclusive flags)

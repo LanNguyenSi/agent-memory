@@ -146,6 +146,21 @@ class RestoreSourceNotFoundError extends CliError {
   }
 }
 
+// Thrown when `config get <key>` is asked for a key that is syntactically
+// supported (see validateConfigKey in src/config/loader.ts) but has no value
+// currently persisted (src/commands/config.ts). Deliberately its own code
+// rather than sharing 3: an unsupported key is a usage mistake the operator
+// can only fix by typing a different key, while an unset supported key is
+// fixed by running `config set` (or checking `--config`) - conflating the
+// two under exit `3` left a reader unable to tell "you typed the wrong key"
+// from "you haven't set that key yet" from the exit code alone.
+class ConfigKeyNotSetError extends CliError {
+  constructor(message: string, exitCode = 11) {
+    super(message, exitCode);
+    this.name = "ConfigKeyNotSetError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -167,6 +182,7 @@ module.exports = {
   UnreliableCheckoutError,
   StateDirLockedError,
   RestoreSourceNotFoundError,
+  ConfigKeyNotSetError,
   isCliError,
   formatErrorMessage
 };
