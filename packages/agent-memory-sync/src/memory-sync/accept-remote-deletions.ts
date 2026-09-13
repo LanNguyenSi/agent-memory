@@ -13,10 +13,13 @@
 // those files: both look like "base has N, the checkout shows fewer or
 // zeroed". Without a way through, a legitimate large deletion wedges push,
 // pull, sync and watch at exit 7 for good - but only for the missing half of
-// that ambiguity. A checkout with emptied paths is not ambiguous in the same
-// way: adopting it would copy zero-byte content into stateDir/snapshots and
-// apply it as if it were the remote's real state, which is corruption, not
-// consent.
+// that ambiguity. A checkout with emptied paths is treated differently, not
+// because it is unambiguous, but because guessing wrong costs more: adopting
+// it would copy zero-byte content into stateDir/snapshots and apply it as if
+// it were the remote's real state, which is corruption, not consent. The
+// route forward for a hub that really did empty those files on purpose is
+// not this flag: re-commit real content at the hub, or raise
+// massDeleteGuard.maxFiles/maxRatio in the config for one run.
 //
 // `--accept-mass-delete` is that way through, and this is what it means on
 // the push side. A pull applies the remote's deletions through its own

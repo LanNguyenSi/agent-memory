@@ -1497,10 +1497,14 @@ for (const mode of ["push", "sync"]) {
       { expectFailure: true }
     );
 
-    assert.notEqual(result.status, 0, `a truncated checkout must not exit 0. stdout: ${result.stdout}`);
+    assert.equal(
+      result.status,
+      7,
+      `expected the checkout refusal's exit code. stdout: ${result.stdout}, stderr: ${result.stderr}`
+    );
     assert.match(result.stderr, /unreliable checkout/);
     assert.match(result.stderr, /emptied to zero bytes/);
-    assert.match(result.stderr, /50 still present/);
+    assert.match(result.stderr, /has all 50 of the 50 file\(s\)/);
 
     // Nothing reached the remote: every log file is still there, at its
     // real content, not the truncated one. The count alone would not catch
@@ -1571,10 +1575,10 @@ for (const mode of ["push", "sync", "pull"]) {
       { expectFailure: true }
     );
 
-    assert.notEqual(
+    assert.equal(
       result.status,
-      0,
-      `--accept-mass-delete must not adopt an emptied checkout. stdout: ${result.stdout}`
+      7,
+      `--accept-mass-delete must not adopt an emptied checkout. stdout: ${result.stdout}, stderr: ${result.stderr}`
     );
     assert.match(result.stderr, /unreliable checkout/);
     assert.match(result.stderr, /emptied to zero bytes/);

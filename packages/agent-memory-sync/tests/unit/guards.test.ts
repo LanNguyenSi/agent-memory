@@ -565,11 +565,87 @@ test("assertReliableCheckout: an emptied checkout names the emptied count and th
       assert.equal(error.exitCode, 7);
       assert.match(error.message, /has all 50 of the 50 file\(s\)/);
       assert.match(error.message, /present but emptied to zero bytes/);
-      assert.match(error.message, /50 still present/);
       assert.match(error.message, /checkout-reliability limit of 20 file\(s\)/);
       return true;
     }
   );
+});
+
+// Structural closure for the wording class this file keeps having to patch
+// one report at a time (agent-tasks 56e20494 review round 3): every shape
+// describeUnreliableCheckout can produce for a threshold-breaching finding,
+// pinned in one place so a future wording change has to update all four
+// rows or fail here, rather than only the row someone happened to touch.
+test("assertReliableCheckout: the unreliable-checkout message is exact for every finding shape", () => {
+  const cases: Array<{ name: string; remoteMap: Record<string, string | null>; expected: RegExp }> = [
+    {
+      name: "lost only",
+      remoteMap: (() => {
+        const remoteMap = tracked("memory", 50);
+        for (const key of paths("memory", 25)) {
+          delete remoteMap[key];
+        }
+        return remoteMap;
+      })(),
+      expected:
+        /is missing 25 of the 50 file\(s\) the base snapshot tracks under 'memory' \(25 still present\), over the checkout-reliability limit of 20 file\(s\)/
+    },
+    {
+      name: "emptied only, all",
+      remoteMap: emptied(tracked("memory", 50)),
+      expected:
+        /has all 50 of the 50 file\(s\) the base snapshot tracks under 'memory' present but emptied to zero bytes, over the checkout-reliability limit of 20 file\(s\)/
+    },
+    {
+      name: "emptied only, partial (25 of 50)",
+      remoteMap: (() => {
+        const remoteMap = tracked("memory", 50);
+        for (const key of paths("memory", 25)) {
+          remoteMap[key] = "";
+        }
+        return remoteMap;
+      })(),
+      expected:
+        /has 25 of the 50 file\(s\) the base snapshot tracks under 'memory' present but emptied to zero bytes, over the checkout-reliability limit of 20 file\(s\)/
+    },
+    {
+      name: "mixed lost and emptied",
+      remoteMap: (() => {
+        const remoteMap = tracked("memory", 50);
+        for (const key of paths("memory", 15)) {
+          delete remoteMap[key];
+        }
+        for (const key of paths("memory", 10, 15)) {
+          remoteMap[key] = "";
+        }
+        return remoteMap;
+      })(),
+      expected:
+        /is missing 15 of the 50 file\(s\) the base snapshot tracks under 'memory' and 10 more present but emptied to zero bytes \(35 still present\), over the checkout-reliability limit of 20 file\(s\)/
+    }
+  ];
+
+  for (const { name, remoteMap, expected } of cases) {
+    assert.throws(
+      () =>
+        assertReliableCheckout({
+          config: config(),
+          baseMap: tracked("memory", 50),
+          remoteMap,
+          remoteHead: "c6be19d"
+        }),
+      (error: Error & { exitCode?: number }) => {
+        assert.equal(error.exitCode, 7, name);
+        assert.match(error.message, expected, name);
+        // Never "all" unless every emptied file is emptied - the wording
+        // this whole test exists to pin (agent-tasks 56e20494 round 3).
+        if (name === "emptied only, partial (25 of 50)") {
+          assert.doesNotMatch(error.message, /has all/, name);
+        }
+        return true;
+      }
+    );
+  }
 });
 
 // D-008: the refusal used to end with "re-run with --allow-mass-delete",

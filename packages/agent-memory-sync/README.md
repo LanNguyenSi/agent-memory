@@ -188,7 +188,7 @@ and the lock are described under [Deletion guards](#deletion-guards).
 | `4` | A git or remote operation failed. | Read the message; a push/fetch failure is queued instead of exiting, so this is usually a local git problem. |
 | `5` | A push plan was refused by the mass-delete guard: it would remove more of a destination, or of the plan as a whole, than the thresholds allow. | Check whether the local workspace was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. |
 | `6` | The replay queue has been failing to drain for longer than `queueEscalationThresholdMs`. | The remote is probably misconfigured rather than temporarily offline; check `remoteUrl`, `branch` and `repositorySubdir`. |
-| `7` | The fetched working copy is missing too much of what the base snapshot tracks, or too much of it came back present but emptied to zero bytes, so it cannot be trusted to represent the remote. | Re-run once nothing else is touching `stateDir/tmp`. If the finding is missing files (not emptied ones) and the remote really did drop them, run `run` once with `--accept-mass-delete`; otherwise bring them back with `restore --from-commit <sha> --yes`. An emptied finding is never adopted by `--accept-mass-delete`. |
+| `7` | The fetched working copy is missing too much of what the base snapshot tracks, or too much of it came back present but emptied to zero bytes, so it cannot be trusted to represent the remote. | Re-run once nothing else is touching `stateDir/tmp`. If the finding is missing files (not emptied ones) and the remote really did drop them, run `run` once with `--accept-mass-delete`; otherwise bring them back with `restore --from-commit <sha> --yes`. An emptied finding is never adopted by `--accept-mass-delete`; this is almost always the checkout itself coming back zeroed, but if the hub really did empty these files on purpose, re-commit real content at the hub, or raise `massDeleteGuard.maxFiles`/`maxRatio` in the config for one run. |
 | `8` | Another agent-memory-sync process holds the lock on this state directory. | Wait for it and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically. |
 | `9` | A remote change would delete more of a destination, or of the plan as a whole, than the thresholds allow. | Confirm the remote deletion is genuine, then run `run` once with `--accept-mass-delete`. |
 | `10` | A restore source was not found: no such pre-apply snapshot, or the commit holds nothing to restore under the requested path or destination. | List `<stateDir>/snapshots/<destination>/` for the available generations, or pick a commit that still had the files (`git log` on the remote). |
@@ -426,8 +426,13 @@ change.
   that was wiped underneath the process from a remote that genuinely dropped
   the files, which is why the missing half of this has its own escape rather
   than sharing the push flag's. The emptied half has no escape at all: a
-  destination present but zeroed is the corruption itself, not an ambiguous
-  signal, so `--accept-mass-delete` refuses it too (see below).
+  destination present but zeroed is almost always the checkout itself coming
+  back zeroed rather than a remote that genuinely emptied it, and adopting it
+  on the strength of a flag would be worse than refusing it, so
+  `--accept-mass-delete` refuses it too (see below). If the hub really did
+  empty those files on purpose, the route forward is not that flag:
+  re-commit real content at the hub, or raise `massDeleteGuard.maxFiles`/
+  `maxRatio` in the config for one run.
 - **Pre-apply snapshots**: before a pull deletes or overwrites anything in a
   destination, the destination's current tree is copied to
   `<stateDir>/snapshots/<destination>/<timestamp>/`. The newest
@@ -445,9 +450,13 @@ change.
   so the next run is clean instead of republishing what was just accepted as
   deleted. It does NOT override a working copy present but emptied to zero
   bytes: nothing at the file level distinguishes "the remote emptied these"
-  from "this checkout came back zeroed", but adopting the latter would copy
-  and apply zero-byte content as if it were real, so that half always refuses
-  (exit `7`) regardless of the flag. It is a one-shot decision about one
+  from "this checkout came back zeroed" (almost always the latter), but
+  adopting a zeroed checkout on the strength of a flag would copy and apply
+  zero-byte content as if it were real, so that half always refuses (exit
+  `7`) regardless of the flag. If the hub really did empty those files on
+  purpose, re-commit real content at the hub, or raise
+  `massDeleteGuard.maxFiles`/`maxRatio` in the config for one run. It is a
+  one-shot decision about one
   observed remote state, which is why `watch` does not take it: on a process
   that runs for weeks it would be consent for every future tick, including one
   that fetches a wiped working copy. It cannot be combined with

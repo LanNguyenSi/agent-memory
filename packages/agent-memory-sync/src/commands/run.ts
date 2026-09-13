@@ -76,7 +76,9 @@ function registerRunCommand(program: import("commander").Command): void {
         "The destination is copied into stateDir/snapshots first. Use it only once the remote deletion is " +
         "known to be genuine, for one run; it cannot be combined with --allow-mass-delete. It does NOT " +
         "adopt a checkout with files present but emptied to zero bytes: that is refused regardless of " +
-        "this flag, since there is nothing trustworthy in it to adopt",
+        "this flag, since there is nothing trustworthy in it to adopt. If the hub really did empty those " +
+        "files on purpose, re-commit real content at the hub, or raise massDeleteGuard.maxFiles/maxRatio " +
+        "in the config for one run",
       false
     )
     .option("--dry-run", "Preview without making changes", false)

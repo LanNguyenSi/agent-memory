@@ -429,11 +429,11 @@ interface CheckoutFinding {
 // remote rewrite to different, still non-empty content is never "emptied"
 // either - both are ordinary content changes findUnreliableCheckout has
 // never refused and still must not. Lost and emptied paths are combined
-// before either
-// threshold is applied: both are the same failure from the guard's point of
-// view (a base-tracked file this checkout cannot be trusted to hold), and
-// mixing a handful of missing paths with a handful of zeroed ones must not
-// let a corrupted checkout dodge both counts individually.
+// before either threshold is applied: both are the same failure from the
+// guard's point of view (a base-tracked file this checkout cannot be
+// trusted to hold), and mixing a handful of missing paths with a handful of
+// zeroed ones must not let a corrupted checkout dodge both counts
+// individually.
 //
 // `remoteHead === null` means the remote branch has no commits at all (a
 // freshly initialized remote before the first push), where an empty working
@@ -561,10 +561,10 @@ function describeUnreliableCheckout(finding: CheckoutFinding, guard: MassDeleteG
   }
 
   if (finding.lost === 0) {
+    const allNote = finding.emptied === finding.tracked ? "all " : "";
     return (
-      `has all ${finding.emptied} of the ${finding.tracked} file(s) the base snapshot tracks under ` +
-      `'${finding.destination}' present but emptied to zero bytes (${finding.present} still present), ` +
-      `${thresholdNote}`
+      `has ${allNote}${finding.emptied} of the ${finding.tracked} file(s) the base snapshot tracks under ` +
+      `'${finding.destination}' present but emptied to zero bytes, ${thresholdNote}`
     );
   }
 
@@ -590,13 +590,15 @@ function describeUnreliableCheckout(finding: CheckoutFinding, guard: MassDeleteG
 function describeCheckoutRemediation(finding: CheckoutFinding): string {
   if (finding.emptied > 0) {
     return (
-      `Nothing was deleted locally and nothing was pushed. This is the checkout itself coming back zeroed ` +
-      `(a temporary working copy wiped, truncated in place, or never materialized, e.g. a concurrent ` +
-      `watch/sync run sharing stateDir/tmp), not a remote that genuinely emptied these files. ` +
-      `--accept-mass-delete does not answer this: that flag adopts "the remote really did drop these ` +
-      `files", and a zeroed checkout has nothing trustworthy for it to adopt. Re-run once nothing else is ` +
-      `touching stateDir/tmp, or restore the destination from a commit that still had these files ` +
-      `('agent-memory-sync restore --from-commit <sha>').`
+      `Nothing was deleted locally and nothing was pushed. This is almost always the checkout itself ` +
+      `coming back zeroed (a temporary working copy wiped, truncated in place, or never materialized, ` +
+      `e.g. a concurrent watch/sync run sharing stateDir/tmp), rather than a remote that genuinely ` +
+      `emptied these files. --accept-mass-delete does not answer this: that flag adopts "the remote ` +
+      `really did drop these files", and a zeroed checkout has nothing trustworthy for it to adopt. ` +
+      `Re-run once nothing else is touching stateDir/tmp, or restore the destination from a commit that ` +
+      `still had these files ('agent-memory-sync restore --from-commit <sha>'). If the hub really did ` +
+      `empty these files on purpose, the route forward is not this flag: re-commit real content at the ` +
+      `hub, or raise massDeleteGuard.maxFiles/maxRatio in the config for one run.`
     );
   }
 
