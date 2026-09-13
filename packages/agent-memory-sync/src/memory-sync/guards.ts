@@ -16,9 +16,14 @@
 // plausible. These two guards do that check:
 //
 //   assertReliableCheckout  the inputs: a destination the base snapshot says
-//                           holds files came back missing enough of them
-//                           that the checkout itself is not trustworthy, so
-//                           no merge may run against it.
+//                           holds files came back missing, or present but
+//                           emptied to zero bytes, enough of them that the
+//                           checkout itself is not trustworthy, so no merge
+//                           may run against it. (agent-tasks 56e20494 added
+//                           the emptied half: a checkout can also fail by
+//                           truncating every file in place instead of
+//                           removing it, which the missing-file check alone
+//                           cannot see.)
 //   assertNoMassDelete      the plan: a push that would remove a large share
 //                           of a destination, or a large number of files
 //                           across the whole plan, stops and asks instead of
@@ -391,6 +396,7 @@ interface CheckoutFinding {
   tracked: number;
   present: number;
   lost: number;
+  emptied: number;
   rule: "absolute" | "proportional";
 }
 
@@ -410,6 +416,25 @@ interface CheckoutFinding {
 // destination that tracked a single file and now reports none is an ordinary
 // single-file deletion, which this package has always applied and which its
 // existing suite pins.
+//
+// A checkout can also fail without losing a single path: `present` still
+// counts every base-tracked file, but a corruption that truncates instead of
+// removing (agent-tasks 56e20494, a stub git that zeroes every checked-out
+// file) leaves each one on disk at zero length, so the presence-only count
+// above saw nothing wrong. "Emptied" is defined narrowly, to keep this from
+// firing on ordinary content: a path is emptied when the base snapshot
+// tracked it with NON-EMPTY content, remoteMap still carries it (it is not
+// "lost"), and remoteMap's value for it is the empty string. A file that was
+// legitimately empty at base is never "emptied" (nothing to lose), and a
+// remote rewrite to different, still non-empty content is never "emptied"
+// either (formatPercent/describeUnreliableCheckout below only ever see a
+// zero-length value here, never a shortened-but-nonempty one) - both are
+// ordinary content changes findUnreliableCheckout has never refused and
+// still must not. Lost and emptied paths are combined before either
+// threshold is applied: both are the same failure from the guard's point of
+// view (a base-tracked file this checkout cannot be trusted to hold), and
+// mixing a handful of missing paths with a handful of zeroed ones must not
+// let a corrupted checkout dodge both counts individually.
 //
 // `remoteHead === null` means the remote branch has no commits at all (a
 // freshly initialized remote before the first push), where an empty working
@@ -432,22 +457,25 @@ function findUnreliableCheckout(
   // dropped ten tracked files while carrying ten new ones has still lost
   // ten, and a difference of counts would report zero.
   const lostCounts = countLostByDestination(destinations, baseMap, remoteMap);
+  const emptiedCounts = countEmptiedByDestination(destinations, baseMap, remoteMap);
 
   for (const destination of Array.from(trackedCounts.keys()).sort()) {
     const tracked = trackedCounts.get(destination) || 0;
     const present = presentCounts.get(destination) || 0;
     const lost = lostCounts.get(destination) || 0;
+    const emptied = emptiedCounts.get(destination) || 0;
+    const unreliable = lost + emptied;
 
-    if (lost > guard.maxFiles) {
-      return { destination, tracked, present, lost, rule: "absolute" };
+    if (unreliable > guard.maxFiles) {
+      return { destination, tracked, present, lost, emptied, rule: "absolute" };
     }
 
     if (
-      lost >= MIN_PROPORTIONAL_DELETIONS &&
+      unreliable >= MIN_PROPORTIONAL_DELETIONS &&
       tracked > 0 &&
-      lost > tracked * guard.maxRatio
+      unreliable > tracked * guard.maxRatio
     ) {
-      return { destination, tracked, present, lost, rule: "proportional" };
+      return { destination, tracked, present, lost, emptied, rule: "proportional" };
     }
   }
 
@@ -484,17 +512,61 @@ function countLostByDestination(
   return counts;
 }
 
-function describeUnreliableCheckout(finding: CheckoutFinding): string {
+// How many of the files the base snapshot tracks under each destination the
+// working copy still has, present in remoteMap, but at zero length, when the
+// base content itself was non-empty. Narrow by design (see the "emptied"
+// definition above findUnreliableCheckout): a base path that was itself
+// empty, or a remote value that is present-but-different-and-non-empty (an
+// ordinary content rewrite), is never counted here.
+function countEmptiedByDestination(
+  destinations: string[],
+  baseMap: Record<string, string | null>,
+  remoteMap: Record<string, string | null>
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const destination of destinations) {
+    counts.set(destination, 0);
+  }
+
+  for (const [key, value] of Object.entries(baseMap)) {
+    if (value === null || value.length === 0) {
+      continue;
+    }
+    const destination = destinationOf(destinations, key);
+    if (destination === null) {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(remoteMap, key)) {
+      continue;
+    }
+    const remoteValue = remoteMap[key];
+    if (remoteValue !== null && remoteValue.length === 0) {
+      counts.set(destination, (counts.get(destination) || 0) + 1);
+    }
+  }
+
+  return counts;
+}
+
+function describeUnreliableCheckout(finding: CheckoutFinding, guard: MassDeleteGuardConfig): string {
+  const thresholdNote =
+    finding.rule === "absolute"
+      ? `over the checkout-reliability limit of ${guard.maxFiles} file(s)`
+      : `over the checkout-reliability threshold of ${formatPercent(guard.maxRatio)}`;
+
   if (finding.present === 0) {
     return (
       `has no files under '${finding.destination}', but the base snapshot tracks ${finding.tracked} file(s) ` +
-      `there`
+      `there, ${thresholdNote}`
     );
   }
 
+  const emptiedNote =
+    finding.emptied > 0 ? ` and ${finding.emptied} more present but emptied to zero bytes` : "";
+
   return (
     `is missing ${finding.lost} of the ${finding.tracked} file(s) the base snapshot tracks under ` +
-    `'${finding.destination}' (${finding.present} still present)`
+    `'${finding.destination}'${emptiedNote} (${finding.present} still present), ${thresholdNote}`
   );
 }
 
@@ -522,11 +594,13 @@ function assertReliableCheckout(input: {
   remoteMap: Record<string, string | null>;
   remoteHead: string | null;
 }): void {
+  const guard = resolveMassDeleteGuard(input.config.massDeleteGuard);
   const finding = findUnreliableCheckout(
     input.config,
     input.baseMap,
     input.remoteMap,
-    input.remoteHead
+    input.remoteHead,
+    guard
   );
   if (!finding) {
     return;
@@ -534,7 +608,7 @@ function assertReliableCheckout(input: {
 
   throw new UnreliableCheckoutError(
     `unreliable checkout: the fetched working copy for remote head ${input.remoteHead} ` +
-      `${describeUnreliableCheckout(finding)}. Nothing was deleted locally and nothing was pushed. There ` +
+      `${describeUnreliableCheckout(finding, guard)}. Nothing was deleted locally and nothing was pushed. There ` +
       `are two ways on from here. (1) If this is a temporary working copy that was wiped or never ` +
       `materialized (a concurrent watch/sync run sharing stateDir/tmp), re-run the command once nothing ` +
       `else is touching stateDir/tmp. (2) If the remote really did drop those files and that was intended, ` +
