@@ -1503,12 +1503,100 @@ for (const mode of ["push", "sync"]) {
     assert.match(result.stderr, /50 still present/);
 
     // Nothing reached the remote: every log file is still there, at its
-    // real content, not the truncated one.
+    // real content, not the truncated one. The count alone would not catch
+    // a bug that published the truncated (zero-byte) content under the
+    // right file names, so read every file back too.
     assert.equal(remoteLogFileCount(remoteDir, root, `inspect-truncated-${mode}`), 50);
+    const remoteInspection = cloneRemote(remoteDir, root, `inspect-truncated-content-${mode}`);
+    for (let index = 0; index < 50; index += 1) {
+      const name = `note-${String(index).padStart(3, "0")}.md`;
+      assert.equal(
+        readText(path.join(remoteInspection, "shared", "logs", name)),
+        `entry ${index}\n`,
+        `${name} was published truncated`
+      );
+    }
 
     // And nothing local was touched by the merge/apply path either (the
     // truncation itself is the stub git's own doing to its OWN working
     // copy under stateDir/tmp, not to the workspace).
+    for (const relativePath of seeded) {
+      const content = readText(path.join(workspaceRoot, relativePath));
+      assert.notEqual(content.length, 0, `${relativePath} was emptied in the real workspace`);
+    }
+  });
+}
+
+// agent-tasks 56e20494, review R1 finding F1: --accept-mass-delete answers
+// "the remote really did drop these files", not "this checkout came back
+// zeroed". Measured pre-fix: push --accept-mass-delete against the
+// truncating stub exited 0 and published 50 zero-byte files with no
+// snapshot; sync and pull with the flag emptied the 50 local files too. All
+// three must still refuse at the checkout guard's exit code, flag or not.
+for (const mode of ["push", "sync", "pull"]) {
+  test(`${mode}: --accept-mass-delete does not adopt a checkout truncated to zero bytes (agent-tasks 56e20494)`, () => {
+    const root = createSandbox(`truncated-accept-${mode}`);
+    const remoteDir = initBareRemote(root);
+    const workspaceRoot = path.join(root, "workspace");
+    const configPath = path.join(root, "config.json");
+    const stubConfigPath = path.join(root, "config-stub-git.json");
+
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+    const seeded = seedLogFiles(workspaceRoot, 50);
+    writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+    runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+    writeProjectConfig(stubConfigPath, {
+      ...createConfig(workspaceRoot, remoteDir),
+      gitBinary: writeStubGitTruncatingWorkTree(root)
+    });
+
+    if (mode === "push" || mode === "sync") {
+      writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+    }
+
+    const result = runCli(
+      [
+        "run",
+        "default",
+        "--config",
+        stubConfigPath,
+        "--mode",
+        mode,
+        "--accept-mass-delete",
+        "--output",
+        "json"
+      ],
+      { expectFailure: true }
+    );
+
+    assert.notEqual(
+      result.status,
+      0,
+      `--accept-mass-delete must not adopt an emptied checkout. stdout: ${result.stdout}`
+    );
+    assert.match(result.stderr, /unreliable checkout/);
+    assert.match(result.stderr, /emptied to zero bytes/);
+    // The remedy named must not be the flag that was just refused.
+    assert.doesNotMatch(result.stderr, /re-run with --accept-mass-delete/);
+
+    // The remote still holds every file, at its real content: nothing was
+    // adopted, no snapshot was written, no zero-byte content was published.
+    assert.equal(remoteLogFileCount(remoteDir, root, `inspect-truncated-accept-${mode}`), 50);
+    const remoteInspection = cloneRemote(remoteDir, root, `inspect-truncated-accept-content-${mode}`);
+    for (let index = 0; index < 50; index += 1) {
+      const name = `note-${String(index).padStart(3, "0")}.md`;
+      assert.equal(
+        readText(path.join(remoteInspection, "shared", "logs", name)),
+        `entry ${index}\n`,
+        `${name} was published truncated`
+      );
+    }
+
+    // The real local workspace was never touched by this run's merge/apply
+    // path (only the truncating stub's own throwaway working copy under
+    // stateDir/tmp was zeroed).
     for (const relativePath of seeded) {
       const content = readText(path.join(workspaceRoot, relativePath));
       assert.notEqual(content.length, 0, `${relativePath} was emptied in the real workspace`);

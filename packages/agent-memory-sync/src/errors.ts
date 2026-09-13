@@ -81,15 +81,20 @@ class MassDeleteRefusedError extends CliError {
 
 // Thrown when the temporary working copy a pull or push just prepared cannot
 // be trusted to represent the remote: git reported success, but a sync
-// destination the base snapshot knows to hold files came back with none
-// (src/memory-sync/guards.ts). In the 2026-09-11 incident that was the
-// stateDir/tmp wipe race (StateStore.clearTemp removes the WHOLE tmp root,
-// and the watch and sync jobs share one stateDir), which is indistinguishable
-// from a genuine remote deletion at the file level and was read as one.
+// destination the base snapshot knows to hold files came back missing, or
+// present but emptied to zero bytes (src/memory-sync/guards.ts). In the
+// 2026-09-11 incident that was the stateDir/tmp wipe race (StateStore.clearTemp
+// removes the WHOLE tmp root, and the watch and sync jobs share one
+// stateDir), which is indistinguishable from a genuine remote deletion at
+// the file level and was read as one; agent-tasks 56e20494 added the
+// emptied half, a checkout that truncates every file in place instead of
+// removing it.
 //
 // Exit code 7, and again deliberately not a RemoteUnavailableError: an
 // unreliable checkout must stop the run rather than be queued or retried as
-// a push.
+// a push. --accept-mass-delete overrides this ONLY for the missing half of
+// the finding; an emptied finding has no override at all, flag or no flag
+// (src/memory-sync/guards.ts's assertOverridableCheckout).
 class UnreliableCheckoutError extends CliError {
   constructor(message: string, exitCode = 7) {
     super(message, exitCode);

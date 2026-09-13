@@ -447,24 +447,36 @@ test("findUnreliableCheckout: a destination where every file came back zero byte
 });
 
 test("findUnreliableCheckout: a mix of missing and emptied files combines toward the same threshold (agent-tasks 56e20494)", () => {
-  // 12 tracked, 4 missing outright and 4 more present but zeroed: 8 of 12
-  // unreliable, over both the absolute floor for a small destination and
-  // the 10 percent ratio, even though neither count alone (4 missing, 4
-  // emptied) would trip the proportional rule against 12 tracked files.
-  const baseMap = tracked("memory", 12);
-  const remoteMap = tracked("memory", 12);
-  for (const key of paths("memory", 4)) {
+  // 50 tracked, at the default 10 percent ratio: 3 missing alone (3 of 50,
+  // 6 percent) and 3 emptied alone (also 6 percent) each stay under the
+  // 5-file proportional threshold on their own - this pins that neither
+  // half alone trips the rule - but 6 of 50 combined (12 percent) does.
+  const lostOnly = tracked("memory", 50);
+  for (const key of paths("memory", 3)) {
+    delete lostOnly[key];
+  }
+  assert.equal(findUnreliableCheckout(config(), tracked("memory", 50), lostOnly, "c6be19d"), null);
+
+  const emptiedOnly = tracked("memory", 50);
+  for (const key of paths("memory", 3)) {
+    emptiedOnly[key] = "";
+  }
+  assert.equal(findUnreliableCheckout(config(), tracked("memory", 50), emptiedOnly, "c6be19d"), null);
+
+  const baseMap = tracked("memory", 50);
+  const remoteMap = tracked("memory", 50);
+  for (const key of paths("memory", 3)) {
     delete remoteMap[key];
   }
-  for (const key of paths("memory", 4, 4)) {
+  for (const key of paths("memory", 3, 3)) {
     remoteMap[key] = "";
   }
   assert.deepEqual(findUnreliableCheckout(config(), baseMap, remoteMap, "c6be19d"), {
     destination: "memory",
-    tracked: 12,
-    present: 8,
-    lost: 4,
-    emptied: 4,
+    tracked: 50,
+    present: 47,
+    lost: 3,
+    emptied: 3,
     rule: "proportional"
   });
 });
@@ -551,8 +563,8 @@ test("assertReliableCheckout: an emptied checkout names the emptied count and th
     (error: Error & { exitCode?: number }) => {
       assert.equal(error.name, "UnreliableCheckoutError");
       assert.equal(error.exitCode, 7);
-      assert.match(error.message, /missing 0 of the 50 file\(s\)/);
-      assert.match(error.message, /50 more present but emptied to zero bytes/);
+      assert.match(error.message, /has all 50 of the 50 file\(s\)/);
+      assert.match(error.message, /present but emptied to zero bytes/);
       assert.match(error.message, /50 still present/);
       assert.match(error.message, /checkout-reliability limit of 20 file\(s\)/);
       return true;

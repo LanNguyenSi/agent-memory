@@ -10,7 +10,7 @@ const {
 } = require("./config");
 const { CliError } = require("../errors");
 const { GitClient } = require("./git-client");
-const { assertNoRemoteMassDelete, assertReliableCheckout } = require("./guards");
+const { assertNoRemoteMassDelete, assertOverridableCheckout, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
 const { writePreApplySnapshot } = require("./pre-apply-snapshot");
 const { checkRemoteReachable } = require("./reachability");
@@ -123,10 +123,20 @@ async function performPull(config: PullConfig, options: PullOptions) {
   // deletion path, and it must refuse BEFORE the first deletion instead of
   // after counting the ones it already made. --allow-mass-delete does not
   // reach it: that flag answers "publish these deletions", not "trust this
-  // working copy". --accept-mass-delete does, because a genuine remote
-  // deletion is indistinguishable from a wiped checkout at the file level
-  // and would otherwise have no way through at all. See ./guards.ts.
-  if (!options.acceptMassDelete) {
+  // working copy". --accept-mass-delete does, for a finding whose emptied
+  // count is zero, because a genuine remote deletion is indistinguishable
+  // from a wiped checkout at the file level and would otherwise have no way
+  // through at all. A finding with emptied paths has no such ambiguity to
+  // resolve by consent (see assertOverridableCheckout in ./guards.ts), so
+  // it refuses here regardless of the flag.
+  if (options.acceptMassDelete) {
+    assertOverridableCheckout({
+      config,
+      baseMap,
+      remoteMap,
+      remoteHead: workingCopy.remoteHead
+    });
+  } else {
     assertReliableCheckout({
       config,
       baseMap,

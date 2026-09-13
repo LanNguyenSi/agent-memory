@@ -427,10 +427,9 @@ interface CheckoutFinding {
 // "lost"), and remoteMap's value for it is the empty string. A file that was
 // legitimately empty at base is never "emptied" (nothing to lose), and a
 // remote rewrite to different, still non-empty content is never "emptied"
-// either (formatPercent/describeUnreliableCheckout below only ever see a
-// zero-length value here, never a shortened-but-nonempty one) - both are
-// ordinary content changes findUnreliableCheckout has never refused and
-// still must not. Lost and emptied paths are combined before either
+// either - both are ordinary content changes findUnreliableCheckout has
+// never refused and still must not. Lost and emptied paths are combined
+// before either
 // threshold is applied: both are the same failure from the guard's point of
 // view (a base-tracked file this checkout cannot be trusted to hold), and
 // mixing a handful of missing paths with a handful of zeroed ones must not
@@ -561,12 +560,65 @@ function describeUnreliableCheckout(finding: CheckoutFinding, guard: MassDeleteG
     );
   }
 
+  if (finding.lost === 0) {
+    return (
+      `has all ${finding.emptied} of the ${finding.tracked} file(s) the base snapshot tracks under ` +
+      `'${finding.destination}' present but emptied to zero bytes (${finding.present} still present), ` +
+      `${thresholdNote}`
+    );
+  }
+
   const emptiedNote =
     finding.emptied > 0 ? ` and ${finding.emptied} more present but emptied to zero bytes` : "";
 
   return (
     `is missing ${finding.lost} of the ${finding.tracked} file(s) the base snapshot tracks under ` +
     `'${finding.destination}'${emptiedNote} (${finding.present} still present), ${thresholdNote}`
+  );
+}
+
+// Remediation text shared by assertReliableCheckout's ordinary refusal and
+// assertOverridableCheckout's override-path refusal below. An emptied
+// finding (finding.emptied > 0) gets its own branch: --accept-mass-delete
+// answers "the remote really did drop these files", and a checkout with
+// emptied paths has nothing trustworthy for that answer to adopt (adopting
+// it would copy the destination's own zero-byte content into
+// stateDir/snapshots as if it were the remote's real state). That branch is
+// shown even on the FIRST refusal, before --accept-mass-delete was ever
+// requested, so an operator reading it is never pointed at a flag that will
+// only refuse again (see assertOverridableCheckout).
+function describeCheckoutRemediation(finding: CheckoutFinding): string {
+  if (finding.emptied > 0) {
+    return (
+      `Nothing was deleted locally and nothing was pushed. This is the checkout itself coming back zeroed ` +
+      `(a temporary working copy wiped, truncated in place, or never materialized, e.g. a concurrent ` +
+      `watch/sync run sharing stateDir/tmp), not a remote that genuinely emptied these files. ` +
+      `--accept-mass-delete does not answer this: that flag adopts "the remote really did drop these ` +
+      `files", and a zeroed checkout has nothing trustworthy for it to adopt. Re-run once nothing else is ` +
+      `touching stateDir/tmp, or restore the destination from a commit that still had these files ` +
+      `('agent-memory-sync restore --from-commit <sha>').`
+    );
+  }
+
+  return (
+    `Nothing was deleted locally and nothing was pushed. There are two ways on from here. (1) If this is a ` +
+    `temporary working copy that was wiped or never materialized (a concurrent watch/sync run sharing ` +
+    `stateDir/tmp), re-run the command once nothing else is touching stateDir/tmp. (2) If the remote ` +
+    `really did drop those files and that was intended, re-run with --accept-mass-delete, which copies ` +
+    `the destination into stateDir/snapshots and then applies the remote's state locally. To bring the ` +
+    `files back instead, restore the destination from a commit that still had them ` +
+    `('agent-memory-sync restore --from-commit <sha>') and let the next run push them.`
+  );
+}
+
+function buildUnreliableCheckoutMessage(
+  finding: CheckoutFinding,
+  guard: MassDeleteGuardConfig,
+  remoteHead: string | null
+): string {
+  return (
+    `unreliable checkout: the fetched working copy for remote head ${remoteHead} ` +
+    `${describeUnreliableCheckout(finding, guard)}. ${describeCheckoutRemediation(finding)}`
   );
 }
 
@@ -582,12 +634,16 @@ function describeUnreliableCheckout(finding: CheckoutFinding, guard: MassDeleteG
 // that flag on a wiped working copy would publish the wipe, which is the
 // live path the incident took.
 //
-// --accept-mass-delete is the one override, because nothing at the file
-// level tells a wiped checkout from a remote that genuinely dropped the
-// files, and without an escape a legitimate large deletion wedges every
-// mode permanently. It is destructive by consent: the caller adopts the
-// remote's state after copying the destination (see ./pull.ts and
-// ./accept-remote-deletions.ts), rather than silencing this check.
+// --accept-mass-delete is an override here ONLY for a finding whose
+// emptied count is zero (paths outright missing, not paths present-but-
+// zeroed): nothing at the file level tells a wiped checkout from a remote
+// that genuinely dropped the files, and without an escape a legitimate
+// large deletion wedges every mode permanently. It is destructive by
+// consent: the caller adopts the remote's state after copying the
+// destination (see ./pull.ts and ./accept-remote-deletions.ts), rather
+// than silencing this check. A finding with emptied > 0 has NO override:
+// see assertOverridableCheckout, the function every --accept-mass-delete
+// call site must route through instead of skipping this one outright.
 function assertReliableCheckout(input: {
   config: GuardConfig;
   baseMap: Record<string, string | null>;
@@ -606,17 +662,43 @@ function assertReliableCheckout(input: {
     return;
   }
 
-  throw new UnreliableCheckoutError(
-    `unreliable checkout: the fetched working copy for remote head ${input.remoteHead} ` +
-      `${describeUnreliableCheckout(finding, guard)}. Nothing was deleted locally and nothing was pushed. There ` +
-      `are two ways on from here. (1) If this is a temporary working copy that was wiped or never ` +
-      `materialized (a concurrent watch/sync run sharing stateDir/tmp), re-run the command once nothing ` +
-      `else is touching stateDir/tmp. (2) If the remote really did drop those files and that was intended, ` +
-      `re-run with --accept-mass-delete, which copies the destination into stateDir/snapshots and then ` +
-      `applies the remote's state locally. To bring the files back instead, restore the destination from a ` +
-      `commit that still had them ('agent-memory-sync restore --from-commit <sha>') and let the next run ` +
-      `push them.`
+  throw new UnreliableCheckoutError(buildUnreliableCheckoutMessage(finding, guard, input.remoteHead));
+}
+
+// The one predicate every --accept-mass-delete call site must check before
+// treating the checkout as overridable (accept-remote-deletions.ts, used by
+// both the real push run and its --dry-run preview, and pull.ts's own
+// override branch): a finding with emptied > 0 is refused here exactly as
+// assertReliableCheckout would refuse it, flag or no flag. Returns the
+// finding (or null, when the checkout is fine) so a caller that also needs
+// to know WHICH paths to adopt does not have to recompute it.
+//
+// Why this cannot be answered by --accept-mass-delete: that flag's whole
+// contract is "copy the destination, then trust it as the remote's state"
+// (./accept-remote-deletions.ts). A destination with emptied paths IS the
+// corruption - copying it would persist zero-byte files into
+// stateDir/snapshots and then apply them locally/remotely as if they were
+// real content, which is strictly worse than the refusal it would be
+// bypassing.
+function assertOverridableCheckout(input: {
+  config: GuardConfig;
+  baseMap: Record<string, string | null>;
+  remoteMap: Record<string, string | null>;
+  remoteHead: string | null;
+}): CheckoutFinding | null {
+  const guard = resolveMassDeleteGuard(input.config.massDeleteGuard);
+  const finding = findUnreliableCheckout(
+    input.config,
+    input.baseMap,
+    input.remoteMap,
+    input.remoteHead,
+    guard
   );
+  if (finding && finding.emptied > 0) {
+    throw new UnreliableCheckoutError(buildUnreliableCheckoutMessage(finding, guard, input.remoteHead));
+  }
+
+  return finding;
 }
 
 module.exports = {
@@ -624,6 +706,7 @@ module.exports = {
   MIN_PROPORTIONAL_DELETIONS,
   assertNoMassDelete,
   assertNoRemoteMassDelete,
+  assertOverridableCheckout,
   assertReliableCheckout,
   findMassDelete,
   findUnreliableCheckout,

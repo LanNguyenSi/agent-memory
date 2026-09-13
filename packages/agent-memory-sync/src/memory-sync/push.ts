@@ -253,7 +253,12 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // local files the remote no longer has, move the base snapshot to the
     // remote's), so this push then has nothing to publish for those paths.
     // Without that, silencing the refusal would push the "deleted" files
-    // straight back to the remote on the following run.
+    // straight back to the remote on the following run. That adoption is
+    // itself refused (acceptRemoteDeletions -> findRemoteDeletionsToAccept
+    // -> assertOverridableCheckout in ./guards.ts) when the finding carries
+    // emptied paths: the flag answers "the remote really did drop these
+    // files", not "this checkout came back zeroed", so an emptied finding
+    // still throws UnreliableCheckoutError here regardless of the flag.
     const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
     let acceptedDeletions: string[] = [];
     let preApplySnapshots: string[] = [];
@@ -607,7 +612,10 @@ function previewPush(
       // plan the real run will see, and the preview's arithmetic matches.
       // It used to refuse the checkout here regardless of the flag, so the
       // one command an operator is told to run first could not preview
-      // the acceptance at all.
+      // the acceptance at all. findRemoteDeletionsToAccept still refuses
+      // (throws) for a finding with emptied paths - that half has no
+      // override, flag or no flag - so only a pure-missing finding reaches
+      // the adoption preview below.
       const lost = findRemoteDeletionsToAccept(config, current.baseFiles, remoteMap, workingCopy.remoteHead);
       if (lost.paths.length > 0) {
         adoptedDeletions = lost.paths;

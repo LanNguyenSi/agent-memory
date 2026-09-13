@@ -67,7 +67,8 @@ function registerWatchCommand(program: import("commander").Command): void {
     .option(
       "--allow-mass-delete",
       "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
-        "override an unreliable checkout: a working copy that came back missing files is still refused",
+        "override an unreliable checkout: a working copy that came back missing files, or present but " +
+        "emptied to zero bytes, is still refused",
       false
     )
     .option("-o, --output <format>", "Output format: text, json, yaml", "text")
