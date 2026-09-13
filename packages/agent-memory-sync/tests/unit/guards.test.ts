@@ -314,6 +314,7 @@ test("findUnreliableCheckout: an empty destination the base snapshot knows is an
     tracked: 404,
     present: 0,
     lost: 404,
+    emptied: 0,
     rule: "absolute"
   });
 });
@@ -337,6 +338,7 @@ test("findUnreliableCheckout: one destination still present does not excuse anot
     tracked: 3,
     present: 0,
     lost: 3,
+    emptied: 0,
     rule: "proportional"
   });
 });
@@ -358,6 +360,7 @@ test("findUnreliableCheckout: a destination that kept one of twelve files is an 
     tracked: 12,
     present: 1,
     lost: 11,
+    emptied: 0,
     rule: "proportional"
   });
 });
@@ -371,6 +374,7 @@ test("findUnreliableCheckout: the partial-wipe shape at 50 and at 400 tracked fi
         tracked: count,
         present: 1,
         lost: count - 1,
+        emptied: 0,
         rule: "absolute"
       },
       `a checkout keeping 1 of ${count} files must be refused`
@@ -402,6 +406,7 @@ test("findUnreliableCheckout: files the checkout gained do not mask the ones it 
     tracked: 12,
     present: 12,
     lost: 12,
+    emptied: 0,
     rule: "proportional"
   });
 });
@@ -413,6 +418,89 @@ test("findUnreliableCheckout: profile thresholds apply to the checkout check too
     null,
     "a profile that accepts a 100 percent deletion plan also accepts the checkout that produces it"
   );
+});
+
+// agent-tasks 56e20494 (review R2 of cda5b12c, head 0bf5eb0): a stub git
+// that truncates every checked-out file to zero bytes passed this check
+// entirely, because every base-tracked path was still "present" - it just
+// held no content. Truncates every value in `map` (a tracked() result) to
+// the empty string, keeping every key, to model that shape without losing
+// the file from remoteMap.
+function emptied(map: Record<string, string | null>): Record<string, string | null> {
+  const result: Record<string, string | null> = {};
+  for (const key of Object.keys(map)) {
+    result[key] = "";
+  }
+  return result;
+}
+
+test("findUnreliableCheckout: a destination where every file came back zero bytes is an anomaly (agent-tasks 56e20494)", () => {
+  const baseMap = tracked("memory", 50);
+  assert.deepEqual(findUnreliableCheckout(config(), baseMap, emptied(baseMap), "c6be19d"), {
+    destination: "memory",
+    tracked: 50,
+    present: 50,
+    lost: 0,
+    emptied: 50,
+    rule: "absolute"
+  });
+});
+
+test("findUnreliableCheckout: a mix of missing and emptied files combines toward the same threshold (agent-tasks 56e20494)", () => {
+  // 50 tracked, at the default 10 percent ratio: 3 missing alone (3 of 50,
+  // 6 percent) and 3 emptied alone (also 6 percent) each stay under the
+  // 5-file proportional threshold on their own - this pins that neither
+  // half alone trips the rule - but 6 of 50 combined (12 percent) does.
+  const lostOnly = tracked("memory", 50);
+  for (const key of paths("memory", 3)) {
+    delete lostOnly[key];
+  }
+  assert.equal(findUnreliableCheckout(config(), tracked("memory", 50), lostOnly, "c6be19d"), null);
+
+  const emptiedOnly = tracked("memory", 50);
+  for (const key of paths("memory", 3)) {
+    emptiedOnly[key] = "";
+  }
+  assert.equal(findUnreliableCheckout(config(), tracked("memory", 50), emptiedOnly, "c6be19d"), null);
+
+  const baseMap = tracked("memory", 50);
+  const remoteMap = tracked("memory", 50);
+  for (const key of paths("memory", 3)) {
+    delete remoteMap[key];
+  }
+  for (const key of paths("memory", 3, 3)) {
+    remoteMap[key] = "";
+  }
+  assert.deepEqual(findUnreliableCheckout(config(), baseMap, remoteMap, "c6be19d"), {
+    destination: "memory",
+    tracked: 50,
+    present: 47,
+    lost: 3,
+    emptied: 3,
+    rule: "proportional"
+  });
+});
+
+// D-013 negative control: a file that was ALREADY empty at base is not
+// "emptied" by staying empty - there is nothing for the checkout to have
+// lost.
+test("findUnreliableCheckout: a file that was already empty at base is never counted as emptied", () => {
+  const baseMap = { ...tracked("memory", 48), "memory/already-empty.md": "" };
+  assert.equal(findUnreliableCheckout(config(), baseMap, { ...baseMap }, "c6be19d"), null);
+});
+
+// D-013 negative control (the acceptance criterion's own case): the remote
+// legitimately rewrote a large share of a destination to different,
+// non-empty content. This must apply exactly like any other content change,
+// never as an anomaly - "emptied" requires zero length, not merely a
+// different hash.
+test("findUnreliableCheckout: a remote that legitimately rewrote most of a destination to non-empty content is not an anomaly", () => {
+  const baseMap = tracked("memory", 50);
+  const remoteMap = { ...baseMap };
+  for (const key of paths("memory", 30)) {
+    remoteMap[key] = `rewritten ${key}\n`;
+  }
+  assert.equal(findUnreliableCheckout(config(), baseMap, remoteMap, "c6be19d"), null);
 });
 
 test("assertReliableCheckout: throws with the destination, the count and the remote head", () => {
@@ -453,6 +541,111 @@ test("assertReliableCheckout: a partial loss names how many files are missing", 
       return true;
     }
   );
+});
+
+// agent-tasks 56e20494: the emptied count and the checkout-reliability
+// threshold both appear by name in the refusal, not only the count of
+// missing files.
+test("assertReliableCheckout: an emptied checkout names the emptied count and the threshold (agent-tasks 56e20494)", () => {
+  const baseMap = tracked("memory", 50);
+  const remoteMap: Record<string, string | null> = {};
+  for (const key of Object.keys(baseMap)) {
+    remoteMap[key] = "";
+  }
+  assert.throws(
+    () =>
+      assertReliableCheckout({
+        config: config(),
+        baseMap,
+        remoteMap,
+        remoteHead: "c6be19d"
+      }),
+    (error: Error & { exitCode?: number }) => {
+      assert.equal(error.name, "UnreliableCheckoutError");
+      assert.equal(error.exitCode, 7);
+      assert.match(error.message, /has all 50 of the 50 file\(s\)/);
+      assert.match(error.message, /present but emptied to zero bytes/);
+      assert.match(error.message, /checkout-reliability limit of 20 file\(s\)/);
+      return true;
+    }
+  );
+});
+
+// Structural closure for the wording class this file keeps having to patch
+// one report at a time (agent-tasks 56e20494 review round 3): every shape
+// describeUnreliableCheckout can produce for a threshold-breaching finding,
+// pinned in one place so a future wording change has to update all four
+// rows or fail here, rather than only the row someone happened to touch.
+test("assertReliableCheckout: the unreliable-checkout message is exact for every finding shape", () => {
+  const cases: Array<{ name: string; remoteMap: Record<string, string | null>; expected: RegExp }> = [
+    {
+      name: "lost only",
+      remoteMap: (() => {
+        const remoteMap = tracked("memory", 50);
+        for (const key of paths("memory", 25)) {
+          delete remoteMap[key];
+        }
+        return remoteMap;
+      })(),
+      expected:
+        /is missing 25 of the 50 file\(s\) the base snapshot tracks under 'memory' \(25 still present\), over the checkout-reliability limit of 20 file\(s\)/
+    },
+    {
+      name: "emptied only, all",
+      remoteMap: emptied(tracked("memory", 50)),
+      expected:
+        /has all 50 of the 50 file\(s\) the base snapshot tracks under 'memory' present but emptied to zero bytes, over the checkout-reliability limit of 20 file\(s\)/
+    },
+    {
+      name: "emptied only, partial (25 of 50)",
+      remoteMap: (() => {
+        const remoteMap = tracked("memory", 50);
+        for (const key of paths("memory", 25)) {
+          remoteMap[key] = "";
+        }
+        return remoteMap;
+      })(),
+      expected:
+        /has 25 of the 50 file\(s\) the base snapshot tracks under 'memory' present but emptied to zero bytes, over the checkout-reliability limit of 20 file\(s\)/
+    },
+    {
+      name: "mixed lost and emptied",
+      remoteMap: (() => {
+        const remoteMap = tracked("memory", 50);
+        for (const key of paths("memory", 15)) {
+          delete remoteMap[key];
+        }
+        for (const key of paths("memory", 10, 15)) {
+          remoteMap[key] = "";
+        }
+        return remoteMap;
+      })(),
+      expected:
+        /is missing 15 of the 50 file\(s\) the base snapshot tracks under 'memory' and 10 more present but emptied to zero bytes \(35 still present\), over the checkout-reliability limit of 20 file\(s\)/
+    }
+  ];
+
+  for (const { name, remoteMap, expected } of cases) {
+    assert.throws(
+      () =>
+        assertReliableCheckout({
+          config: config(),
+          baseMap: tracked("memory", 50),
+          remoteMap,
+          remoteHead: "c6be19d"
+        }),
+      (error: Error & { exitCode?: number }) => {
+        assert.equal(error.exitCode, 7, name);
+        assert.match(error.message, expected, name);
+        // Never "all" unless every emptied file is emptied - the wording
+        // this whole test exists to pin (agent-tasks 56e20494 round 3).
+        if (name === "emptied only, partial (25 of 50)") {
+          assert.doesNotMatch(error.message, /has all/, name);
+        }
+        return true;
+      }
+    );
+  }
 });
 
 // D-008: the refusal used to end with "re-run with --allow-mass-delete",

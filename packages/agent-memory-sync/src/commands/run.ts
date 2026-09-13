@@ -65,15 +65,20 @@ function registerRunCommand(program: import("commander").Command): void {
     .option(
       "--allow-mass-delete",
       "Push a plan the mass-delete guard would refuse (see massDeleteGuard in the config). It does not " +
-        "override an unreliable checkout: a working copy that came back missing files is still refused",
+        "override an unreliable checkout: a working copy that came back missing files, or present but " +
+        "emptied to zero bytes, is still refused",
       false
     )
     .option(
       "--accept-mass-delete",
       "Apply a remote change that deletes more of a destination than the guard allows, and adopt a " +
-        "checkout the run would otherwise call unreliable. The destination is copied into " +
-        "stateDir/snapshots first. Use it only once the remote deletion is known to be genuine, for one " +
-        "run; it cannot be combined with --allow-mass-delete",
+        "checkout the run would otherwise call unreliable, for a working copy missing files outright. " +
+        "The destination is copied into stateDir/snapshots first. Use it only once the remote deletion is " +
+        "known to be genuine, for one run; it cannot be combined with --allow-mass-delete. It does NOT " +
+        "adopt a checkout with files present but emptied to zero bytes: that is refused regardless of " +
+        "this flag, since there is nothing trustworthy in it to adopt. If the hub really did empty those " +
+        "files on purpose, re-commit real content at the hub, or raise massDeleteGuard.maxFiles/maxRatio " +
+        "in the config for one run",
       false
     )
     .option("--dry-run", "Preview without making changes", false)

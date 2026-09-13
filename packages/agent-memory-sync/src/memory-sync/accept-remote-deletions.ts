@@ -1,13 +1,25 @@
-// The push side's one escape from the unreliable-checkout refusal.
+// The push side's one escape from the unreliable-checkout refusal - for a
+// finding whose emptied count is zero. NOT for one that carries emptied
+// paths (present-but-zeroed): see assertOverridableCheckout in ./guards.ts,
+// the shared predicate findRemoteDeletionsToAccept below routes through,
+// which refuses those outright, flag or no flag.
 //
 // Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
 // run .ai/runs/2026-09-11-memory-sync-wipe) and the review round that
 // followed it. The checkout guard (./guards.ts) refuses a working copy that
-// came back missing a large share of what the base snapshot tracks, and
-// nothing at the file level tells a wiped checkout apart from a remote that
-// genuinely dropped those files: both look like "base has N, the checkout
-// shows fewer". Without a way through, a legitimate large deletion wedges
-// push, pull, sync and watch at exit 7 for good.
+// came back missing a large share of what the base snapshot tracks, or
+// present but emptied to zero bytes, and nothing at the file level tells a
+// wiped-or-truncated checkout apart from a remote that genuinely dropped
+// those files: both look like "base has N, the checkout shows fewer or
+// zeroed". Without a way through, a legitimate large deletion wedges push,
+// pull, sync and watch at exit 7 for good - but only for the missing half of
+// that ambiguity. A checkout with emptied paths is treated differently, not
+// because it is unambiguous, but because guessing wrong costs more: adopting
+// it would copy zero-byte content into stateDir/snapshots and apply it as if
+// it were the remote's real state, which is corruption, not consent. The
+// route forward for a hub that really did empty those files on purpose is
+// not this flag: re-commit real content at the hub, or raise
+// massDeleteGuard.maxFiles/maxRatio in the config for one run.
 //
 // `--accept-mass-delete` is that way through, and this is what it means on
 // the push side. A pull applies the remote's deletions through its own
@@ -19,7 +31,7 @@
 // just agreed were deleted.
 const { existsSync, rmSync } = require("node:fs");
 const { mapRemotePathToLocalAbsolute, resolveSyncPathEntries } = require("./config");
-const { findUnreliableCheckout } = require("./guards");
+const { assertOverridableCheckout } = require("./guards");
 const { writePreApplySnapshot } = require("./pre-apply-snapshot");
 
 interface AcceptConfig {
@@ -64,7 +76,12 @@ function findRemoteDeletionsToAccept(
   remoteMap: Record<string, string | null>,
   remoteHead: string | null
 ): { paths: string[]; destinations: string[] } {
-  const finding = findUnreliableCheckout(config, baseMap, remoteMap, remoteHead);
+  // Throws UnreliableCheckoutError instead of returning when the finding
+  // carries emptied paths - see the module comment above and
+  // assertOverridableCheckout in ./guards.ts. Every caller of this function
+  // (the real push run and its --dry-run preview) gets that refusal for
+  // free rather than needing its own branch.
+  const finding = assertOverridableCheckout({ config, baseMap, remoteMap, remoteHead });
   if (!finding) {
     return { paths: [], destinations: [] };
   }

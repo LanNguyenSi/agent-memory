@@ -92,13 +92,17 @@ Options:
   --allow-mass-delete                    Push a plan the mass-delete guard would refuse (see
                                          massDeleteGuard in the config). It does not override an
                                          unreliable checkout: a working copy that came back
-                                         missing files is still refused
+                                         missing files, or present but emptied to zero bytes, is
+                                         still refused
   --accept-mass-delete                   Apply a remote change that deletes more of a destination
                                          than the guard allows, and adopt a checkout the run would
-                                         otherwise call unreliable. The destination is copied into
+                                         otherwise call unreliable, for a working copy missing
+                                         files outright. The destination is copied into
                                          stateDir/snapshots first. Use it only once the remote
                                          deletion is known to be genuine, for one run; it cannot
-                                         be combined with --allow-mass-delete
+                                         be combined with --allow-mass-delete. It does NOT adopt a
+                                         checkout with files present but emptied to zero bytes:
+                                         that is refused regardless of this flag
   --dry-run                              Show what would happen without making changes
   --output <text|json|yaml>              Output format  [default: text]
   --verbose                              Enable verbose diagnostics
@@ -128,7 +132,8 @@ Options:
   --allow-mass-delete            Push a plan the mass-delete guard would refuse (see
                                  massDeleteGuard in the config). It does not override
                                  an unreliable checkout: a working copy that came back
-                                 missing files is still refused
+                                 missing files, or present but emptied to zero bytes,
+                                 is still refused
   --remote <url>                 Override remote Git repository URL
   --branch <name>                Override branch
   --repository-subdir <path>     Override remote subdirectory
@@ -183,7 +188,7 @@ and the lock are described under [Deletion guards](#deletion-guards).
 | `4` | A git or remote operation failed. | Read the message; a push/fetch failure is queued instead of exiting, so this is usually a local git problem. |
 | `5` | A push plan was refused by the mass-delete guard: it would remove more of a destination, or of the plan as a whole, than the thresholds allow. | Check whether the local workspace was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. |
 | `6` | The replay queue has been failing to drain for longer than `queueEscalationThresholdMs`. | The remote is probably misconfigured rather than temporarily offline; check `remoteUrl`, `branch` and `repositorySubdir`. |
-| `7` | The fetched working copy is missing too much of what the base snapshot tracks, so it cannot be trusted to represent the remote. | Re-run once nothing else is touching `stateDir/tmp`. If the remote really did drop those files, run `run` once with `--accept-mass-delete`, or bring them back with `restore --from-commit <sha> --yes`. |
+| `7` | The fetched working copy is missing too much of what the base snapshot tracks, or too much of it came back present but emptied to zero bytes, so it cannot be trusted to represent the remote. | Re-run once nothing else is touching `stateDir/tmp`. If the finding is missing files (not emptied ones) and the remote really did drop them, run `run` once with `--accept-mass-delete`; otherwise bring them back with `restore --from-commit <sha> --yes`. An emptied finding is never adopted by `--accept-mass-delete`; this is almost always the checkout itself coming back zeroed, but if the hub really did empty these files on purpose, re-commit real content at the hub, or raise `massDeleteGuard.maxFiles`/`maxRatio` in the config for one run. |
 | `8` | Another agent-memory-sync process holds the lock on this state directory. | Wait for it and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically. |
 | `9` | A remote change would delete more of a destination, or of the plan as a whole, than the thresholds allow. | Confirm the remote deletion is genuine, then run `run` once with `--accept-mass-delete`. |
 | `10` | A restore source was not found: no such pre-apply snapshot, or the commit holds nothing to restore under the requested path or destination. | List `<stateDir>/snapshots/<destination>/` for the available generations, or pick a commit that still had the files (`git log` on the remote). |
@@ -415,11 +420,19 @@ change.
   checked plan-wide, across destinations and including paths outside
   `repositorySubdir` that the commit would carry.
 - **Untrustworthy working copies**: a fetched working copy that is missing that
-  much of what the base snapshot tracks is refused before any merge runs
-  (exit `7`), on both the pull and the push side. Nothing at the file level
-  tells a working copy that was wiped underneath the process from a remote that
-  genuinely dropped the files, which is why this one has its own escape rather
-  than sharing the push flag's.
+  much of what the base snapshot tracks, or has that much of it present but
+  emptied to zero bytes, is refused before any merge runs (exit `7`), on both
+  the pull and the push side. Nothing at the file level tells a working copy
+  that was wiped underneath the process from a remote that genuinely dropped
+  the files, which is why the missing half of this has its own escape rather
+  than sharing the push flag's. The emptied half has no escape at all: a
+  destination present but zeroed is almost always the checkout itself coming
+  back zeroed rather than a remote that genuinely emptied it, and adopting it
+  on the strength of a flag would be worse than refusing it, so
+  `--accept-mass-delete` refuses it too (see below). If the hub really did
+  empty those files on purpose, the route forward is not that flag:
+  re-commit real content at the hub, or raise `massDeleteGuard.maxFiles`/
+  `maxRatio` in the config for one run.
 - **Pre-apply snapshots**: before a pull deletes or overwrites anything in a
   destination, the destination's current tree is copied to
   `<stateDir>/snapshots/<destination>/<timestamp>/`. The newest
@@ -429,19 +442,28 @@ change.
   thresholds refuse: "yes, publish these deletions". It does not override an
   untrustworthy working copy.
 - **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the
-  thresholds refuse, and is the one override of the untrustworthy-working-copy
-  refusal: "yes, the remote really did drop those files". The destination is
-  copied into `<stateDir>/snapshots` first, the remote's state is then applied
-  locally (on the push side, that means removing the local copies the remote no
-  longer has), and the base snapshot moves with it, so the next run is clean
-  instead of republishing what was just accepted as deleted. It is a one-shot
-  decision about one observed remote state, which is why `watch` does not take
-  it: on a process that runs for weeks it would be consent for every future
-  tick, including one that fetches a wiped working copy. It cannot be combined
-  with `--allow-mass-delete` (usage error, exit `2`): after the adoption there
-  is nothing left for the other flag to publish except a deletion the guard
-  would refuse. `--dry-run --accept-mass-delete` reports what would be adopted
-  and changes nothing.
+  thresholds refuse, and overrides the untrustworthy-working-copy refusal for
+  a working copy MISSING files: "yes, the remote really did drop those files".
+  The destination is copied into `<stateDir>/snapshots` first, the remote's
+  state is then applied locally (on the push side, that means removing the
+  local copies the remote no longer has), and the base snapshot moves with it,
+  so the next run is clean instead of republishing what was just accepted as
+  deleted. It does NOT override a working copy present but emptied to zero
+  bytes: nothing at the file level distinguishes "the remote emptied these"
+  from "this checkout came back zeroed" (almost always the latter), but
+  adopting a zeroed checkout on the strength of a flag would copy and apply
+  zero-byte content as if it were real, so that half always refuses (exit
+  `7`) regardless of the flag. If the hub really did empty those files on
+  purpose, re-commit real content at the hub, or raise
+  `massDeleteGuard.maxFiles`/`maxRatio` in the config for one run. It is a
+  one-shot decision about one
+  observed remote state, which is why `watch` does not take it: on a process
+  that runs for weeks it would be consent for every future tick, including one
+  that fetches a wiped working copy. It cannot be combined with
+  `--allow-mass-delete` (usage error, exit `2`): after the adoption there is
+  nothing left for the other flag to publish except a deletion the guard would
+  refuse. `--dry-run --accept-mass-delete` reports what would be adopted and
+  changes nothing.
 - **The state-directory lock**: `run`, `watch` and `restore` take an advisory
   lock on the state directory (`<stateDir>/lock.json`) so the periodic job and
   the watcher cannot work on one state directory at the same time. A run that

@@ -756,6 +756,35 @@ function writeStubGitWipingWorkTreeOnStage(root: string): string {
   return stubPath;
 }
 
+// git reports success for every subcommand, but `checkout` leaves every
+// checked-out file truncated to zero bytes in place: the real checkout runs
+// first, then every non-.git FILE (directories and .git untouched) is
+// overwritten with nothing. This is the D-013 follow-up shape (agent-tasks
+// 56e20494, review R2 of cda5b12c, head 0bf5eb0): unlike
+// writeStubGitWipingWorkTree above, every base-tracked path is still
+// PRESENT on disk, so the presence-only half of findUnreliableCheckout sees
+// nothing wrong; only the emptied-content check added for this task does.
+function writeStubGitTruncatingWorkTree(root: string): string {
+  const stubPath = path.join(root, "stub-git-truncates-worktree.sh");
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "checkout" ]; then',
+      '  git "$@" || exit $?',
+      '  find "$PWD" -name .git -prune -o -type f -print | while IFS= read -r entry; do',
+      '    : > "$entry"',
+      "  done",
+      "  exit 0",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
 // Seeds a workspace and a remote holding `count` log files plus MEMORY.md,
 // then returns a config whose git binary leaves a working copy holding only
 // logs/note-000.md. Shared by the partial-wipe tests below.
@@ -1433,4 +1462,189 @@ test("push --dry-run: a plan whose deletions appear only at staging time is refu
   assert.match(result.stderr, /30 file\(s\) under 'logs'/);
   assert.doesNotMatch(result.stdout, /"status": "dry-run"/);
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run-staged"), 30);
+});
+
+// agent-tasks 56e20494 (D-013 follow-up): a checkout that truncates every
+// file to zero bytes instead of removing it must be refused exactly like
+// one that removed them, in both push and sync, at the corpus size the
+// measured reachability report used (50 files). Local stays intact (the
+// checkout guard runs before any merge writes anything), and nothing
+// reaches the remote.
+for (const mode of ["push", "sync"]) {
+  test(`${mode}: a checkout truncating every file to zero bytes never publishes or applies it (agent-tasks 56e20494)`, () => {
+    const root = createSandbox(`truncated-checkout-${mode}`);
+    const remoteDir = initBareRemote(root);
+    const workspaceRoot = path.join(root, "workspace");
+    const configPath = path.join(root, "config.json");
+    const stubConfigPath = path.join(root, "config-stub-git.json");
+
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+    const seeded = seedLogFiles(workspaceRoot, 50);
+    writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+    runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+    writeProjectConfig(stubConfigPath, {
+      ...createConfig(workspaceRoot, remoteDir),
+      gitBinary: writeStubGitTruncatingWorkTree(root)
+    });
+
+    // One genuine local edit, so the run has real work to do.
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+
+    const result = runCli(
+      ["run", "default", "--config", stubConfigPath, "--mode", mode, "--output", "json"],
+      { expectFailure: true }
+    );
+
+    assert.equal(
+      result.status,
+      7,
+      `expected the checkout refusal's exit code. stdout: ${result.stdout}, stderr: ${result.stderr}`
+    );
+    assert.match(result.stderr, /unreliable checkout/);
+    assert.match(result.stderr, /emptied to zero bytes/);
+    assert.match(result.stderr, /has all 50 of the 50 file\(s\)/);
+
+    // Nothing reached the remote: every log file is still there, at its
+    // real content, not the truncated one. The count alone would not catch
+    // a bug that published the truncated (zero-byte) content under the
+    // right file names, so read every file back too.
+    assert.equal(remoteLogFileCount(remoteDir, root, `inspect-truncated-${mode}`), 50);
+    const remoteInspection = cloneRemote(remoteDir, root, `inspect-truncated-content-${mode}`);
+    for (let index = 0; index < 50; index += 1) {
+      const name = `note-${String(index).padStart(3, "0")}.md`;
+      assert.equal(
+        readText(path.join(remoteInspection, "shared", "logs", name)),
+        `entry ${index}\n`,
+        `${name} was published truncated`
+      );
+    }
+
+    // And nothing local was touched by the merge/apply path either (the
+    // truncation itself is the stub git's own doing to its OWN working
+    // copy under stateDir/tmp, not to the workspace).
+    for (const relativePath of seeded) {
+      const content = readText(path.join(workspaceRoot, relativePath));
+      assert.notEqual(content.length, 0, `${relativePath} was emptied in the real workspace`);
+    }
+  });
+}
+
+// agent-tasks 56e20494, review R1 finding F1: --accept-mass-delete answers
+// "the remote really did drop these files", not "this checkout came back
+// zeroed". Measured pre-fix: push --accept-mass-delete against the
+// truncating stub exited 0 and published 50 zero-byte files with no
+// snapshot; sync and pull with the flag emptied the 50 local files too. All
+// three must still refuse at the checkout guard's exit code, flag or not.
+for (const mode of ["push", "sync", "pull"]) {
+  test(`${mode}: --accept-mass-delete does not adopt a checkout truncated to zero bytes (agent-tasks 56e20494)`, () => {
+    const root = createSandbox(`truncated-accept-${mode}`);
+    const remoteDir = initBareRemote(root);
+    const workspaceRoot = path.join(root, "workspace");
+    const configPath = path.join(root, "config.json");
+    const stubConfigPath = path.join(root, "config-stub-git.json");
+
+    writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+    const seeded = seedLogFiles(workspaceRoot, 50);
+    writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+    runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+    writeProjectConfig(stubConfigPath, {
+      ...createConfig(workspaceRoot, remoteDir),
+      gitBinary: writeStubGitTruncatingWorkTree(root)
+    });
+
+    if (mode === "push" || mode === "sync") {
+      writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
+    }
+
+    const result = runCli(
+      [
+        "run",
+        "default",
+        "--config",
+        stubConfigPath,
+        "--mode",
+        mode,
+        "--accept-mass-delete",
+        "--output",
+        "json"
+      ],
+      { expectFailure: true }
+    );
+
+    assert.equal(
+      result.status,
+      7,
+      `--accept-mass-delete must not adopt an emptied checkout. stdout: ${result.stdout}, stderr: ${result.stderr}`
+    );
+    assert.match(result.stderr, /unreliable checkout/);
+    assert.match(result.stderr, /emptied to zero bytes/);
+    // The remedy named must not be the flag that was just refused.
+    assert.doesNotMatch(result.stderr, /re-run with --accept-mass-delete/);
+
+    // The remote still holds every file, at its real content: nothing was
+    // adopted, no snapshot was written, no zero-byte content was published.
+    assert.equal(remoteLogFileCount(remoteDir, root, `inspect-truncated-accept-${mode}`), 50);
+    const remoteInspection = cloneRemote(remoteDir, root, `inspect-truncated-accept-content-${mode}`);
+    for (let index = 0; index < 50; index += 1) {
+      const name = `note-${String(index).padStart(3, "0")}.md`;
+      assert.equal(
+        readText(path.join(remoteInspection, "shared", "logs", name)),
+        `entry ${index}\n`,
+        `${name} was published truncated`
+      );
+    }
+
+    // The real local workspace was never touched by this run's merge/apply
+    // path (only the truncating stub's own throwaway working copy under
+    // stateDir/tmp was zeroed).
+    for (const relativePath of seeded) {
+      const content = readText(path.join(workspaceRoot, relativePath));
+      assert.notEqual(content.length, 0, `${relativePath} was emptied in the real workspace`);
+    }
+  });
+}
+
+// D-013 negative control, run through the real CLI rather than just the
+// pure guard function: a remote that legitimately rewrote most of a
+// destination to different, non-empty content applies cleanly. No stub git
+// involved here - every read is real, so this also confirms the emptied
+// check does not fire on an ordinary healthy pull.
+test("pull: a remote that legitimately rewrote 30 of 50 files applies cleanly (agent-tasks 56e20494)", () => {
+  const root = createSandbox("legit-rewrite-pull");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  const seeded = seedLogFiles(workspaceRoot, 50);
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // A foreign writer rewrites 30 of the 50 log files to new, non-empty
+  // content directly on the hub - a legitimate remote content change, not a
+  // deletion and not an emptying.
+  const checkout = cloneRemote(remoteDir, root, "foreign-rewrite");
+  for (const relativePath of seeded.slice(0, 30)) {
+    writeText(path.join(checkout, "shared", relativePath), `rewritten ${relativePath}\n`);
+  }
+  git(["add", "-A"], checkout);
+  git(["commit", "-m", "foreign writer rewrites 30 of 50 log files"], checkout);
+  git(["push", "origin", "HEAD:main"], checkout);
+
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+
+  assert.equal(result.status, 0, `expected a clean apply. stderr: ${result.stderr}`);
+  assert.doesNotMatch(result.stderr, /unreliable checkout/);
+
+  for (const relativePath of seeded.slice(0, 30)) {
+    assert.equal(readText(path.join(workspaceRoot, relativePath)), `rewritten ${relativePath}\n`);
+  }
+  for (const relativePath of seeded.slice(30)) {
+    assert.equal(readText(path.join(workspaceRoot, relativePath)), readText(path.join(checkout, "shared", relativePath)));
+  }
 });
