@@ -60,6 +60,133 @@ function createConfig(workspaceRoot: string, remoteDir: string) {
   };
 }
 
+// The normal checkout completes, then this stand-in zeros each file in the
+// disposable checkout only. It is the same corruption seam used by the
+// command integration coverage; this test exercises watch's lifecycle.
+function writeStubGitTruncatingWorkTree(root: string): string {
+  const stubPath = path.join(root, "stub-git-truncates-worktree.sh");
+  writeText(
+    stubPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "checkout" ]; then',
+      '  git "$@" || exit $?',
+      '  find "$PWD" -name .git -prune -o -type f -print | while IFS= read -r entry; do',
+      '    : > "$entry"',
+      "  done",
+      "  exit 0",
+      "fi",
+      'exec git "$@"',
+      ""
+    ].join("\n")
+  );
+  fs.chmodSync(stubPath, 0o755);
+  return stubPath;
+}
+
+function waitForStderrOccurrences(
+  getStderr: () => string,
+  pattern: RegExp,
+  expectedCount: number,
+  timeoutMs = 30000
+): Promise<void> {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const poll = setInterval(() => {
+      const matches = getStderr().match(pattern) || [];
+      if (matches.length >= expectedCount) {
+        clearInterval(poll);
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        clearInterval(poll);
+        reject(new Error(`stderr only matched ${pattern} ${matches.length}/${expectedCount} time(s): ${getStderr()}`));
+      }
+    }, 50);
+  });
+}
+
+test("watch refuses a truncating checkout on two ticks without publishing or altering either corpus", async () => {
+  const root = createSandbox("watch-truncated-checkout");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  const seeded = ["MEMORY.md", "logs/seed.md", "logs/seed-1.md", "logs/seed-2.md"];
+  writeText(path.join(workspaceRoot, "logs", "seed.md"), "seed log\n");
+  writeText(path.join(workspaceRoot, "logs", "seed-1.md"), "seed log one\n");
+  writeText(path.join(workspaceRoot, "logs", "seed-2.md"), "seed log two\n");
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+  writeProjectConfig(configPath, {
+    ...createConfig(workspaceRoot, remoteDir),
+    gitBinary: writeStubGitTruncatingWorkTree(root)
+  });
+
+  const child = spawnWatch(
+    ["watch", "default", "--config", configPath, "--debounce-ms", "300", "--max-runs", "2", "--verbose", "--output", "json"],
+    process.env
+  );
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  // Register before waiting: node does not replay a child exit event to a
+  // listener added after a quick second refused tick.
+  const childExit = new Promise<number>((resolve) => {
+    child.on("exit", (code: number | null) => resolve(code ?? -1));
+  });
+
+  try {
+    const exitCode = await withTickDeadline(
+      child,
+      async () => {
+        await waitForWatcherReady(() => stderr);
+        writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nfirst local edit\n");
+        await waitForStderrOccurrences(
+          () => stderr,
+          /watch tick refused: .*unreliable checkout.*emptied to zero bytes/gi,
+          1
+        );
+
+        // A distinct edit proves the same live watcher receives and refuses
+        // another tick, rather than logging once before it exits.
+        writeText(path.join(workspaceRoot, "logs", "second-trigger.md"), "second local edit\n");
+        await waitForStderrOccurrences(
+          () => stderr,
+          /watch tick refused: .*unreliable checkout.*emptied to zero bytes/gi,
+          2
+        );
+        return await childExit;
+      },
+      INACTIVITY_TIMEOUT_MS,
+      () => stderr
+    );
+
+    // UnreliableCheckoutError is the guard's exit-7 refusal, while watch
+    // intentionally logs and survives such a per-tick refusal.
+    assert.equal(exitCode, 0, `watch did not survive both refused ticks. stderr: ${stderr}`);
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+
+  assert.equal((stderr.match(/watch tick refused: .*unreliable checkout.*emptied to zero bytes/gi) || []).length, 2);
+  for (const relativePath of seeded) {
+    assert.notEqual(readText(path.join(workspaceRoot, relativePath)).length, 0, `${relativePath} was emptied locally`);
+  }
+  assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "memory root\nfirst local edit\n");
+  assert.equal(readText(path.join(workspaceRoot, "logs", "second-trigger.md")), "second local edit\n");
+
+  const remoteInspection = cloneRemote(remoteDir, root, "inspect-truncated-watch");
+  assert.equal(readText(path.join(remoteInspection, "shared", "MEMORY.md")), "memory root\n");
+  assert.equal(readText(path.join(remoteInspection, "shared", "logs", "seed.md")), "seed log\n");
+  assert.equal(readText(path.join(remoteInspection, "shared", "logs", "seed-1.md")), "seed log one\n");
+  assert.equal(readText(path.join(remoteInspection, "shared", "logs", "seed-2.md")), "seed log two\n");
+  assert.equal(fileExists(path.join(remoteInspection, "shared", "logs", "second-trigger.md")), false);
+});
+
 test("watch tick does not delete a peer file that was pushed to the remote but never pulled locally", async () => {
   const root = createSandbox("watch-mirror-delete-peer");
   const remoteDir = initBareRemote(root);
