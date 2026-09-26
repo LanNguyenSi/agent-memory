@@ -127,7 +127,7 @@ points at over ssh (`mini:~/memory-sync/pandora-memory.git` in
 macbook.json/linux.example.json — see the scp-like syntax note there). The
 mini's own profile (mac-mini.json) points `remoteUrl` at the same
 repository's plain local filesystem path instead
-(`/Users/lannguyensi/memory-sync/pandora-memory.git`), since it runs on the
+(`/Users/<user>/memory-sync/pandora-memory.git`), since it runs on the
 mini itself and doesn't need to loop back through ssh to reach its own
 bare repo — see that profile's `"//"` field for the full reasoning. Nothing
 else is required server-side — `agent-memory-sync` pushes plain commits
@@ -140,7 +140,7 @@ Prerequisite: an SSH host alias named `mini` in `~/.ssh/config` on every
 ```
 Host mini
     HostName mini.local          # or the mini's LAN IP / Tailscale name
-    User lannguyensi
+    User <user>
     IdentityFile ~/.ssh/id_ed25519
 ```
 
@@ -290,7 +290,7 @@ empty/stale local workspace as if it were authoritative.
 
    [Service]
    Type=oneshot
-   User=lan
+   User=<linux-username>
    Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/linux.json
    ExecStart=/usr/local/bin/agent-memory-sync run <profile-name> --mode sync
    ```

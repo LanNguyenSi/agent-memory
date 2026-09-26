@@ -134,7 +134,7 @@ Structured log lines go to stderr and never to stdout.
 
 ## CI/CD Architecture
 
-The pipeline runs on GitHub Actions ([.github/workflows/ci.yml](/home/lan/git/pandora/agent-memory-sync/.github/workflows/ci.yml)).
+The pipeline runs on GitHub Actions ([.github/workflows/ci.yml](../.github/workflows/ci.yml)).
 
 Current verification steps:
 

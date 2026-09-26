@@ -33,16 +33,16 @@
                           profiles/macbook.json / profiles/mac-mini.json for
                           why both are required)
     __CONFIG_PATH__      absolute path to the machine's profile json, e.g.
-                          /Users/lan/git/pandora/agent-memory/packages/agent-memory-sync/profiles/macbook.json
+                          /Users/<user>/git/<project-dir>/agent-memory/packages/agent-memory-sync/profiles/macbook.json
     __NODE_BIN__         absolute path to node, e.g. /usr/local/bin/node or
                           /opt/homebrew/bin/node (`which node`)
     __MAIN_JS__           absolute path to the built entrypoint, e.g.
-                          /Users/lan/git/pandora/agent-memory/packages/agent-memory-sync/dist/src/main.js
+                          /Users/<user>/git/<project-dir>/agent-memory/packages/agent-memory-sync/dist/src/main.js
                           (run `npm run build` in the package first)
     __PACKAGE_DIR__       absolute path to the agent-memory-sync package
                           checkout, e.g.
-                          /Users/lan/git/pandora/agent-memory/packages/agent-memory-sync
-    __USER_HOME__          your home directory, e.g. /Users/lan (used only for
+                          /Users/<user>/git/<project-dir>/agent-memory/packages/agent-memory-sync
+    __USER_HOME__          your home directory, e.g. /Users/<user> (used only for
                           the log paths below)
 
   KeepAlive / ThrottleInterval, and why:
