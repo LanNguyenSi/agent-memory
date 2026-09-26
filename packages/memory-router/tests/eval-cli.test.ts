@@ -202,3 +202,15 @@ test("--help lists the eval verb", () => {
   assert.equal(status, 0);
   assert.match(stdout, /eval <golden\.yml>/);
 });
+
+test("--help points the eval --json schema pointer at docs/commands.md, not README.md", () => {
+  const { status, stdout } = run(["--help"]);
+  assert.equal(status, 0);
+  // The pointer must be the schema line itself, not any docs/commands.md
+  // substring elsewhere in --help.
+  assert.match(
+    stdout,
+    /--json emits a machine-readable report on stdout; schema:\s+https:\/\/github\.com\/LanNguyenSi\/agent-memory\/blob\/master\/packages\/memory-router\/docs\/commands\.md#memory-router-eval-metric-definitions-and-json-schema\n/,
+  );
+  assert.doesNotMatch(stdout, /README\.md/);
+});
