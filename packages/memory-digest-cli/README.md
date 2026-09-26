@@ -61,7 +61,7 @@ list, the memory file format, and the importance/type heuristics.
 ## Documentation
 
 - [docs/reference.md](docs/reference.md) - CLI options, memory file format, importance scoring, type detection, example output
-- [docs/architecture.md](docs/architecture.md) - internal structure, exit codes, all registered commands
+- [docs/architecture.md](docs/architecture.md) - internal module structure and design principles
 - [docs/ways-of-working.md](docs/ways-of-working.md) - contribution conventions and definition of done
 
 ## Development

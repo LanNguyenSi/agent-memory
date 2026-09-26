@@ -17,14 +17,23 @@ argument parsing, validation, and execution logic.
 
 ## System Structure
 
+- `src/scanner/`: file scanning and date filtering
+- `src/extractor/`: insight extraction and importance scoring
+- `src/digest/`: digest generation and formatting
+- `src/commands/`: CLI command implementations (`run`, `generate`, `config`)
+
 ```
 memory-digest-cli/
 ├── src/
 │   ├── commands/         # One module per subcommand
 │   │   ├── run.ts
+│   │   ├── generate.ts
 │   │   └── config.ts
 │   ├── config/           # Config file loading, validation, env var merging
 │   │   └── loader.ts
+│   ├── scanner/          # File scanning and date filtering
+│   ├── extractor/        # Insight extraction and importance scoring
+│   ├── digest/           # Digest generation and formatting
 │   └── main.ts
 │       # Entrypoint: registers commands, sets global flags
 ├── tests/
