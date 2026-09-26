@@ -104,9 +104,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=lan
+User=<linux-username>
 Environment=AGENT_MEMORY_SYNC_REMOTE_URL=git@github.com:you/memory-backup.git
-Environment=AGENT_MEMORY_SYNC_ROOT_DIR=/home/lan/.claude/projects/-home-lan-git-pandora/memory
+Environment=AGENT_MEMORY_SYNC_ROOT_DIR=/home/<linux-username>/.claude/projects/<claude-code-slug-for-this-machine>/memory
 Environment=AGENT_MEMORY_SYNC_BRANCH=main
 ExecStart=/usr/local/bin/agent-memory-sync watch --verbose
 Restart=on-failure

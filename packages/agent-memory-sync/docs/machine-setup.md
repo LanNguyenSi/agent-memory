@@ -290,7 +290,7 @@ empty/stale local workspace as if it were authoritative.
 
    [Service]
    Type=oneshot
-   User=lan
+   User=<linux-username>
    Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/linux.json
    ExecStart=/usr/local/bin/agent-memory-sync run <profile-name> --mode sync
    ```

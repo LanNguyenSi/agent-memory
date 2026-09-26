@@ -364,7 +364,7 @@ real-corpus memory bodies. To dogfood against a real corpus locally, set
 `MEMORY_ROUTER_COVERAGE_CORPUS_DIR`:
 
 ```bash
-MEMORY_ROUTER_COVERAGE_CORPUS_DIR=~/.claude/projects/-home-lan-git-pandora/memory npm test
+MEMORY_ROUTER_COVERAGE_CORPUS_DIR=~/.claude/projects/-home-<user>-git-<project-dir>/memory npm test
 ```
 
 Companion verb for one-shot prompt checks: `memory-router test "<prompt>"`.
