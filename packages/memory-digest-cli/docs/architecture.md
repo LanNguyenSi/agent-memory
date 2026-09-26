@@ -12,7 +12,7 @@ argument parsing, validation, and execution logic.
 2. **Fail fast with clear messages**: Validate inputs at parse time; emit actionable error messages to stderr.
 3. **Exit codes are part of the interface**: Always exit with a meaningful code (see Exit Codes below).
 4. **Stdout for data, stderr for diagnostics**: Program output goes to stdout; logs, warnings, and errors go to stderr.
-5. **Composable with other tools**: Support `--output json` on commands that produce structured data.
+5. **Composable with other tools**: Structured output where a command produces structured data (`run --output json`, `generate --json`).
 6. **Config is optional**: The tool must work with no config file present; config only overrides defaults.
 
 ## System Structure
