@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `eval --json`'s help text pointed the JSON schema pointer at `README.md`, which no longer holds that section after the docs restructure. It now points at `packages/memory-router/docs/commands.md`'s "`memory-router eval` metric definitions and JSON schema" section, with the GitHub blob URL as the durable pointer since `docs/` is not part of the published npm package's `files`.
+
 ## [0.7.1] - 2026-09-10
 
 ### Changed

@@ -202,3 +202,10 @@ test("--help lists the eval verb", () => {
   assert.equal(status, 0);
   assert.match(stdout, /eval <golden\.yml>/);
 });
+
+test("--help points the eval --json schema pointer at docs/commands.md, not README.md", () => {
+  const { status, stdout } = run(["--help"]);
+  assert.equal(status, 0);
+  assert.doesNotMatch(stdout, /schema documented\s+in README\.md/);
+  assert.match(stdout, /docs\/commands\.md/);
+});
