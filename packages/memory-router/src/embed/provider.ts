@@ -62,8 +62,9 @@ function resolveEmbedTimeoutMs(fallback: number): number {
 // MEMORY_ROUTER_EMBED_TIMEOUT_MS export (shell profile) meant to give
 // `memory-router index` more headroom otherwise also raised the hook's
 // per-prompt budget by the same amount, and the hook (UserPromptSubmit)
-// must never block a prompt for long — see README "Timeout budgets" for
-// the coupling this decouples. Only src/embed/indexer.ts's semanticSearch
+// must never block a prompt for long, see docs/scoring.md's Timeout
+// budgets section for the coupling this decouples. Only
+// src/embed/indexer.ts's semanticSearch
 // consults this; rebuildIndex (the index-rebuild path) never reads it.
 function resolveHookEmbedTimeoutMs(): number {
   // Precedence: hook-specific override, then the shared override, then the
@@ -151,8 +152,8 @@ function buildOpenAIConfig(apiKey: string): ProviderConfig {
 // misroute the auto-detected Ollama call to a model name Ollama doesn't
 // have, so the generic var is deliberately NOT consulted on this path.
 // MEMORY_ROUTER_OLLAMA_EMBED_MODEL is the Ollama-specific override for
-// exactly this path; see README "Embedding provider" for the precedence
-// table.
+// exactly this path; see docs/scoring.md's Embedding provider section
+// for the precedence table.
 function buildOllamaConfig(source: 'explicit' | 'auto-detect'): ProviderConfig {
   const model =
     source === 'explicit'

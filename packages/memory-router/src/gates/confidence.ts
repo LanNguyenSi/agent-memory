@@ -210,7 +210,7 @@ const BLEND_DEFAULTS: BlendWeights = {
 // `bge-m3:567m`, an explicit quantization tag, etc — see `ollama list`)
 // that all name the same model family for calibration purposes; the floor
 // map above is keyed on the bare family name (everything before the first
-// `:`). README's own reproduction command
+// `:`). docs/scoring.md's own reproduction command
 // (`MEMORY_ROUTER_OLLAMA_EMBED_MODEL=bge-m3`) sets the untagged form,
 // which is also what the reference corpus's index provenance stores
 // (`meta.embed_model = 'bge-m3'`, verified against the live index) — but

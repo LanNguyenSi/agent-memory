@@ -124,7 +124,7 @@ test(`${ENV_KEY}='[]' (explicit empty array) applies as null with no warning`, a
   assert.doesNotMatch(stderr, /warning/i);
 });
 
-// Deliberate, documented convention (README.md's Sync behavior section),
+// Deliberate, documented convention (docs/sync-behavior.md),
 // pinned here so it stays a decision rather than an accident: readEnvConfig
 // only even looks at this env var inside `if (env.AGENT_MEMORY_SYNC_
 // REACHABILITY_CHECK_COMMAND)`, and an empty string is falsy in JS, so it

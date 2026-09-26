@@ -107,7 +107,7 @@ function semanticPathAvailable(dir: string): boolean {
  * mismatched-vocabulary run (e.g. `--dir` pointed at the wrong corpus, or a
  * broken `topics.yml`) would otherwise silently look identical to a normal
  * run in the report; this makes it visible instead. Additive to the report
- * schema — see EvalReport below and README.md "Golden-set eval".
+ * schema, see EvalReport below and docs/commands.md's eval section.
  */
 function vocabularySourceLabel(dir: string): string {
   const { vocabulary, error } = loadVocabularyResult(dir);
@@ -131,7 +131,7 @@ export interface PromptMetric {
 }
 
 /**
- * Metric definitions (documented in full in README.md "Golden-set eval"):
+ * Metric definitions (documented in full in docs/commands.md's eval section):
  *
  * Positive prompt (expect.length > 0):
  *   precision = |expect ∩ got| / |got|   (0 when got is empty)
@@ -228,7 +228,7 @@ export interface EvalReport {
   /**
    * Which topic vocabulary the Topic Gate used for this run: `"built-in
    * default"` or `"custom (<dir>/topics.yml)"` (see `vocabularySourceLabel`
-   * above). Additive field, see README.md "Golden-set eval".
+   * above). Additive field, see docs/commands.md's eval section.
    */
   vocabularySource: string;
   /**

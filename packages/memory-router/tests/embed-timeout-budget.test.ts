@@ -145,8 +145,8 @@ test('semanticSearch: no env override → embedBatch call uses DEFAULT_TIMEOUT_M
     await withOpenAiKey(async () => {
       // b1bbbf68 fix-round: also neutralize the hook-only knob, not just
       // the shared one. An ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
-      // (e.g. exported in a shell profile, exactly as this package's own
-      // README recipe recommends) would otherwise win the precedence
+      // (e.g. exported in a shell profile, exactly as docs/scoring.md's own
+      // recipe recommends) would otherwise win the precedence
       // check below and make this "no override" test pass or fail
       // depending on the operator's shell, not the code.
       await withHookEmbedTimeoutEnv(undefined, async () => {
@@ -354,8 +354,8 @@ test('semanticSearch: an invalid MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS (negative) 
 });
 
 // b1bbbf68 fix-round: an ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
-// (e.g. exported in a shell profile, exactly as the README's own recipe
-// recommends) must never leak into a test that means to observe the
+// (e.g. exported in a shell profile, exactly as docs/scoring.md's own
+// recipe recommends) must never leak into a test that means to observe the
 // "no hook override" or "shared knob governs" behavior. The two tests
 // above learned this the hard way and now neutralize the hook knob
 // themselves; this test pins the guard by simulating the ambient value

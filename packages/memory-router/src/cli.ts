@@ -746,8 +746,8 @@ async function runTest(
   // memoryDir threaded explicitly (not left to the MEMORY_ROUTER_DIR env
   // fallback in gates/topic.ts) so `test --dir <path>` always matches
   // against THAT dir's topics.yml, even when $MEMORY_ROUTER_DIR is unset or
-  // points somewhere else — see src/gates/topic.ts and README "Topic
-  // vocabulary".
+  // points somewhere else, see src/gates/topic.ts and
+  // docs/memory-schema.md's Topic vocabulary section.
   const ctx = { prompt, cwd: process.cwd(), memoryDir: dir };
 
   const syncHits: GateHit[] = resolve(ctx, memories, { maxHits });

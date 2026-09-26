@@ -411,8 +411,8 @@ test("watch tick queues locally when the remote is unreachable, then replays the
 
 // Counterpart to the queue-replay test above (agent-tasks
 // 1b63070d-9ea1-4a38-bba0-e58a4678b596). This test only covers the
-// pre-try-block boundary: a genuine config/data error (README.md's own
-// example: a required `syncPaths` entry missing) is raised by
+// pre-try-block boundary: a genuine config/data error (docs/service-supervision.md's
+// own example: a required `syncPaths` entry missing) is raised by
 // collectLocalSyncFiles() before performPush's reachability precheck or its
 // try/catch are ever reached (see src/memory-sync/push.ts), so it was
 // always going to propagate — this class of error never had a "soften it
@@ -547,7 +547,7 @@ test("watch tick with a non-network git failure inside the push (e.g. commit fai
 // full disk writing the incoming packfile, a corrupted object database, ...)
 // and is not safe to assume is "the remote's fault" the way
 // lookupRemoteHead/push's own RemoteUnavailableError throws are — and
-// README.md/docs/machine-setup.md describe it, but nothing pinned it with a
+// docs/service-supervision.md/docs/machine-setup.md describe it, but nothing pinned it with a
 // test: a future refactor (e.g. reflexively adding `allowFailure: true` to
 // every `this.run(...)` call, or wrapping this specific fetch in a
 // try/catch that reclassifies it) could flip this boundary either way

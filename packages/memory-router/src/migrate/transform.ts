@@ -23,8 +23,8 @@
 //              non-string entry) is NOT hoisted and falls through to the
 //              next source rather than crashing; (3) the curated --mapping
 //              file; (4) a vocabulary pattern match against name+
-//              description only (never the body, see README "Topic
-//              vocabulary"). No match at any step leaves the file
+//              description only (never the body, see docs/memory-schema.md's
+//              Topic vocabulary section). No match at any step leaves the file
 //              untagged, reported under "untagged topics".
 //   - created: stamp today's canonical date from the file's mtime, marked
 //              `# approx (mtime)`, only when no `created` key exists yet.

@@ -421,8 +421,8 @@ test("restore rejects an unknown sha with a loud non-zero exit", () => {
   assert.match(result.stderr, /40.character sha/i);
 });
 
-// Reproduces the documented restore-short-sha failure (README.md's restore
-// section, docs/machine-setup.md): `git fetch origin <ref>` only accepts a
+// Reproduces the documented restore-short-sha failure (docs/cli-reference.md's
+// restore section, docs/machine-setup.md): `git fetch origin <ref>` only accepts a
 // ref name or a *full* object id from a remote — an abbreviated commit sha
 // is never resolvable that way, so restore used to fail with a bare "could
 // not fetch ref" even though the commit is right there in history.

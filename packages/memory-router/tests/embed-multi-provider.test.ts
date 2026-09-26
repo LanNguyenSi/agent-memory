@@ -209,7 +209,7 @@ test('resolveProviderConfig: MEMORY_ROUTER_EMBED_PROVIDER normalization tolerate
 // silently misroute an auto-detected Ollama config. MEMORY_ROUTER_
 // OLLAMA_EMBED_MODEL is the Ollama-specific override for that path;
 // explicit ollama selection keeps honoring the generic var (deliberate
-// user choice), see README "Embedding provider" precedence table.
+// user choice), see docs/scoring.md's Embedding provider precedence table.
 // ---------------------------------------------------------------------
 
 test('resolveProviderConfig: auto-detected ollama honors MEMORY_ROUTER_OLLAMA_EMBED_MODEL over a stray MEMORY_ROUTER_EMBED_MODEL', () => {

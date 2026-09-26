@@ -1,6 +1,6 @@
 // Text and JSON renderers for the `memory-router eval` report (src/eval/runner.ts).
 //
-// --json schema (stable, documented in README.md "Golden-set eval"):
+// --json schema (stable, documented in docs/commands.md's eval section):
 //   {
 //     goldenPath, dir, corpusSize, semanticPathActive, vocabularySource,
 //     unknownExpectIds, semanticContributedCount,

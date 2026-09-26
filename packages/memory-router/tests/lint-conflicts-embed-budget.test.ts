@@ -369,14 +369,14 @@ test('lint --semantic: a missing-pair embed error is enriched with describeEmbed
   }
 });
 
-// 372ed7ab: the README documented an ollama-shaped enriched error message
-// that describeEmbedError can never actually produce ("baseUrl=default"
-// with no hint sentence): buildOllamaConfig always resolves a concrete
-// baseUrl, and describeEmbedError always appends the "If this is a local
-// Ollama daemon" hint when provider=ollama. Only the openai branch above
-// was pinned end-to-end through the lint path; this closes that gap for
-// the ollama branch so the README's example stays honest about what the
-// code actually emits.
+// 372ed7ab: docs/commands.md documented an ollama-shaped enriched error
+// message that describeEmbedError can never actually produce
+// ("baseUrl=default" with no hint sentence): buildOllamaConfig always
+// resolves a concrete baseUrl, and describeEmbedError always appends the
+// "If this is a local Ollama daemon" hint when provider=ollama. Only the
+// openai branch above was pinned end-to-end through the lint path; this
+// closes that gap for the ollama branch so docs/commands.md's example
+// stays honest about what the code actually emits.
 test('lint --semantic: a missing-pair embed error against ollama is enriched with a concrete baseUrl and the Ollama hint', async () => {
   const dir = tmpDir();
   writePairs(dir, 1); // one opposite-polarity pair -> exactly one missing-embed request
