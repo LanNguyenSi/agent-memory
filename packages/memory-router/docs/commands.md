@@ -145,8 +145,7 @@ provider/model/base-URL context as `memory-router index`, for example
 against a local Ollama daemon:
 
 ```
-embedding call failed (provider=ollama baseUrl=http://localhost:11434 model=bge-m3): The operation was aborted due to timeout
-If this is a local Ollama daemon: run `ollama serve` (or start the app) and `ollama pull bge-m3` if the model isn't downloaded yet.
+embedding call failed (provider=ollama baseUrl=http://localhost:11434 model=bge-m3): The operation was aborted due to timeout If this is a local Ollama daemon: run `ollama serve` (or start the app) and `ollama pull bge-m3` if the model isn't downloaded yet.
 ```
 
 and propagates, exiting `lint` non-zero. This is deliberately
@@ -337,9 +336,7 @@ score that cleared the relevance floor and beat out the other candidates
 for a slot), distinct from `semanticPathActive` (which only proves an
 index + provider are configured, not that the signal won anything).
 `vocabularySource` states which topic vocabulary the Topic Gate used for
-the run (see [docs/memory-schema.md](memory-schema.md)). Golden ids that
-don't resolve against the corpus are reported in `unknownExpectIds`
-(never silenced). Exits 1 only on a real setup error (`golden.yml`
+the run (see [docs/memory-schema.md](memory-schema.md)). Exits 1 only on a real setup error (`golden.yml`
 missing or unparsable, or the corpus dir missing); exits 0 on any
 error-free run regardless of the metric values.
 

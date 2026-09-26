@@ -36,9 +36,7 @@ memory-digest-cli/
 │   ├── digest/           # Digest generation and formatting
 │   └── main.ts
 │       # Entrypoint: registers commands, sets global flags
-├── tests/
-│   ├── commands/         # Tests mirroring src/commands
-│   └── config/
+├── tests/                # Flat: digest, extractor, generate, run, scanner .test.ts
 └── docs/
 ```
 

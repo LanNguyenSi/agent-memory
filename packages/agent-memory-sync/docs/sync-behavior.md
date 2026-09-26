@@ -86,7 +86,8 @@ is about to change.
   `maxFiles` files (default 20), or more than `maxRatio` of a destination
   (default `0.1`, i.e. 10 percent), is refused. The proportional rule
   needs at least two deletions in one plan before it applies. The
-  absolute rule is checked plan-wide, across destinations.
+  absolute rule is checked plan-wide, across destinations and including
+  paths outside `repositorySubdir` that the commit would carry.
 - **Untrustworthy working copies**: a fetched working copy missing that
   much of what the base snapshot tracks, or with that much of it present
   but emptied to zero bytes, is refused before any merge runs (exit `7`),
@@ -100,15 +101,17 @@ is about to change.
 - **Pre-apply snapshots**: before a pull deletes or overwrites anything in
   a destination, the destination's current tree is copied to
   `<stateDir>/snapshots/<destination>/<timestamp>/`. The newest
-  `snapshotGenerations` copies (default 3) are kept. `restore
-  --from-snapshot` reads them back.
+  `snapshotGenerations` copies (default 3) are kept. A run with nothing to
+  apply writes nothing. `restore --from-snapshot` reads them back.
 - **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
   thresholds refuse. It does not override an untrustworthy working copy.
 - **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the
   thresholds refuse, and overrides the untrustworthy-working-copy refusal
   for a working copy MISSING files. The destination is copied into
   `<stateDir>/snapshots` first, then the remote's state is applied
-  locally, and the base snapshot moves with it. It cannot be combined
+  locally (on the push side, that means removing the local copies the
+  remote no longer has), and the base snapshot moves with it, so the next
+  run is clean instead of republishing what was just accepted as deleted. It cannot be combined
   with `--allow-mass-delete` (usage error, exit `2`). It is a one-shot
   decision about one observed remote state, which is why `watch` does not
   take it.

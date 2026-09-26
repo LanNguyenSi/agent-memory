@@ -155,7 +155,7 @@ also screens out some genuine borderline matches along with the junk it
 was added to catch, trading roughly a fifth of precision and recall for
 going from zero to full negative-control coverage, at essentially
 unchanged MRR (0.7313 -> 0.7104). This is an independent measurement from
-the mm-v1-T008 calibration table above (295 memories and a
+the calibration table above (295 memories and a
 differently-sized golden set here vs. 289 memories/16 positive prompts
 there); its post-upgrade P/R/MRR land close to that table's floor-0.78
 row by coincidence of the underlying cosine distribution on this corpus,
