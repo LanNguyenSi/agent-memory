@@ -145,17 +145,26 @@ unconditionally (scan/extract/digest progress, warnings), with no verbosity gate
 
 ## CI/CD Architecture
 
-The pipeline runs on GitHub Actions (`packages/memory-digest-cli/.github/workflows/ci.yml`) as a
-single `test` job, matrixed over Node 20 and 22:
+The repo has no root `package.json`/npm workspaces; CI (`.github/workflows/ci.yml`) runs one
+`ci` job matrixed over packages (including `memory-digest-cli`), each with
+`working-directory: packages/<package>`, on Node 22:
 
-1. `npm ci`
-2. `npm run typecheck` (`tsc --noEmit`)
-3. `npm test`
-4. `npm run build`
-5. A smoke test running the built CLI: `node dist/main.js --help` and `--version`
+1. `npm ci --no-audit --no-fund`
+2. A native-dep smoke check (a no-op for `memory-digest-cli`; it only exercises
+   `memory-router`'s native bindings)
+3. `npm run typecheck --if-present` (`tsc --noEmit`)
+4. `npm run build --if-present`
+5. `npm run lint --if-present`, which for this package is an alias for `typecheck`
+   (`"lint": "npm run typecheck"` in `package.json`), not `eslint`
+6. `npm run test:coverage --if-present`: `tsx --test` with
+   `--experimental-test-coverage` and `--test-coverage-lines=90
+--test-coverage-branches=80 --test-coverage-functions=92` thresholds, so a
+   coverage regression fails the build
 
-There is no separate lint job, no `eslint` step, no `prettier --check` step, and no `npm pack`
-step in this workflow.
+There is no `prettier --check` step and no `npm pack` step in this workflow. A
+`packages/memory-digest-cli/.github/workflows/ci.yml` file also exists in this repo, but GitHub
+Actions only runs workflows from the repository root's `.github/workflows/`, so that nested file
+is never triggered.
 
 ## Testing Strategy
 
