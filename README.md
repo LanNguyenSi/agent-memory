@@ -41,6 +41,8 @@ The packages compose: `agent-memory-sync` keeps memory files in step across mach
 
 ## Quick start
 
+Prerequisites: Node.js 22 or newer (memory-router; the other packages need 20+), npm, and git. No API key is needed for this demo.
+
 The flagship package is [`memory-router`](packages/memory-router): a deterministic memory-injection layer for Claude Code. Drive it once and the rest of the suite makes more sense.
 
 ```bash
@@ -87,12 +89,13 @@ The positive prompt above prints one line of JSON on stdout:
 {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"**memory-router** — 1 relevant memory applies:\n\n### No force-push to shared branches  _(topic · 1.00)_\nNEVER force-push to master or main. The history is shared; rewriting\nit costs every collaborator a hard reset and loses uncommitted work.\nFor local-branch fixes, prefer a fixup commit + interactive rebase\nbefore push."}}
 ```
 
-Claude Code injects `additionalContext` as system context for the model on every prompt that matches. The negative prompt prints nothing and exits 0: when no gate fires, stdout stays empty so the context window stays clean.
+Claude Code injects `additionalContext` as system context for the model on every prompt that matches. The negative prompt prints nothing and exits 0: when no gate fires, stdout stays empty so the context window stays clean. A stderr note about the missing embedding index is expected; the topic gate works without it.
 
 ## Documentation
 
 - [memory-router README](packages/memory-router): full hook and MCP server wiring, lint, and stale-reference checker.
-- [docs/memory-hygiene-2026-04-22.md](docs/memory-hygiene-2026-04-22.md): record of memory-corpus fixes surfaced by `memory-router lint --drift`.
+- [agent-memory-sync README](packages/agent-memory-sync): multi-machine sync setup, cron, and offline queue.
+- [memory-digest-cli README](packages/memory-digest-cli): digest generation from daily logs.
 
 ## Development and contributing
 
