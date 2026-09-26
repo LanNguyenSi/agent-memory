@@ -29,7 +29,7 @@ memory-digest-cli/
 │   │   ├── run.ts
 │   │   ├── generate.ts
 │   │   └── config.ts
-│   ├── config/           # Config file loading, validation, env var merging
+│   ├── config/           # Config file loading (defaults + file, no env-var merging)
 │   │   └── loader.ts
 │   ├── scanner/          # File scanning and date filtering
 │   ├── extractor/        # Insight extraction and importance scoring
@@ -44,118 +44,134 @@ memory-digest-cli/
 
 ### 1. Command Parsing (commander)
 
-Commands are registered on a `Command` instance. Each subcommand has its own Command object.
+Commands are registered on a `Command` instance. Each subcommand has its own Command object,
+following the real `run` command (`src/commands/run.ts:13-42`):
 
 ```typescript
 // src/commands/run.ts
 import { Command } from "commander";
+import { loadConfig } from "../config/loader.js";
 
-export function registerRun(program: Command): void {
+export function registerRunCommand(program: Command): void {
   program
     .command("run")
     .description("Execute the primary action")
-    .option("--dry-run", "Preview without changes", false)
-    .option("-o, --output <format>", "Output format", "text")
-    .action(async (options) => {
-      await executeRun(options);
+    .argument("[target]", "Optional target to operate on", "default")
+    .option("--config <path>", "Override config file path")
+    .option("--dry-run", "Preview without making changes", false)
+    .option("-o, --output <format>", "Output format: text or json", "text")
+    .option("-v, --verbose", "Enable verbose diagnostics", false)
+    .action(async (target: string, options) => {
+      const config = await loadConfig(options.config);
+      // ... build payload, write text or JSON to stdout
     });
 }
 ```
 
-The root program is created in `src/main.ts` and subcommands are registered before `program.parseAsync()`.
+The root program is created in `src/main.ts` (`src/main.ts:7-18`) and subcommands are
+registered before `program.parseAsync()`.
 
 ### 2. Config Loading
 
-Config is loaded in layers, with later layers overriding earlier ones:
+Config is loaded in two layers, with the later layer overriding the earlier one:
 
 ```
-1. Compiled-in defaults
-2. Config file (~/.config/memory-digest-cli/config.json)
-3. Environment variables (MEMORY_DIGEST_CLI_*)
-4. CLI flags passed at runtime
+1. Compiled-in defaults (DEFAULT_CONFIG)
+2. Config file, if present
 ```
 
-The config loader lives in `src/config/`. It is responsible for:
+`--config`/`--output`/`--verbose` and the other CLI flags read by `run` and `generate` are not
+merged into the loaded config object; each command reads them directly from its own options and
+keeps them separate from `config.settings`.
 
-- Locating the config file (respects `--config` flag and `XDG_CONFIG_HOME`)
-- Parsing the JSON file into a typed struct/dataclass
-- Merging environment variable overrides
-- Returning a validated config object to each command
+The config loader lives in `src/config/loader.ts`. It is responsible for:
+
+- Locating the config file (respects an explicit `--config` override, then `XDG_CONFIG_HOME`,
+  then `~/.config`)
+- Parsing the JSON file and casting it to `Partial<CliConfig>` (no runtime schema validation)
+- Merging the parsed file over `DEFAULT_CONFIG`
+- Returning a `LoadedConfig` (`path` and `settings`) to each command
 
 Commands receive config as a parameter; they do not read it directly. This keeps commands
 testable without touching the filesystem.
 
 Config file path resolution order:
 
-1. Value of `--config` flag
-2. `$MEMORY_DIGEST_CLI_CONFIG` environment variable
-3. `$XDG_CONFIG_HOME/memory-digest-cli/config.json`
-4. `~/.config/memory-digest-cli/config.json`
+1. The `overridePath` a command passes in (the `--config` flag value)
+2. `$XDG_CONFIG_HOME/memory-digest-cli/config.json`, if `XDG_CONFIG_HOME` is set
+3. `~/.config/memory-digest-cli/config.json` (fallback)
+
+There is no `MEMORY_DIGEST_CLI_*` environment variable layer: `XDG_CONFIG_HOME` is the only
+environment variable the loader reads, and only for locating the file, not for overriding
+individual settings.
 
 ### 3. Output Formatting
 
-Commands should never write directly to stdout with unstructured print statements.
-Instead, they call a shared output layer:
+The `run` command supports `-o, --output <format>` with two values: `text` (default) or `json`.
+`json` output is `JSON.stringify(payload, null, 2)`; `text` output is a single formatted line.
+The `generate` command instead uses a boolean `--json` flag to choose between
+`formatDigestMarkdown` and `formatDigestJSON`.
 
-- **`output text`**: Human-readable, with optional color (disabled if `NO_COLOR` is set or `--no-color` is passed, or if stdout is not a TTY)
-- **`output json`**: Machine-readable JSON, always without color
-- **`output yaml`**: Machine-readable YAML, always without color
-
-The output module respects:
-
-- `NO_COLOR` environment variable (per [no-color.org](https://no-color.org))
-- `--no-color` flag
-- TTY detection: disable color when stdout is piped
+`CliConfig.outputFormat` is typed as `"text" | "json" | "yaml"`, but no command implements a
+YAML output path, and there is no shared output/color module: there is no `NO_COLOR` handling,
+no `--no-color` flag, and no TTY detection anywhere in the CLI. Output is written directly with
+`process.stdout.write` / `console.log`.
 
 ### 4. Error Handling and Exit Codes
 
-All errors are caught at the top-level command runner and translated to appropriate exit codes.
-Commands signal failure by raising/returning an error - they never call `os.exit()` directly.
+Only two exit codes are actually used: `0` (implicit success) and `1`.
 
 #### Exit Code Reference
 
-| Code | Meaning                                                         |
-| ---- | --------------------------------------------------------------- |
-| `0`  | Success                                                         |
-| `1`  | General / unspecified error                                     |
-| `2`  | Invalid arguments or usage error                                |
-| `3`  | Configuration error (bad config file, missing required setting) |
-| `4`  | Runtime error (external service unavailable, permission denied) |
-| `5`  | Not found (resource the command expected does not exist)        |
+| Code | Meaning                        | Where                                                                                                                                  |
+| ---- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success                        | Implicit (no error thrown/exit called)                                                                                                 |
+| `1`  | Unhandled error in any command | `main.ts`'s `parseAsync().catch()` sets `process.exitCode = 1`; `generate`'s action calls `process.exit(1)` from its own `catch` block |
 
-Error messages follow the pattern: `error: <what went wrong>. <how to fix it>.`
+`run` and `config show` have no `catch` of their own and rely on the top-level handler in
+`main.ts`. `generate` catches locally and calls `process.exit(1)` directly instead of raising.
+Exit codes `2`-`5` are not implemented; there is no dedicated usage-error, config-error,
+runtime-error, or not-found code.
 
-Good: `error: config file not found at ~/.config/memory-digest-cli/config.json. Run 'memory-digest-cli config init' to create it.`
-Bad: `FileNotFoundError: [Errno 2] No such file or directory`
+Error messages are written with a plain `error: <message>` (in `main.ts`) or `Error:
+<message>` (in `generate`) prefix; there is no "how to fix it" suffix convention.
 
 ### 5. Logging and Verbosity
 
-Diagnostic output is gated by a verbosity level:
-
-- **Default**: warnings and errors only
-- **`--verbose`**: informational messages, command timing
-- **`--debug`**: debug-level traces (when applicable)
-
-Structured log lines go to stderr and never to stdout.
+`run` has a `-v, --verbose` flag that is read into the `run` payload but does not currently gate
+any diagnostic output. `generate` writes its progress and warning lines to `console.error`
+unconditionally (scan/extract/digest progress, warnings), with no verbosity gate. There is no
+`--debug` flag anywhere in the CLI.
 
 ## CI/CD Architecture
 
-The pipeline runs on GitHub Actions (`.github/workflows/ci.yml`):
+The pipeline runs on GitHub Actions (`packages/memory-digest-cli/.github/workflows/ci.yml`) as a
+single `test` job, matrixed over Node 20 and 22:
 
-1. **lint** - eslint, prettier --check
-2. **test** - npm test
-3. **build** - tsc --noEmit + npm pack
+1. `npm ci`
+2. `npm run typecheck` (`tsc --noEmit`)
+3. `npm test`
+4. `npm run build`
+5. A smoke test running the built CLI: `node dist/main.js --help` and `--version`
+
+There is no separate lint job, no `eslint` step, no `prettier --check` step, and no `npm pack`
+step in this workflow.
 
 ## Testing Strategy
 
-Approach: **unit-tests**
+Approach: a mix of direct unit calls and subprocess integration tests.
 
-Each command module has a corresponding test file. Tests invoke command functions directly
-with controlled inputs - they do not spawn subprocess invocations.
-
-- Commands are tested with mocked config and mocked I/O
-- Config loader is tested with temporary files
-- Output formatter is tested for both text and JSON modes
+- `digest.test.ts`, `extractor.test.ts`, and `scanner.test.ts` call the exported functions
+  directly with controlled inputs.
+- `generate.test.ts` mostly drives `registerGenerateCommand`'s parsed options by spying on the
+  action handler, plus a few tests that run the real action against a temp directory (writing
+  files, checking `process.exit(1)` on a write failure) without spawning a subprocess.
+- `run.test.ts` spawns the CLI as a real subprocess via `execFileSync` (running `src/main.ts`
+  through `tsx`) and asserts on its stdout/exit behavior for both the `run` and `config show`
+  commands; it is the closest thing to a dedicated test file for `config`, which has no
+  `config.test.ts` of its own.
+- Only `generate.test.ts` exercises both text/markdown and JSON output; `digest.test.ts` only
+  formats markdown.
 
 ## Decisions
 
