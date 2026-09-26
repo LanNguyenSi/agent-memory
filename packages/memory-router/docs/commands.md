@@ -336,9 +336,9 @@ score that cleared the relevance floor and beat out the other candidates
 for a slot), distinct from `semanticPathActive` (which only proves an
 index + provider are configured, not that the signal won anything).
 `vocabularySource` states which topic vocabulary the Topic Gate used for
-the run (see [docs/memory-schema.md](memory-schema.md)). Exits 1 only on a real setup error (`golden.yml`
-missing or unparsable, or the corpus dir missing); exits 0 on any
-error-free run regardless of the metric values.
+the run (see [docs/memory-schema.md](memory-schema.md)). Exits 1 only on
+a real setup error (`golden.yml` missing or unparsable, or the corpus dir
+missing); exits 0 on any error-free run regardless of the metric values.
 
 ## Coverage / regression suite
 
