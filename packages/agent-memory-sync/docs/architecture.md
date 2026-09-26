@@ -25,8 +25,11 @@ agent-memory-sync/
 │   ├── memory-sync/      # Pull/push/watch/reachability/merge/state
 │   └── main.ts
 ├── tests/
-│   └── ...               # Test files mirroring src/
-├── profiles/              # Committed per-machine configs (mac mini, MacBook, Linux template)
+│   ├── contract/          # Contract tests
+│   ├── helpers/           # Shared test helpers
+│   ├── integration/       # Integration tests
+│   └── unit/              # Unit tests
+├── profiles/              # Committed per-machine configs (mac mini, MacBook, Linux)
 ├── docs/
 │   ├── architecture.md
 │   ├── ways-of-working.md
@@ -34,7 +37,7 @@ agent-memory-sync/
 │   ├── sync-behavior.md
 │   ├── service-supervision.md
 │   ├── machine-setup.md   # Multi-machine bootstrap, activation, restore/rollback
-│   ├── launchd/            # macOS LaunchAgent template for `watch`
+│   ├── launchd/            # macOS LaunchAgent templates for `watch` and `sync`
 │   └── adrs/
 └── README.md
 ```

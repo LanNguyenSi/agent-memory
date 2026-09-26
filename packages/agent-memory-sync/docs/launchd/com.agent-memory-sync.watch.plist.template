@@ -64,8 +64,8 @@
     even prepared (e.g. a required `syncPaths` entry missing), and any
     other git-level failure while that working copy is being prepared or
     committed (a full disk, a corrupted git config, a broken commit hook,
-    ...) still surface as a non-zero exit "by design" (see README.md
-    #systemd-unit) — those are what KeepAlive/ThrottleInterval below are
+    ...) still surface as a non-zero exit "by design" (see
+    docs/service-supervision.md) - those are what KeepAlive/ThrottleInterval below are
     sized for. KeepAlive's SuccessfulExit=false mirrors that: launchd
     respawns on a crash (non-zero exit) but does not respawn after a clean
     shutdown (including the clean exit 0 the queued-offline case above now

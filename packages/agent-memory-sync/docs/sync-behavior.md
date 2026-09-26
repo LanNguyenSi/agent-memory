@@ -93,7 +93,10 @@ is about to change.
   on both the pull and the push side. The emptied half has no escape at
   all: a destination present but zeroed is almost always the checkout
   itself coming back zeroed rather than a remote that genuinely emptied
-  it, so `--accept-mass-delete` refuses it too.
+  it, so `--accept-mass-delete` refuses it too. If the hub really did
+  empty those files on purpose, the route forward is not that flag:
+  re-commit real content at the hub, or raise
+  `massDeleteGuard.maxFiles`/`maxRatio` in the config for one run.
 - **Pre-apply snapshots**: before a pull deletes or overwrites anything in
   a destination, the destination's current tree is copied to
   `<stateDir>/snapshots/<destination>/<timestamp>/`. The newest
