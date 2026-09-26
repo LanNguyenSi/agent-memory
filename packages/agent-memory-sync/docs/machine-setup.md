@@ -1,7 +1,7 @@
 # Machine setup: Mac mini as source of truth
 
 This document wires together the pieces already documented individually
-(README.md's Quick Start / Configuration / systemd unit, and
+(README.md's Install / quick start, Configuration, and systemd unit sections, and
 `docs/launchd/`) into the actual multi-machine layout this repo runs:
 
 - **Mac mini** — single source of truth. Hosts the bare git repository every
@@ -45,8 +45,8 @@ This document wires together the pieces already documented individually
   tick or `run`, with a clean exit `0` — no `git ls-remote` hang. This is a
   deliberate contract change from `watch`'s earlier behavior, where any push
   failure (including a merely unreachable remote) surfaced as a non-zero
-  exit and relied on launchd/systemd to restart the process; see the
-  README.md `watch` section for the exact new boundary. The
+  exit and relied on launchd/systemd to restart the process; see
+  docs/service-supervision.md for the exact new boundary. The
   queue-instead-of-crash handling is narrow, not a general catch-all: only a
   failure `GitClient.lookupRemoteHead` / `GitClient.push` attributes to the
   remote itself (unreachable, rejected, non-fast-forward — see
@@ -83,8 +83,8 @@ This document wires together the pieces already documented individually
   (macOS) and the systemd `OnUnitActiveSec=15min` timer in (c) below (Linux)
   — 96 missed ticks at that cadence, comfortably past an overnight or
   weekend offline window while still bounding a genuinely broken remote's
-  silence to about a day. See README.md's "Queue escalation" section under
-  `watch` for the full rationale.
+  silence to about a day. See docs/sync-behavior.md's Queue escalation
+  section for the full rationale.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
   *this* machine's local files change; it never reads from the remote. Its
@@ -245,7 +245,7 @@ empty/stale local workspace as if it were authoritative.
 
 ## c) Setting up a third (Linux) machine
 
-1. Build the CLI on the new machine (README.md → Installation): `npm install
+1. Build the CLI on the new machine (README.md's Install / quick start section): `npm install
    && npm run build` in `packages/agent-memory-sync`.
 2. Add the `mini` SSH host alias to `~/.ssh/config` (same as in (a) above)
    and verify with the `ssh -o BatchMode=yes ...` probe.
@@ -358,8 +358,8 @@ agent-memory-sync restore <sha> --config profiles/<name>.json --yes
 ```
 
 `restore` writes files byte-identical to their contents at `<sha>` and
-refuses to touch anything outside the profile's configured `syncPaths` —
-see README.md's `restore` section for the full option reference. `restore`
+refuses to touch anything outside the profile's configured `syncPaths`,
+see docs/cli-reference.md for the full option reference. `restore`
 is a one-shot, on-demand command; it does not go through the reachability
 precheck the way `pull`/`push`/`sync` do; an unreachable remote during
 `restore` fails loudly rather than skipping, since a restore you asked for
@@ -426,7 +426,7 @@ with one `run --mode sync --accept-mass-delete` (preview it first with
 
 The thresholds and the snapshot depth are per profile: `massDeleteGuard`
 (`maxRatio`, `maxFiles`), `snapshotGenerations`, and `lockStaleMs` for how long
-an abandoned lock survives. See README.md's Deletion guards section.
+an abandoned lock survives. See docs/sync-behavior.md's Deletion guards section.
 
 ### Re-enabling the periodic sync job
 

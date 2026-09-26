@@ -20,17 +20,23 @@ argument parsing, validation, and execution logic.
 ```
 agent-memory-sync/
 ├── src/
-│   ├── commands/         # One module per subcommand
-│   │   ├── run.ts
-│   │   └── config.ts
-│   ├── config/           # Config file loading, validation, env var merging
-│   │   └── loader.ts
+│   ├── commands/         # One file per subcommand: run, watch, restore, config
+│   ├── config/           # Config loading and validation
+│   ├── memory-sync/      # Pull/push/watch/reachability/merge/state
 │   └── main.ts
-│       # Entrypoint: registers commands, sets global flags
 ├── tests/
-│   ├── commands/         # Tests mirroring src/commands
-│   └── config/
-└── docs/
+│   └── ...               # Test files mirroring src/
+├── profiles/              # Committed per-machine configs (mac mini, MacBook, Linux template)
+├── docs/
+│   ├── architecture.md
+│   ├── ways-of-working.md
+│   ├── cli-reference.md
+│   ├── sync-behavior.md
+│   ├── service-supervision.md
+│   ├── machine-setup.md   # Multi-machine bootstrap, activation, restore/rollback
+│   ├── launchd/            # macOS LaunchAgent template for `watch`
+│   └── adrs/
+└── README.md
 ```
 
 ## Key Subsystems

@@ -451,8 +451,8 @@ async function restoreDestination(
   // half-restored. The legacy file-form write loop above already does this;
   // this form did not, so a source list with an unmappable path sorted
   // after a mappable one wrote the mappable one, snapshotted it, and only
-  // then aborted, matching README's "refused outright" for this case
-  // (agent-tasks 73ea60bf).
+  // then aborted, matching docs/sync-behavior.md's "refused outright" for
+  // this case (agent-tasks 73ea60bf).
   const resolvedSourceFiles = sourceFiles.map((file) => {
     const absolutePath = mapRemotePathToLocalAbsolute(runConfig, file.remoteRelativePath, resolvedEntries);
     if (!absolutePath) {

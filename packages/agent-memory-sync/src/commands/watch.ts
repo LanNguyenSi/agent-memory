@@ -153,7 +153,7 @@ function registerWatchCommand(program: import("commander").Command): void {
       // same stateDir/profile (both otherwise default to the "push" label).
       //
       // A genuinely unreachable/failed push is no longer a thrown error here
-      // (see README.md's "watch" section for the documented contract
+      // (see docs/service-supervision.md for the documented contract
       // change): performPush queues the snapshot locally and returns
       // normally instead, exactly like `run --mode push/sync` already does.
       // Config/data errors (e.g. a required syncPaths entry missing) still

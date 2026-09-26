@@ -54,8 +54,8 @@
     successful tick or `run`, with a clean exit 0 — no crash, no respawn.
     This is a deliberate contract change from watch's earlier behavior
     (where any push failure, including a merely unreachable remote, exited
-    non-zero and relied on launchd to restart the process); see README.md's
-    `watch` section and docs/machine-setup.md for the exact boundary. The
+    non-zero and relied on launchd to restart the process); see
+    docs/sync-behavior.md and docs/machine-setup.md for the exact boundary. The
     queue-instead-of-crash handling is narrow, not a general catch-all:
     only a failure GitClient.lookupRemoteHead / GitClient.push attributes
     to the remote itself (unreachable, rejected, non-fast-forward — see
@@ -98,8 +98,8 @@
     a real local edit, so it only re-throws (and respawns again) the next
     time this machine's memory actually changes while the remote is still
     broken, each time writing a fresh, visible line to
-    watch.<profile>.err.log — see docs/machine-setup.md's "Queue escalation"
-    bullet and README.md's "Queue escalation" section under `watch`.
+    watch.<profile>.err.log; see docs/machine-setup.md's "Queue escalation"
+    bullet and docs/sync-behavior.md's Queue escalation section.
 -->
 <plist version="1.0">
 <dict>
