@@ -3,7 +3,7 @@
 // carry different `name`/`topics`/`severity` while saying the exact same
 // thing) collapses to the same normalized text.
 //
-// Normalization (documented here and in README.md, keep both in sync):
+// Normalization (documented here and in docs/commands.md, keep both in sync):
 //   1. trim leading/trailing whitespace
 //   2. collapse every whitespace run (spaces, tabs, newlines) to a single
 //      space

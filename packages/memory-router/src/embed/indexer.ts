@@ -58,8 +58,8 @@ let missingIndexWarned = false;
 // user staring at "fetch failed" or a bare timeout knows WHICH endpoint
 // misbehaved instead of guessing between OpenAI and a local Ollama daemon.
 // For ollama specifically, folds in the two most common fixes verbatim
-// from README "Embedding provider" (`ollama serve`, `ollama pull
-// <model>`) since an unreachable/missing-model local daemon is the
+// from docs/scoring.md's Embedding provider section (`ollama serve`,
+// `ollama pull <model>`) since an unreachable/missing-model local daemon is the
 // overwhelmingly likely cause on that path.
 function describeEmbedError(
   err: unknown,
