@@ -393,10 +393,8 @@ Commands:
     as 'test'). Without an embedding index and OPENAI_API_KEY the
     confidence gate stays silent; the report states this explicitly via
     "semantic path: inactive" rather than passing it off as measured.
-    --json emits a machine-readable report on stdout (schema documented
-    in packages/memory-router/docs/commands.md; docs/ is not part of the
-    published npm package, so the durable pointer is
-    https://github.com/LanNguyenSi/agent-memory/blob/master/packages/memory-router/docs/commands.md#memory-router-eval-metric-definitions-and-json-schema).
+    --json emits a machine-readable report on stdout; schema:
+    https://github.com/LanNguyenSi/agent-memory/blob/master/packages/memory-router/docs/commands.md#memory-router-eval-metric-definitions-and-json-schema
 
   migrate [--dir <path>] [--apply] [--mapping <file>] [--json]
     Mechanical, idempotent frontmatter backfill to schema v1 (name,
