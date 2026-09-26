@@ -99,55 +99,28 @@ The positive prompt prints one line of JSON on stdout:
 `1.00` is the flat pre-blend topic score for this demo: with no embedding
 index, both the semantic path and the score blend contribute nothing, so
 the result degrades to exactly the old topic-only resolver (see
-[How it works](#how-it-works)). The same corpus also prints one line on
-stderr (`embedding index missing; run 'memory-router index <dir>' to
-build it`); this is informational, not a failure. Claude Code consumes
-the stdout contract on every prompt and injects `additionalContext` as
-system context for the model; when no signal fires, stdout stays empty so
-the context window stays clean.
+[How it works](#how-it-works)). The same corpus also prints a stderr
+notice that the embedding index is missing; this is informational, not a
+failure. Claude Code consumes the stdout contract on every prompt and
+injects `additionalContext` as system context for the model; when no
+signal fires, stdout stays empty so the context window stays clean.
 
 ## How it works
 
 `UserPromptSubmit` and the MCP server's `memory_resolve` both resolve a
-prompt through the **score-blend resolver** (`resolveBlended`,
-mm-v1-T004): every signal below is combined into one score per memory,
-deduped by memory id (highest score wins), and capped at N (default 5),
-with a deterministic Tool Gate hit always privileged into that cap ahead
-of blend-scored memories.
+prompt through the **score-blend resolver** (`resolveBlended`): a
+semantic score, a topic boost, and small recency/type tie-breakers are
+combined into one score per memory, deduped by memory id (highest score
+wins), and capped at N (default 5), with a deterministic Tool Gate hit
+(`PreToolUse`, against `triggers.command_pattern`/`triggers.tools`)
+always privileged into that cap ahead of blend-scored memories. Without
+a usable embedding index/provider, the blend degrades to the same output
+the old topic-only resolver would produce.
 
-| Signal | What it is | Role in the blend |
-|------|--------|---------------|
-| **Semantic score** | sqlite-vec cosine similarity between the prompt and each memory's embedding | The dominant signal, when an embedding index + provider are available. A score below the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, model/provider-conditional default, see [Calibration](#calibration-mm-v1-t008)) is dropped before it can enter the blend at all |
-| **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory, not a standalone full-score hit |
-| **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
-| **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker |
-
-A memory with neither a semantic score (once the relevance floor is
-applied) nor a topic match contributes nothing and is excluded. Blend
-weights are overridable via the `MEMORY_ROUTER_BLEND_*` env namespace
-(`MEMORY_ROUTER_BLEND_TOPIC_BOOST`, `MEMORY_ROUTER_BLEND_RECENCY_WEIGHT`,
-`MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS`,
-`MEMORY_ROUTER_BLEND_TYPE_WEIGHT`, `MEMORY_ROUTER_BLEND_MIN_SEMANTIC`,
-`MEMORY_ROUTER_BLEND_CANDIDATE_K`). A negative override for any of these
-is invalid and falls back to the built-in default rather than being
-accepted.
-
-Without an embedding index or a resolvable embedding provider, on a
-semantic-search failure, or when every semantic-search hit for a prompt
-falls below the relevance floor, the blend degrades to exactly the same
-output the old topic-only resolver (`resolve()`) would produce: the same
-memories, in the same order, at the same flat `1.0` score.
-
-Separately, the **Tool Gate** (`PreToolUse` hook, against memory
-`triggers.command_pattern` and `triggers.tools`) stays a deterministic,
-unblended full-score (1.0) match; before `Bash(git push --force)`, `Bash(docker
-compose up)`, etc. It is not part of the semantic blend (there is no
-prompt to embed at that point in the tool-call lifecycle), but
-`memory_resolve` still consults it when a `tool` argument is passed.
-
-See [docs/scoring.md](docs/scoring.md) for why the resolver is a blend
-rather than sequential gates, the full calibration measurement history,
-the model-conditional relevance floor table, and the embedding provider
+See [docs/scoring.md](docs/scoring.md) for the full signal table, the
+degradation behavior, the Tool Gate details, why the resolver is a blend
+rather than sequential gates, the calibration measurement history, the
+model-conditional relevance floor table, and the embedding provider
 reference (selection, overrides, timeout budgets, query cache).
 
 ### Calibration (mm-v1-T008)
@@ -161,7 +134,7 @@ specifically calibrated model); every other Ollama model defaults to the
 same `0.78` as a deliberately conservative, uncalibrated fallback; OpenAI
 keeps the original flat `0.5` default. An explicit
 `MEMORY_ROUTER_BLEND_MIN_SEMANTIC` always wins over these defaults, on
-every provider/model path. See [docs/scoring.md](docs/scoring.md#calibration-measurements-mm-v1-t008)
+every provider/model path. See [docs/scoring.md](docs/scoring.md#calibration-measurements)
 for the full measurement tables, the model-conditional floor rationale,
 and the reproduction recipe.
 
@@ -211,13 +184,9 @@ Wire the two hook binaries in your `~/.claude/settings.json`:
 
 Both binaries consume Claude-Code's hook stdin contract and emit
 `{ "hookSpecificOutput": { "additionalContext": "<rendered markdown>" } }`
-on stdout. Once an embedding index exists AND an embedding provider
-resolves, the score-blend resolver queries it on every prompt sent
-through the hook (not only when the deterministic gates stay silent):
-this is an ongoing per-prompt cost (OpenAI API calls) or local load
-(Ollama), and the prompt text itself leaves the machine to whichever
-endpoint is configured. Delete the index (`rm -rf <dir>/.memory-router`)
-to fall back to the topic-only sync path.
+on stdout. See [docs/scoring.md](docs/scoring.md#embedding-provider) for
+the ongoing per-prompt cost once an embedding index/provider are
+configured, and how to fall back to the topic-only path.
 
 ### As an MCP server (imperative queries)
 
@@ -245,7 +214,9 @@ All three are stateless and read-only; write tools (`memory_create`,
 `memory_update`) stay out of scope until the `tag` CLI is proven enough
 to move under an agent. Trust model matches the hook:
 `MEMORY_ROUTER_DIR` is treated as author-trusted (see
-[Trust Model](#trust-model)).
+[Trust Model](#trust-model)). The MCP server surfaces memory bodies
+verbatim; any risk from a compromised memory file is identical to what
+the hook would inject.
 
 ### CLI verbs
 
@@ -323,5 +294,4 @@ coverage-gated test suite on every pull request and push to `master`.
 ## License
 
 MIT. See [LICENSE](LICENSE) for details. v1, scaffold: some verbs
-(`consolidate`, `migrate`) are recent (mm-v1-T006/T007) and still under
-active iteration.
+(`consolidate`, `migrate`) are recent and still under active iteration.

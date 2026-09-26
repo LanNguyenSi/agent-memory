@@ -6,6 +6,40 @@ options. See the README's [How it works](../README.md#how-it-works) for
 the resolver's core mechanics and [Calibration](../README.md#calibration-mm-v1-t008)
 for the headline defaults this document backs.
 
+## Signals in the blend
+
+| Signal | What it is | Role in the blend |
+|------|--------|---------------|
+| **Semantic score** | sqlite-vec cosine similarity between the prompt and each memory's embedding | The dominant signal, when an embedding index + provider are available. A score below the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, model/provider-conditional default, see [Calibration](../README.md#calibration-mm-v1-t008)) is dropped before it can enter the blend at all |
+| **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory, not a standalone full-score hit |
+| **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
+| **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker |
+
+A memory with neither a semantic score (once the relevance floor is
+applied) nor a topic match contributes nothing and is excluded. Blend
+weights are overridable via the `MEMORY_ROUTER_BLEND_*` env namespace
+(`MEMORY_ROUTER_BLEND_TOPIC_BOOST`, `MEMORY_ROUTER_BLEND_RECENCY_WEIGHT`,
+`MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS`,
+`MEMORY_ROUTER_BLEND_TYPE_WEIGHT`, `MEMORY_ROUTER_BLEND_MIN_SEMANTIC`,
+`MEMORY_ROUTER_BLEND_CANDIDATE_K`). A negative override for any of these
+is invalid and falls back to the built-in default rather than being
+accepted.
+
+## Degradation and the Tool Gate
+
+Without an embedding index or a resolvable embedding provider, on a
+semantic-search failure, or when every semantic-search hit for a prompt
+falls below the relevance floor, the blend degrades to exactly the same
+output the old topic-only resolver (`resolve()`) would produce: the same
+memories, in the same order, at the same flat `1.0` score.
+
+Separately, the **Tool Gate** (`PreToolUse` hook, against memory
+`triggers.command_pattern` and `triggers.tools`) stays a deterministic,
+unblended full-score (1.0) match; before `Bash(git push --force)`, `Bash(docker
+compose up)`, etc. It is not part of the semantic blend (there is no
+prompt to embed at that point in the tool-call lifecycle), but
+`memory_resolve` still consults it when a `tool` argument is passed.
+
 ## Why a blend, not gates
 
 Earlier versions ran the sync gates (topic, tool) first and only fell
@@ -18,7 +52,7 @@ the semantic path essentially never ran. The blend replaces that
 shadowing: the semantic score always contributes when it can, and the
 deterministic Topic Gate becomes a boost rather than an override.
 
-## Calibration measurements (mm-v1-T008)
+## Calibration measurements
 
 The default `topicBoost` (0.05) and `candidateK` (5) come from a
 2026-08-14 calibration run on the reference corpus (289 memories,
@@ -141,6 +175,14 @@ floor on an Ollama `bge-m3` corpus; add it explicitly to try a different
 floor.
 
 ## Embedding provider
+
+Once an embedding index exists and a provider resolves, the score-blend
+resolver queries it on every prompt sent through the `UserPromptSubmit`
+hook (not only when the deterministic gates stay silent): this is an
+ongoing per-prompt cost (OpenAI API calls) or local load (Ollama), and
+the prompt text itself leaves the machine to whichever endpoint is
+configured. Delete the index (`rm -rf <dir>/.memory-router`) to fall back
+to the topic-only sync path.
 
 The embedder is configurable, so the semantic path works on a machine
 with no OpenAI key:

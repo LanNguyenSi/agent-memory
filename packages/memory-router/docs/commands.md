@@ -1,8 +1,8 @@
 # CLI command reference
 
-`memory-router --help` documents every verb's flags and behavior in full;
-this document adds what `--help` does not: JSON schemas, the
-programmatic API, and a few operational recipes. See the
+`memory-router --help` documents each verb's flags. This document adds
+what `--help` does not: JSON schemas, the programmatic API, edge-case
+behavior, and a few operational recipes. See the
 [README](../README.md#usage) for the one-line summary of each verb.
 
 ## `memory-router tag`: migrating existing memories
@@ -26,10 +26,31 @@ candidates are printed to stderr as a hint block for manual review.
 
 ## `memory-router stale`: limitations
 
+Symbol checks are degraded ("skipped" with a stderr warning) only when
+EVERY repo root passed via `--repo-root`/`--repo-roots` is a non-git
+path; a single git root among several keeps symbol resolution honest.
+
+The `--scan-body` flag additionally extracts refs from a memory's body
+via a backtick + path-shape regex and a function-call regex (`myFn()`,
+`Class.method()`). When a `verify:` block is present on a memory,
+body-regex extraction is skipped for that memory even with `--scan-body`
+on; the explicit contract always wins.
+
+A malformed `verify:` entry (missing `value`, non-identifier symbol
+shape, etc.) is reported as `malformed` so you fix the YAML rather than
+chase a phantom missing file.
+
+A date-staleness pass runs unconditionally as INFO: a memory whose
+newest ISO 8601 date in the body is older than 90 days and whose
+frontmatter has no newer `updatedAt:` is flagged `possibly-stale`; stamp
+`updatedAt: 2026-04-23` when the underlying claim is still current.
+
 - Symbol checks require a git repo root; a non-git directory degrades to
   "skipped" rather than reporting STALE.
 - `git grep` is not AST-aware: a symbol that survives only in a comment or
   a generated file counts as found.
+- `--check-urls` HEAD-requests every external URL extracted from a
+  memory's body, with a 5-second timeout per request.
 
 ## Building the embedding index
 
@@ -116,7 +137,22 @@ when cosine similarity >= 0.85, reusing the embedding cache
 `memory-router index` already maintains; pairs not yet in the index are
 embedded on the fly without persisting. When `OPENAI_API_KEY` is unset the
 semantic step prints a stderr warning and falls back to the regex-only
-signal.
+signal (fail-open: no provider configured).
+
+If an embed call for a missing pair actually errors (timeout, HTTP
+failure, malformed response) the failure is enriched with the same
+provider/model/base-URL context as `memory-router index`, for example
+against a local Ollama daemon:
+
+```
+embedding call failed (provider=ollama baseUrl=http://localhost:11434 model=bge-m3): The operation was aborted due to timeout
+If this is a local Ollama daemon: run `ollama serve` (or start the app) and `ollama pull bge-m3` if the model isn't downloaded yet.
+```
+
+and propagates, exiting `lint` non-zero. This is deliberately
+fail-closed, unlike the fail-open "no provider configured" case above,
+because it signals a real failure in a provider the operator did
+configure rather than one intentionally left unset.
 
 The polarity vocabulary covers ALL-CAPS and lowercase forms of `always`,
 `never`, `must`, `must not`, `do`, `do not`, `don't`, `prefer`, `require`,
@@ -129,6 +165,17 @@ with `--drift --json`, the drift JSON owns stdout and the conflicts JSON
 is routed to stderr.
 
 ## `memory-router migrate` JSON schema
+
+Frontmatter is re-serialized with `yaml`'s Document API, serialized with
+`lineWidth: 0` so an existing scalar longer than 80 columns is never
+silently re-wrapped. Bodies are never touched (byte-identical
+before/after). A file with nothing to change is never rewritten at all,
+which is what makes a second `migrate --apply` run a true no-op.
+
+Each mapping-file entry (`--mapping <file>`) sets exactly one of `id`
+(exact memory id) or `prefix` (filename-prefix match), plus `topics` (a
+non-empty list of strings, used verbatim, not validated against the
+loaded vocabulary).
 
 ```jsonc
 {
@@ -204,6 +251,33 @@ is `metadata.type`; `created`'s only source is `mtime (approx)`.
 ```
 
 ## `memory-router eval` metric definitions and JSON schema
+
+Your corpus's own `golden.yml` lives in the memory dir itself (synced
+alongside the `.md` files by
+[agent-memory-sync](../../agent-memory-sync)), not in this repo; curate
+it from real prompts you've actually asked, labelled with the memory ids
+you'd want to fire.
+
+`"semantic path: configured"` means only that an index exists and a
+provider resolved, not that the provider is actually reachable: this is
+a config check, not a live reachability probe, so a configured-but-
+unreachable provider still reports as configured until the first real
+embed call fails. When the semantic path is configured, every prompt in
+the golden set is sent to that provider, which costs money (OpenAI) or
+local compute (Ollama) once per prompt, and the prompt text leaves the
+machine to whichever endpoint is configured; size your golden set with
+that in mind.
+
+Golden ids that don't resolve against the corpus (a stale or mistyped
+memory id) are reported, not silenced: the text report prints a
+`WARNING:` line listing them, and `--json` carries the same list as the
+top-level `unknownExpectIds` array (empty when every id resolves).
+
+`eval` always scores against `--dir`'s (or `$MEMORY_ROUTER_DIR`'s) own
+`topics.yml`, never a stray `MEMORY_ROUTER_DIR` left over in the
+environment, so a run pointed at the wrong corpus, or hitting a broken
+`topics.yml`, shows up here instead of silently scoring against the
+wrong vocabulary.
 
 Per prompt:
 
