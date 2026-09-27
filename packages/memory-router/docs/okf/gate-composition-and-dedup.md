@@ -12,7 +12,9 @@ sources:
   - packages/memory-router/src/hooks/user-prompt-submit.ts
   - packages/memory-router/src/mcp/server.ts
   - packages/memory-router/src/cli.ts
+  - packages/memory-router/src/eval/runner.ts
   - packages/memory-router/README.md
+  - packages/memory-router/docs/scoring.md
 ---
 
 # Three resolvers, two dedup rules
@@ -34,21 +36,32 @@ allocate result slots differently.
 | `memory-router test --semantic` | `resolve(...)` then `resolveConfidence(...)`, merged via `dedupeAndRank` (`packages/memory-router/src/cli.ts:753-766`) | Topic + Tool (sync) plus Confidence (async), as two separate calls |
 | `UserPromptSubmit` hook, MCP `memory_resolve`, `memory-router eval` | `resolveBlended(ctx, memories, memoryDir, opts)` | Semantic score (dominant) + Topic Gate (boost) + recency/type modifiers, plus Tool Gate only when `ctx.tool` is set |
 
-Two things worth stating explicitly because neither README.md nor
-docs/scoring.md names it:
+Two things worth stating explicitly:
 
 - `DEFAULT_GATES` (`packages/memory-router/src/router.ts:16`) is **not**
   what the `PreToolUse` hook runs. It passes its own `{ gates: [toolGate]
   }`, dropping the Topic Gate entirely, since a pending tool call has no
   prompt text for the Topic Gate's keyword match to run against.
-  `DEFAULT_GATES` is only reached when a caller passes no `gates` option at
-  all, which today is only the `test` CLI verb's non-`--semantic` path.
-- `resolveConfidence` (`packages/memory-router/src/router.ts:58-79`) is a
-  fourth, narrower resolver in the same module: the Confidence Gate run in
-  isolation, with its own `maxHits` default (`3`, vs. `resolve`'s and
-  `resolveBlended`'s `5`). Its only production caller is the `test
-  --semantic` path in `cli.ts`; `resolveBlended` does not call it and has
-  its own independent semantic-search integration.
+  `DEFAULT_GATES` is reached by every call that passes no `gates` option:
+  that is the `test` CLI verb's `resolve(ctx, memories, { maxHits })` call
+  (`packages/memory-router/src/cli.ts:753`), run unconditionally whether or
+  not `--semantic` is also passed, and `resolveBlended`'s own degraded
+  fallback (`packages/memory-router/src/router.ts:248`, `return
+  resolve(ctx, memories, { maxHits })`). That fallback is not a rare
+  corner case: it is what shapes the `UserPromptSubmit` hook's injected
+  context, MCP `memory_resolve`'s result, and `memory-router eval`'s
+  scored output on every degraded run (no usable embedding index/provider,
+  a semantic-search failure, or an all-below-floor result; see
+  [score-blend-resolver.md](score-blend-resolver.md) in this bundle), and
+  `tests/blend.test.ts:473` pins that degraded output equal to `resolve()`'s
+  own. `PreToolUse`'s explicit `{ gates: [toolGate] }` override is the only
+  path that never reaches `DEFAULT_GATES`.
+- `resolveConfidence` (`packages/memory-router/src/router.ts:58-79`) is the
+  narrowest of the three resolvers this module exports: the Confidence
+  Gate run in isolation, with its own `maxHits` default (`3`, vs.
+  `resolve`'s and `resolveBlended`'s `5`). Its only production caller is
+  the `test --semantic` path in `cli.ts`; `resolveBlended` does not call it
+  and has its own independent semantic-search integration.
 
 ## Two dedup functions, one shared tie-break, different slot allocation
 
@@ -74,9 +87,13 @@ both paths is unaffected by this difference (whichever hit has the higher
 score still wins the `gate`/`score`/`reason` fields, in both functions);
 only which memories make the final cut differs.
 
-This split exists because only `resolveBlended`'s callers (`UserPromptSubmit`,
-`memory_resolve`) can ever pass a `ctx.tool` alongside a `ctx.prompt` at
-the same time, so only that path needs a rule for "a real prompt scored a
-lot of memories highly, but a pending destructive command also matched a
-memory": the Tool Gate hit must survive the cap regardless of the blend
-score distribution that prompt happened to produce.
+This split exists because among `resolveBlended`'s three production
+callers, only MCP `memory_resolve` (`packages/memory-router/src/mcp/server.ts`)
+can ever pass a `ctx.tool` alongside a `ctx.prompt` at the same time; the
+`UserPromptSubmit` hook and `memory-router eval` each construct `ctx` with
+no `tool` field (`packages/memory-router/src/hooks/user-prompt-submit.ts`,
+`packages/memory-router/src/eval/runner.ts`). So only that one call site
+needs a rule for "a real prompt scored a lot of memories highly, but a
+pending destructive command also matched a memory": the Tool Gate hit must
+survive the cap regardless of the blend score distribution that prompt
+happened to produce.

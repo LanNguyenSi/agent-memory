@@ -1,92 +1,129 @@
 ---
 type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
-description: The exact conditions under which semanticSearch() returns an empty array instead of throwing, which of those are visible on stderr, and the contrasting case (embedding-index provenance mismatch) where the same file throws instead of staying quiet.
+description: The five distinct conditions under which semanticSearch() returns an empty array instead of throwing, which of those are visible on stderr, and the contrasting embedding-index provenance guard that throws instead, including which of its four call sites actually let that throw reach an operator versus swallow it into the same silent degradation.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
 timestamp: 2026-09-27T14:18:37Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
+  - packages/memory-router/src/embed/provider.ts
   - packages/memory-router/src/router.ts
+  - packages/memory-router/src/cli.ts
+  - packages/memory-router/src/mcp/server.ts
+  - packages/memory-router/docs/scoring.md
   - packages/memory-router/README.md
 ---
 
 # Semantic search's silent-no-op contract, and its loud counterpart
 
-`semanticSearch()` in `packages/memory-router/src/embed/indexer.ts` is the
-one entry point every caller (the score-blend resolver, the MCP
-`memory_search` tool, `memory-router eval`) goes through for a raw semantic
-hit list. It is designed to never throw for "this corpus isn't set up for
-semantic search yet": every one of those states returns `[]` instead. But
-"returns `[]`" covers two structurally different situations, and a
-separate part of the same subsystem (the embedding index's own provenance
-guard) deliberately does the opposite and throws. Confusing the two when
-debugging "why did nothing come back" is the trap this doc closes.
+`semanticSearch()` in `packages/memory-router/src/embed/indexer.ts` is
+reached by three different paths, not one shared chokepoint:
+`resolveBlended()` (`packages/memory-router/src/router.ts`, called by the
+`UserPromptSubmit` hook, MCP `memory_resolve`, and `memory-router eval`)
+and `resolveConfidence()` (`packages/memory-router/src/router.ts:58-79`,
+called by `memory-router test --semantic`) both call it internally, and
+MCP's `memory_search` tool (`packages/memory-router/src/mcp/server.ts:84-89`)
+calls it directly with no wrapper resolver at all. It is designed to never
+throw for "this corpus isn't set up for semantic search yet": five
+distinct states all return `[]` instead. But a separate part of the same
+subsystem, the embedding index's own provenance guard inside
+`openIndex()`, deliberately does the opposite and throws, and that throw
+propagates straight out of `semanticSearch()` since nothing inside it
+catches an `openIndex()` error. Confusing "no results" with "a real error
+some caller swallowed" is the trap this doc closes.
 
-## The two silent-`[]` paths
+## Every silent-`[]` path
 
-| Condition | Where checked | Return | stderr? |
+| # | Condition | Where checked | stderr? |
 |---|---|---|---|
-| No embedding provider resolvable (e.g. `MEMORY_ROUTER_EMBED_PROVIDER=openai` with no `OPENAI_API_KEY`) | `resolveProviderConfig` returns null, `packages/memory-router/src/embed/indexer.ts:208-209` | empty array | none, ever |
-| Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:211-220` | empty array | one line, once per process (`missingIndexWarned`) |
+| 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:208-209` | none, ever |
+| 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:211-220` | one line, once per process (`missingIndexWarned`) |
+| 3 | Index exists but nothing has ever been embedded into it | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:784` | none |
+| 4 | Every one of the `k` nearest-neighbor rows the KNN query returned carries a different embedding model tag (or a pre-v2 `NULL` tag) than the caller's model | Model filter runs after the KNN `LIMIT k`, `packages/memory-router/src/embed/index-store.ts:790-802` | one aggregate line, every call, whenever `countEntriesWithStaleModel(...) > 0` (`packages/memory-router/src/embed/indexer.ts:233-238`) |
+| 5 | A returned hit's `id` is not present in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:265-275` | none |
 
-The first case is completely silent by design: an operator who never
-configured an embedding provider at all should not see a warning on every
-prompt. The second case is silent in its *return value* but not entirely
-invisible: the very first time a caller in this process asks for semantic
-search against a missing index, `packages/memory-router/src/embed/indexer.ts:211-220`
-writes one `memory-router: embedding index missing, run \`memory-router
-index <dir>\` to build it.` line to stderr and flips module-level
-`missingIndexWarned` so every later call in the same process stays fully
-quiet. This is the same "once per process, not once per call" shape
-[docs/scoring.md](../scoring.md#embedding-provider) documents for the
-provider/model reference elsewhere in this package; here it protects a
-long-lived caller (the MCP server) from repeating the hint on every single
-tool call in a session.
+Row 4's stderr line reports a corpus-wide stale-row count, never which
+specific query lost results to it, and it is not gated by a once-per-process
+flag the way row 2's is: it repeats on every call while the condition
+holds. It is also a crowding-out case, not only a rare "everything is
+stale" total: because the model filter runs on the `k` rows the KNN
+`LIMIT` already picked, a stale-model row that ranks inside the top `k` by
+raw cosine distance takes a slot away from a current-model row that would
+otherwise have ranked just outside that window, so a query can return
+fewer results than `k`, down to zero, even when current-model matches
+exist further down the full, unfiltered ranking. Rows 1, 3, and 5 have no
+stderr signal at all: a caller staring at an empty result for one prompt
+cannot distinguish any of rows 1, 3, 4, or 5 from each other, or from row
+2 after its first warning, without instrumenting the index directly.
 
-## The third case: results, not the call, go silently empty
+Row 1 is easy to misread as "operator never configured embeddings at
+all." It is not: `resolveProviderConfig({ autoDetectOllama: true })`
+(`packages/memory-router/src/embed/indexer.ts:208`,
+`packages/memory-router/src/embed/provider.ts:199-223`) auto-detects a
+local Ollama endpoint whenever no provider is set explicitly and no
+`OPENAI_API_KEY` is present (`packages/memory-router/src/embed/provider.ts:218-221`),
+so a genuinely unconfigured machine reaches row 2 (missing index) on its
+first request instead. The `null` return from `resolveProviderConfig` is
+reached only by the explicit-and-broken path: `MEMORY_ROUTER_EMBED_PROVIDER=openai`
+set with no `OPENAI_API_KEY` (`packages/memory-router/src/embed/provider.ts:206-211`),
+a deliberate fail-open for a misconfiguration the operator already opted
+into, not a default state for an unconfigured one.
 
-Once an index exists and a query embedding is produced, `search()` in
-`packages/memory-router/src/embed/index-store.ts:779-807` filters out any
-row whose stored `model` does not match the caller's `expectedModel`
-(`packages/memory-router/src/embed/index-store.ts:799-802`), a row left
-over from a previous embedding model, or a pre-schema-v2 row with a `NULL`
-model tag. That filter is unconditional and silent at the row level: a
-memory that *is* indexed can still fail to surface for a query if its
-stored embedding belongs to a different model, with no per-row signal.
-The only visibility into this is aggregate and separate:
-`packages/memory-router/src/embed/indexer.ts:233-238` counts stale-model
-rows via `countEntriesWithStaleModel` and writes one stderr line whenever
-the count is greater than zero, on every call (not gated by a once-per-process
-flag the way the missing-index case is); the corpus-level signal
-("N entries need a rebuild") is separate from, and does not name, which
-individual query results were filtered.
+## The loud counterpart: provenance mismatches throw, but not every caller lets them through
 
-## The loud counterpart: provenance mismatches throw
+`openIndex()` (`packages/memory-router/src/embed/index-store.ts`) throws,
+rather than returning anything, from four places once a store is actually
+opened or queried:
 
-Contrast the three cases above with what happens when `openIndex()`
-(`packages/memory-router/src/embed/index-store.ts`) detects that an
-*existing* index was built under a different provider than the one now
-configured: it throws immediately, synchronously, at open time
-(`packages/memory-router/src/embed/index-store.ts:415-426`), carrying an
-exact rebuild command
-(`` `rm -rf '<dir>/.memory-router' && memory-router index '<dir>'` ``,
-built by `rebuildCommandFor` in
-`packages/memory-router/src/embed/indexer.ts:39-45`). A legacy index with
-no recorded provenance at all, but whose rows already carry a different
-model tag than the active configuration, throws the same way rather than
-silently re-stamping itself with the active config
-(`packages/memory-router/src/embed/index-store.ts:428-457`). Both throws
-propagate out of `openIndex()`, so `semanticSearch()` and `rebuildIndex()`
-do **not** catch them into a `[]`/report return the way the three no-op
-cases above are handled; they surface as a real, unhandled error to
-whichever caller invoked them. Design intent, stated at
-`packages/memory-router/src/embed/index-store.ts:44-79`: a provider
-mismatch means the two embedding spaces are never comparable, so a silent
-`[]` here would look identical to "nothing indexed yet" while actually
-meaning "your index and your configuration disagree", a state worth
-failing loudly for, unlike the three genuinely-unconfigured states this
-doc opens with.
+- Provider mismatch: an existing index recorded a different
+  `embed_provider` than the caller's active config
+  (`packages/memory-router/src/embed/index-store.ts:415-426`).
+- Legacy-index provenance: a pre-provenance index (no recorded provider)
+  whose rows already carry a different model tag than the active config
+  (`packages/memory-router/src/embed/index-store.ts:428-457`).
+- Query-dimension mismatch: a query embedding whose length disagrees with
+  the index's recorded/physical dimension, inside `search()`
+  (`packages/memory-router/src/embed/index-store.ts:785-789`).
+- Embed-call failure: `embedBatch()` rejects (network/HTTP/timeout),
+  rethrown with provider/model context by `describeEmbedError`
+  (`packages/memory-router/src/embed/indexer.ts:259-261`).
+
+None of these four is caught inside `semanticSearch()` itself; all four
+propagate straight out of it. What happens next depends entirely on which
+caller invoked it, and only two of the four production paths actually let
+that reach an operator as a loud failure:
+
+- `resolveBlended()` (`packages/memory-router/src/router.ts:181-187`)
+  catches every throw `semanticSearch` produces, without inspecting what
+  kind of error it is, writes one generic stderr line, and degrades to the
+  topic/tool-only `resolve()` path: the same silent-to-the-prompt outcome
+  as the five no-op rows above. A provenance mismatch or a corrupted
+  query-dimension error is, at the hook/MCP-`memory_resolve`/eval level,
+  indistinguishable from "no index configured."
+- `memory-router test --semantic` (`packages/memory-router/src/cli.ts:762-766`)
+  does the same for `resolveConfidence`'s call: any throw is caught,
+  printed as a `warning:` line, and the command falls back to sync-only
+  hits rather than failing.
+- MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:84-89`)
+  installs no catch of its own: any of the four throws above propagates
+  out of the tool handler as a real MCP tool error.
+- `memory-router index` (the rebuild path,
+  `packages/memory-router/src/cli.ts:570-571` calling `rebuildIndex`)
+  opens the index directly, not through `semanticSearch`, and also
+  installs no catch: a provider or legacy-provenance mismatch fails the
+  whole command loudly, with the exact rebuild command in the error text.
+
+So "provenance mismatches throw" is true of `openIndex()` itself, but only
+`memory_search` and `index` actually surface that as a loud failure; the
+two paths built on `resolveBlended`/`resolveConfidence` degrade it into
+the same quiet outcome as an unconfigured corpus. `packages/memory-router/src/embed/index-store.ts:44-79`
+states the reason for throwing at all: different providers are never
+comparable. This doc's own reading of that design intent is that a silent
+`[]` for a real provenance disagreement would look identical to "nothing
+indexed yet" while actually meaning the index and the active
+configuration disagree, a state worth failing loudly for at the two call
+sites that do let it through.
 
 Native-dependency note: `packages/memory-router/src/embed/index-store.ts`
 loads `better-sqlite3` and `sqlite-vec` unconditionally at module load

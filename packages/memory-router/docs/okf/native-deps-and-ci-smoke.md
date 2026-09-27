@@ -7,6 +7,7 @@ timestamp: 2026-09-27T14:18:37Z
 sources:
   - .github/workflows/ci.yml
   - packages/memory-router/src/embed/index-store.ts
+  - packages/memory-router/tests/index-store.test.ts
   - packages/memory-router/README.md
 ---
 
