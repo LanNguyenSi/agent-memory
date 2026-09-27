@@ -30,7 +30,7 @@
     __PROFILE_NAME__     the profile positional argument, e.g. macbook
                           (must match the "profile" field inside the config
                           file below — see the Activation note in
-                          profiles/macbook.json / profiles/mac-mini.json for
+                          profiles/macbook.example.json / profiles/mac-mini.example.json for
                           why both are required)
     __CONFIG_PATH__      absolute path to the machine's profile json, e.g.
                           /Users/<user>/git/<project-dir>/agent-memory/packages/agent-memory-sync/profiles/macbook.json

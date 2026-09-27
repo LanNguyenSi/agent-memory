@@ -104,7 +104,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
         throw new CliError(`invalid commit sha '${sha}'.`, 2);
       }
 
-      const loaded = await loadConfig(options.config);
+      const loaded = await loadConfig(options.config, { requireExisting: true });
       const resolved = resolveRunConfig(loaded, {
         // The profile decides which state directory (and so which lock,
         // which base snapshots and which pre-apply snapshots) this restore

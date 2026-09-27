@@ -49,12 +49,12 @@ test("classifyRemote: scp-like 'host:path' is classified as ssh with the bare ho
 });
 
 test("classifyRemote: scp-like 'user@host:path' strips the user prefix", () => {
-  const result = classifyRemote("lan@mini:~/memory-sync/pandora-memory.git");
+  const result = classifyRemote("user@mini:~/memory-sync/pandora-memory.git");
   assert.deepEqual(result, { kind: "ssh", host: "mini" });
 });
 
 test("classifyRemote: ssh:// URL is classified as ssh with the URL hostname", () => {
-  const result = classifyRemote("ssh://lan@mini.local:2222/~/memory-sync/pandora-memory.git");
+  const result = classifyRemote("ssh://user@mini.local:2222/~/memory-sync/pandora-memory.git");
   assert.deepEqual(result, { kind: "ssh", host: "mini.local" });
 });
 

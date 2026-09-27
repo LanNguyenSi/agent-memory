@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
-const { createSandbox, runCli } = require("../helpers/cli.ts");
+const { createSandbox, fileExists, runCli } = require("../helpers/cli.ts");
 
 test("config set, get, show, and reset manage the persisted config file", () => {
   const root = createSandbox("config");
@@ -67,4 +67,89 @@ test("config get on an unsupported key exits 3, distinct from an unset supported
 
   assert.equal(result.status, 3);
   assert.match(result.stderr, /config key 'notARealKey' is not supported/);
+});
+
+// Every command that actually syncs (run, watch, restore) now refuses an
+// explicitly named config path that does not exist, instead of loadConfig's
+// usual silent {} fallback (which would run on bare defaults as if nothing
+// were wrong — no remote, no real syncPaths). "config show"/"config get"
+// keep the permissive fallback (loadConfig without requireExisting, see
+// src/config/loader.ts), since inspecting a not-yet-configured machine is a
+// legitimate use, unlike actually syncing against one.
+test("run with a missing explicit --config path exits 3 naming the path, instead of silently syncing on defaults", () => {
+  const root = createSandbox("config-missing-explicit-run");
+  const missingConfigPath = path.join(root, "does-not-exist.json");
+
+  const result = runCli(["run", "default", "--config", missingConfigPath, "--mode", "push"], {
+    expectFailure: true
+  });
+
+  assert.equal(result.status, 3);
+  assert.ok(
+    result.stderr.includes(missingConfigPath),
+    `expected the missing path in stderr, got: ${result.stderr}`
+  );
+  assert.match(result.stderr, /does not exist/);
+});
+
+test("watch with a missing explicit --config path exits 3 naming the path, before ever starting the watch loop", () => {
+  const root = createSandbox("config-missing-explicit-watch");
+  const missingConfigPath = path.join(root, "does-not-exist.json");
+
+  const result = runCli(["watch", "default", "--config", missingConfigPath], { expectFailure: true });
+
+  assert.equal(result.status, 3);
+  assert.ok(
+    result.stderr.includes(missingConfigPath),
+    `expected the missing path in stderr, got: ${result.stderr}`
+  );
+  assert.match(result.stderr, /does not exist/);
+});
+
+test("restore with a missing explicit --config path exits 3 naming the path", () => {
+  const root = createSandbox("config-missing-explicit-restore");
+  const missingConfigPath = path.join(root, "does-not-exist.json");
+
+  // A syntactically valid-looking commit sha, so restore's own sha-shape
+  // check (exit 2, checked before the config is even loaded) does not fire
+  // first and mask the config check this test is actually about.
+  const result = runCli(["restore", "abcd1234", "--config", missingConfigPath], { expectFailure: true });
+
+  assert.equal(result.status, 3);
+  assert.ok(
+    result.stderr.includes(missingConfigPath),
+    `expected the missing path in stderr, got: ${result.stderr}`
+  );
+  assert.match(result.stderr, /does not exist/);
+});
+
+test("run with AGENT_MEMORY_SYNC_CONFIG pointing at a missing file exits 3 naming the path too", () => {
+  const root = createSandbox("config-missing-env-run");
+  const missingConfigPath = path.join(root, "does-not-exist.json");
+
+  const result = runCli(["run", "default", "--mode", "push"], {
+    expectFailure: true,
+    env: { ...process.env, AGENT_MEMORY_SYNC_CONFIG: missingConfigPath }
+  });
+
+  assert.equal(result.status, 3);
+  assert.ok(
+    result.stderr.includes(missingConfigPath),
+    `expected the missing path in stderr, got: ${result.stderr}`
+  );
+});
+
+// The create-on-write path this change must NOT break: `config set` reads
+// via readPersistedConfig (which never sets requireExisting), so a brand
+// new, not-yet-existing --config path is still created rather than refused.
+test("config set on a --config path that does not exist yet still creates it", () => {
+  const root = createSandbox("config-set-creates-new-file");
+  const configPath = path.join(root, "brand-new-subdir", "config.json");
+
+  assert.equal(fileExists(configPath), false);
+
+  const result = runCli(["config", "set", "remoteUrl", "/tmp/remote.git", "--config", configPath]);
+
+  assert.equal(result.status, 0);
+  assert.equal(fileExists(configPath), true);
 });

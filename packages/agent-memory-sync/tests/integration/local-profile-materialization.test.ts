@@ -12,6 +12,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const {
+  cloneRemote,
   createSandbox,
   fileExists,
   initBareRemote,
@@ -133,8 +134,30 @@ test("a real, filled-in mac-mini profile actually syncs from that local, non-rep
   ]);
   const payload = JSON.parse(push.stdout).runs[0];
   assert.equal(payload.status, "applied");
-  assert.ok(
-    payload.appliedFiles.some((f: string) => f.endsWith("MEMORY.md")),
-    `expected MEMORY.md among pushed files, got: ${JSON.stringify(payload.appliedFiles)}`
+  // Exact, not a loose endsWith('MEMORY.md') match: the mac-mini template's
+  // "memory" destination (source '.') is what actually resolves this file
+  // to remote path memory/MEMORY.md. The DEFAULT config's syncPaths (used
+  // when --config is silently ignored, see DEFAULT_SYNC_PATHS in
+  // src/config/loader.ts) also matches a root MEMORY.md file, but under the
+  // bare destination "MEMORY.md" instead — a loose endsWith check cannot
+  // tell the two apart, so a `run` that dropped --config on the floor would
+  // still pass it. Asserting the exact array pins the profile-dependent
+  // destination and would fail on that regression.
+  assert.deepEqual(
+    payload.appliedFiles,
+    ["memory/MEMORY.md"],
+    `expected exactly memory/MEMORY.md (the materialized profile's own destination) among pushed files, got: ${JSON.stringify(payload.appliedFiles)}`
+  );
+
+  // appliedFiles is destination-relative and never carries repositorySubdir
+  // (toRepositoryRelativePath applies that separately, once the file is
+  // actually written into the bare repo's working copy) — so the assertion
+  // above cannot catch a changed repositorySubdir on its own. Clone the
+  // remote and check the file landed at the template's own committed
+  // "pandora" subdir, not at some other value (e.g. a per-machine one).
+  const checkoutDir = cloneRemote(remoteDir, root, "verify-repository-subdir");
+  assert.equal(
+    readText(path.join(checkoutDir, "pandora", "memory", "MEMORY.md")),
+    "materialized-profile fixture memory\n"
   );
 });

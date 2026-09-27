@@ -158,9 +158,62 @@ The running `watch`/periodic-sync launchd or systemd unit needs no change at
 all: it already invokes the CLI with `--config /absolute/path/to/profiles/<name>.json`
 (or the equivalent `AGENT_MEMORY_SYNC_CONFIG` environment line), an absolute
 path that resolves exactly the same file before and after this migration
-step. If a machine's backup copy was lost, recreate the profile from its
-matching `*.example.json` template instead (same placeholders as a brand-new
-setup above); nothing else on that machine needs to change.
+step.
+
+**If a machine's backup copy was lost, recover it from git history, not
+from the `*.example.json` template.** A committed real profile can carry
+values that differ from a freshly-filled-in template's placeholders and
+defaults — a `profile` chosen for that machine specifically, a customized
+`stateDir`, a `reachabilityTimeoutMs` tuned away from the default, and so
+on (a WSL/Linux machine's committed profile, for instance, used `"profile":
+"linux"` and `"stateDir": "~/.agent-memory-sync/linux"` with
+`"reachabilityTimeoutMs": 10000`, while `linux.example.json` derives
+`profile`/`stateDir` from `<linux-hostname>` and defaults
+`reachabilityTimeoutMs` to `5000`). Re-filling from the template silently
+replaces every one of those with a generic value instead of this machine's
+actual, previously-working one. Recover the real values instead:
+
+```bash
+# Find the commit that removed profiles/<name>.json from the tracked tree
+# (the first result is that removal; its parent still has the file
+# tracked, from just before it was untracked):
+git log --diff-filter=D --oneline -- packages/agent-memory-sync/profiles/mac-mini.json
+
+# Check out that machine's config exactly as it was tracked, one commit
+# before the removal:
+git show <that-commit>^:packages/agent-memory-sync/profiles/mac-mini.json > profiles/mac-mini.json
+```
+
+adjusting the filename (`mac-mini.json`/`macbook.json`/`linux.json`, or any
+further machine's) per machine. This restores `profile`, `stateDir`,
+`reachabilityTimeoutMs` and everything else exactly as this machine was
+already running, rather than whatever a fresh template copy would default
+to; nothing else on that machine needs to change.
+
+**Behavior during the removal window itself.** A `watch` process already
+running when `git pull` removes the tracked profile keeps working fine
+through the whole window: it loaded its config once at startup and never
+re-reads the file from disk on a tick (see the Activation note above — the
+CLI's `[profile]` argument and the config file are both read exactly once,
+at process start). What is at risk is any OTHER invocation that starts
+fresh during that same window instead — a periodic `run --mode sync` tick
+firing on its schedule, or a `watch` restart (a crash, a reboot, or an
+operator reloading the launchd/systemd unit) — since that process loads its
+`--config`/`AGENT_MEMORY_SYNC_CONFIG` file from scratch and the profile is,
+for that moment, not there. It now fails clearly and immediately: exit `3`,
+naming the missing path (`config file '<path>' does not exist. ...`; every
+command that actually syncs — `run`, `watch`, `restore` — refuses a missing,
+explicitly-named config path this way, see the CHANGELOG). Before this
+fix, the same window instead loaded silently on bare defaults and only
+failed once it reached the remote-URL check, with a message that pointed at
+the wrong problem: `remote URL is not configured. Set 'remoteUrl' in the
+config file or pass --remote.` — same exit code (`3`), so existing
+exit-code-based alerting for a scheduled job still fires either way; only
+the message text is clearer now. Simplest of all: avoid the window
+entirely. **Stop the periodic sync job/timer and pause `watch`** (and any
+other automation that pulls this checkout) before running the `git pull`
+above, and only restart them once the backup copy is back at its real,
+filled-in path.
 
 ## a) Bootstrap the bare repo on the mini
 
@@ -173,12 +226,12 @@ ssh mini 'mkdir -p ~/memory-sync && git init --bare --initial-branch=main ~/memo
 
 This creates the empty bare repository every other machine's `remoteUrl`
 points at over ssh (`mini:~/memory-sync/pandora-memory.git` in
-macbook.json/linux.example.json — see the scp-like syntax note there). The
-mini's own profile (mac-mini.json) points `remoteUrl` at the same
+macbook.example.json/linux.example.json — see the scp-like syntax note there). The
+mini's own profile template (mac-mini.example.json) points `remoteUrl` at the same
 repository's plain local filesystem path instead
 (`/Users/<user>/memory-sync/pandora-memory.git`), since it runs on the
 mini itself and doesn't need to loop back through ssh to reach its own
-bare repo — see that profile's `"//"` field for the full reasoning. Nothing
+bare repo — see that template's `"//"` field for the full reasoning. Nothing
 else is required server-side — `agent-memory-sync` pushes plain commits
 over ordinary `git push`/`git fetch`/`git ls-remote`; there is no
 server-side hook or service to install.
@@ -225,20 +278,30 @@ What that override does and does not affect is more subtle than it looks —
 see the next paragraph before assuming it controls where state files land.
 
 **What the profile name actually controls — and what it does not.** The
-`"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) is, in
-general, only a fallback: `resolveRunConfig()` derives a default `stateDir`
-of `.agent-memory-sync/<profile>` (relative to `rootDir`) *when `stateDir`
-is not set explicitly*. Every profile under `profiles/` (template and real
-alike) sets `stateDir` explicitly (a machine-specific absolute path outside `rootDir`;
-see any profile's `"//"` field for why), so `"profile"` currently has **no
-effect on any file path at all** for these profiles — it only ends up
-recorded as a cosmetic label inside that machine's own `state.json`
-(`StateStore.loadState()`'s default `profile` field) and echoed in a run's
-JSON/text output. Passing it on the command line anyway (see the CLI
-snippets below) keeps invocations self-documenting and that label correct;
-it is not load-bearing for path resolution here. Either way it has **no
-effect on the remote** and is safe to differ, or even coincide, across
-machines. The field that must be identical everywhere for machines to
+`"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) is,
+for `stateDir` specifically, only a fallback: `resolveRunConfig()` derives a
+default `stateDir` of `.agent-memory-sync/<profile>` (relative to `rootDir`)
+*when `stateDir` is not set explicitly*. Every profile under `profiles/`
+(template and real alike) sets `stateDir` explicitly (a machine-specific
+absolute path outside `rootDir`; see any profile's `"//"` field for why), so
+`"profile"` has no effect on `stateDir`, or on any other file path, for
+these profiles. It is NOT merely a cosmetic label, though: `collectLocalSyncFiles`'
+push-side `ownerScoped` filter (`src/memory-sync/config.ts`) derives the
+owner filename for the `machine-state`/`frictions` entries from this same
+field — push only ever offers `<profile>.json` under an `ownerScoped`
+directory, so `"profile"` must equal this machine's own filename there
+(`mac-mini.json`, `macbook.json`, ...) or push silently — now: with a
+visible warning instead — finds no matching owner file and publishes no
+`machine-state`/`frictions` state for that run. Passing it on the command
+line (see the CLI snippets below, and note the CLI's `[profile]` positional
+argument overrides the config file's field, so a mismatched or omitted
+positional is the more common way to trigger this) keeps that filter
+correct as well as the run self-documenting; it is load-bearing for push
+here, just not for `stateDir`/path resolution. See any mac-mini/macbook
+profile's `"//"` field for the full paragraph this summarizes. Either way it
+has **no effect on the remote** and is safe to differ, or even coincide,
+across machines for that reason alone. The field that must be identical
+everywhere for machines to
 actually see each other's changes is `repositorySubdir` — see the shared
 remote tree bullet at the top of this document. Committing a profile with
 a machine-specific `repositorySubdir` (as an earlier version of these

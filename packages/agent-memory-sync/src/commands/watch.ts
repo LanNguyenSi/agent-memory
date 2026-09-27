@@ -76,7 +76,7 @@ function registerWatchCommand(program: import("commander").Command): void {
     .option("-q, --quiet", "Suppress non-error diagnostics", false)
     .option("--no-color", "Disable colored diagnostics")
     .action(async (profile: string, options: WatchOptions) => {
-      const loaded = await loadConfig(options.config);
+      const loaded = await loadConfig(options.config, { requireExisting: true });
       const runConfig = requireRemoteUrl(
         resolveRunConfig(loaded, {
           profile,

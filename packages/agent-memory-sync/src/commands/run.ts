@@ -105,7 +105,7 @@ function registerRunCommand(program: import("commander").Command): void {
         );
       }
 
-      const loaded = await loadConfig(options.config);
+      const loaded = await loadConfig(options.config, { requireExisting: true });
       const runConfig = requireRemoteUrl(
         resolveRunConfig(loaded, {
           profile,
