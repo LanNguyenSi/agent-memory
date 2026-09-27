@@ -76,7 +76,7 @@ function formatEvalReportJson(report: EvalReportLike): string {
 // Structural type kept local (not imported from runner.ts) so this module
 // stays a pure formatter with no dependency on the runner's async/router
 // wiring — easier to unit-test in isolation and to keep the "one function
-// that changes for T004" boundary in runner.ts clean.
+// that changed for the score-blend rewrite" boundary in runner.ts clean.
 interface EvalReportLike {
   goldenPath: string;
   dir: string;

@@ -11,9 +11,8 @@ const {
 const { openIndex } = require('./index-store');
 const { debug } = require('../debug');
 
-// Legacy constant, kept ONLY because src/lint/conflicts.ts (out of scope
-// for this file) imports it and passes it as a
-// `dimensions` hint to `openIndex()` for its own opportunistic embedding
+// Legacy constant, kept ONLY because src/lint/conflicts.ts imports it and
+// passes it as a `dimensions` hint to `openIndex()` for its own opportunistic embedding
 // reuse. Dimensions are no longer hardcoded anywhere in THIS file — see
 // "Dimensionality" below — index-store.ts derives the real dimension from
 // the index's own recorded/physical state and silently ignores a

@@ -172,7 +172,7 @@ test('broken topics.yml at $MEMORY_ROUTER_DIR: gate never throws, falls back to 
 });
 
 // --- Hermeticity: ctx.memoryDir must win over ambient $MEMORY_ROUTER_DIR
-// (MEDIUM fix 3, enabled by fix 1's dir-threading) -------------------------
+// (enabled by the dir-threading above) -------------------------------------
 
 test('hermetic: ctx.memoryDir wins over an ambient $MEMORY_ROUTER_DIR pointing at a foreign vocabulary', () => {
   const memories = loadMemoriesFromDir(fixturesDir);
@@ -192,7 +192,6 @@ test('hermetic: ctx.memoryDir wins over an ambient $MEMORY_ROUTER_DIR pointing a
 });
 
 // --- Loud degrade: unconditional stderr line on an invalid topics.yml
-// (LOW fix 10) --------------------------------------------------------------
 
 function captureStderr(fn: () => void): string {
   const original = process.stderr.write.bind(process.stderr);

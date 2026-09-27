@@ -218,7 +218,7 @@ test('entry that is not a mapping (e.g. a bare string) is rejected', () => {
   assert.throws(() => loadVocabularyOrThrow(dir), /not a mapping/);
 });
 
-// --- ReDoS safety screen (HIGH fix) --------------------------------------
+// --- ReDoS safety screen -----------------------------------------------
 
 test('unsafe pattern (nested-quantifier ReDoS shape) is rejected, degrades to keyword match on the topic name, does not throw or drop the topic', () => {
   const dir = makeTmpDir();
@@ -275,7 +275,7 @@ test('overlong pattern (> 200 chars) is rejected by the same ReDoS screen, degra
   );
 });
 
-// --- Name hygiene (MEDIUM fix): trimming + keyword-fallback boundary -----
+// --- Name hygiene: trimming + keyword-fallback boundary -----
 
 test('name is trimmed before it becomes the topic key: whitespace-padded "name:" behaves identically to the trimmed form', () => {
   const dir = makeTmpDir();

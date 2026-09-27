@@ -46,7 +46,7 @@ function confidenceThreshold(ambiguity: number): number {
 // CONDITIONAL (see resolveDefaultMinSemanticScore below), not a single
 // flat number: raw cosine ranges are provider- and model-specific (bge-m3
 // relevance sits ~0.75-0.85 where OpenAI embeddings score far lower), and
-// A flat 0.5 default left Ollama paths effectively unfiltered
+// a flat 0.5 default left Ollama paths effectively unfiltered
 // (measured 0/4 negative controls on the bge-m3 reference corpus with no
 // override). MEMORY_ROUTER_BLEND_MIN_SEMANTIC still overrides the resolved
 // default on every path when explicitly set (0.78 is bge-m3's measured
@@ -91,9 +91,8 @@ interface BlendWeights {
   /**
    * Where minSemanticScore's value came from (a review residual of PR #97;
    * 'provider' split out of the original 'fallback' bucket): 'env' when an
-   * explicit,
-   * valid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override was present, 'map' when
-   * it resolved through a specifically-calibrated OLLAMA_MODEL_FLOOR_DEFAULTS
+   * explicit, valid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override was present,
+   * 'map' when it resolved through a specifically-calibrated OLLAMA_MODEL_FLOOR_DEFAULTS
    * entry (today only bge-m3), 'provider' for OpenAI's PROVIDER_FLOOR_
    * DEFAULTS.openai (0.5 is OpenAI's own deliberate, documented default, not
    * an uncalibrated gap), 'fallback' otherwise — the un-calibrated

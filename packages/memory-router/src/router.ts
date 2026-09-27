@@ -134,7 +134,7 @@ interface ResolveBlendedDeps {
 // otherwise-silent memory, only shape the ranking of one some other signal
 // already selected.
 //
-// Degraded mode (post-hoc fix, see task notes): when the semantic path
+// Degraded mode (post-hoc fix): when the semantic path
 // contributes NOTHING for this prompt, whether because no index/provider is
 // available (semanticSearch no-ops, see src/embed/indexer.ts), because of a
 // caught semantic-search error below, or because every candidate scored
@@ -319,7 +319,7 @@ async function resolveBlended(
 // exceed 1.0 — plain dedupeAndRank (highest score wins the slot) would let
 // that happen on any prompt with more than maxHits strong blend candidates.
 // Attribution (which gate/score/reason wins for a memory present in BOTH
-// `blended` and `toolHits`) is unchanged from before this fix: whichever
+// `blended` and `toolHits`) is unchanged from plain dedupeAndRank: whichever
 // has the higher score, same as dedupeAndRank always did. Only SLOT
 // ALLOCATION changes: every deduped tool hit fills a slot first, remaining
 // slots go to the highest-ranked blend hits, then the combined list is

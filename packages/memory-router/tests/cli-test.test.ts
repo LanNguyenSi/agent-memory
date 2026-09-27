@@ -144,7 +144,7 @@ test('--max-hits=n form accepts a positive integer', () => {
   assert.equal(status, 0);
 });
 
-// --- HIGH fix 1: dir-threading, not the $MEMORY_ROUTER_DIR env global -----
+// --- dir-threading, not the $MEMORY_ROUTER_DIR env global -----
 
 test('test verb: custom topics.yml at --dir applies even without $MEMORY_ROUTER_DIR set (ctx.memoryDir threading, not the env global)', () => {
   // VOCAB_CORPUS's topics.yml declares `incident_response`, which is not
@@ -164,7 +164,7 @@ test('test verb: custom topics.yml at --dir applies even without $MEMORY_ROUTER_
   assert.match(stdout, /topic · /);
 });
 
-// --- MEDIUM fix 3: hermetic against ambient $MEMORY_ROUTER_DIR ------------
+// --- hermetic against ambient $MEMORY_ROUTER_DIR ------------
 
 test('hermetic: an ambient $MEMORY_ROUTER_DIR in the calling process does not leak into the spawned CLI and override --dir', () => {
   const original = process.env.MEMORY_ROUTER_DIR;

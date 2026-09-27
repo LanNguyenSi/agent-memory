@@ -14,7 +14,7 @@
 // version applied topicBoost/recency/type modifiers even in this degraded
 // case, which is exactly what broke the P/R/MRR degradation baseline this
 // eval verb exists to protect). The ids asserted below are the same before
-// and after that fix by construction; see tests/blend.test.ts for the
+// and after the score-blend rewrite by construction; see tests/blend.test.ts for the
 // byte-identical degraded-output pin proven directly against
 // resolveBlended.
 //
@@ -452,7 +452,7 @@ test("runGoldenEval: missing golden file throws (caller maps this to exit 1)", a
 // These call promptToHits with the `deps` test seam (its 4th, test-only
 // parameter — see src/eval/runner.ts) so they exercise the real
 // promptToHits control flow without touching the real router or the
-// embedding stack. resolveBlended collapsed the old two-call
+// embedding stack. The score-blend rewrite collapsed the old two-call
 // (resolve-then-maybe-resolveConfidence) shape into a single exchange
 // point, resolveBlended; these tests pin the NEW shape with the same
 // rigor the old ones pinned the old shape: exact argument list, fail-open
@@ -535,7 +535,7 @@ test("promptToHits: degrades to [] rather than propagating, when resolveBlended 
   );
 });
 
-// --- loadGoldenFile expect-dedupe (MEDIUM fix) ---------------------------
+// --- loadGoldenFile expect-dedupe ---------------------------------------
 
 test("loadGoldenFile: deduplicates a prompt's expect ids so reported expect === scored expect", () => {
   const fs = require("node:fs");
@@ -562,7 +562,7 @@ test("loadGoldenFile: deduplicates a prompt's expect ids so reported expect === 
   }
 });
 
-// --- findUnknownExpectIds (MEDIUM fix) -----------------------------------
+// --- findUnknownExpectIds -----------------------------------------------
 
 test("findUnknownExpectIds: flags golden expect ids absent from the corpus, deduped across prompts", () => {
   const memories: Memory[] = [fakeMemory("real_a"), fakeMemory("real_b")];

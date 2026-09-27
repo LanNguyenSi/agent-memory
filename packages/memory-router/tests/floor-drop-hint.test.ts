@@ -9,7 +9,7 @@
 // provider fallback (0.78, calibrated against bge-m3's own cosine band, not
 // theirs) and can silently lose its entire semantic path if that model's
 // real cosine scores cluster below it. This file pins the base cases plus
-// two later additions (findings 1 and 2 below): the hint fires exactly once
+// two later additions (the "provider" and empty-candidates cases below): the hint fires exactly once
 // for the fallback-provenance total-loss case, and never for a calibrated
 // map entry, an explicit override, OpenAI's own deliberate provider
 // default, a run where at least one candidate still passed the floor, or a

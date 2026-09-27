@@ -228,7 +228,7 @@ test('resolveBlended: recency breaks a tie between two memories with equal seman
   }
 });
 
-test("resolveBlended: type modifier nudges a tie (feedback outranks reference at equal semantic score, no topic, equal mtime) — exact score gap, insertion order reversed)", async () => {
+test("resolveBlended: type modifier nudges a tie (feedback outranks reference at equal semantic score, no topic, equal mtime) — exact score gap, insertion order reversed", async () => {
   // The original version of this test always passed `[feedbackMem,
   // referenceMem]` (feedback first) into resolveBlended. If typeModifier
   // were completely broken (e.g. always returned 0), the two scores would
@@ -579,7 +579,7 @@ test('resolveBlended: sub-floor semantic score plus a topic match degrades to EX
   );
 });
 
-test('resolveBlended: a candidate present only via a (floor-permitted) zero semantic score is labeled gate="confidence" with a non-empty reason, never a phantom "topic" gate hit with an empty reason)', async () => {
+test('resolveBlended: a candidate present only via a (floor-permitted) zero semantic score is labeled gate="confidence" with a non-empty reason, never a phantom "topic" gate hit with an empty reason', async () => {
   // Under the DEFAULT floor (0.5) an exact-zero semantic score can never
   // survive filtering, so this edge case is structurally unreachable in
   // production today. It becomes reachable the moment an operator sets
@@ -689,7 +689,7 @@ test('resolveBlended: with no MEMORY_ROUTER_BLEND_MIN_SEMANTIC override and an o
 
 // --- Tool Gate passthrough (ctx.tool, e.g. MCP's memory_resolve) ----------
 
-test('resolveBlended: ctx.tool still resolves via the deterministic Tool Gate in an ACTIVE blend (non-empty semantic score elsewhere), unaffected by the semantic blend)', async () => {
+test('resolveBlended: ctx.tool still resolves via the deterministic Tool Gate in an ACTIVE blend (non-empty semantic score elsewhere), unaffected by the semantic blend', async () => {
   // A previous version of this test stubbed semanticSearch with an EMPTY
   // scoresById, which means semanticHits.length === 0 for every memory
   // here (there is only toolMem in the corpus) — resolveBlended's
@@ -718,7 +718,7 @@ test('resolveBlended: ctx.tool still resolves via the deterministic Tool Gate in
   assert.equal(toolHit.score, 1.0);
 });
 
-test('resolveBlended: a Tool-Gate hit is privileged ahead of the maxHits cap and is never evicted by blend-scored memories exceeding 1.0)', async () => {
+test('resolveBlended: a Tool-Gate hit is privileged ahead of the maxHits cap and is never evicted by blend-scored memories exceeding 1.0', async () => {
   // Three blended-only candidates each score semantic(0.95) + topicBoost
   // (default 0.05) + type/recency modifiers > 1.0 — strictly above the
   // Tool Gate's flat 1.0. With maxHits=2 and plain highest-score-wins
@@ -904,7 +904,7 @@ test('resolveBlended: a non-positive MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS o
   }
 });
 
-test('resolveBlended: MEMORY_ROUTER_BLEND_CANDIDATE_K overrides the semantic candidate-pool width passed to semanticSearch)', async () => {
+test('resolveBlended: MEMORY_ROUTER_BLEND_CANDIDATE_K overrides the semantic candidate-pool width passed to semanticSearch', async () => {
   const mem = fakeMemory('mem');
   const ctx: RouterContext = { prompt: NO_TOPIC_PROMPT, memoryDir: NOVOCAB_DIR };
   const prev = process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K;

@@ -6,7 +6,7 @@
 //       vocabulary section).
 //   (b) the *only* vocabulary the offline `tag` CLI (src/tag/heuristics.ts)
 //       scores against — the tag CLI is unaware of a corpus's `topics.yml`
-//       override (out of scope for this file, see CHANGELOG), so a corpus
+//       override (see CHANGELOG), so a corpus
 //       running a custom vocabulary will see `tag` propose topics from this
 //       built-in set only.
 
