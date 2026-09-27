@@ -62,12 +62,11 @@ interface CollectLocalSyncFilesOptions {
   warnings?: string[];
 }
 
-// D-006 (task e104c9f2, review round 2, 05-review-findings.md): the exact
-// text pull's own D-002 warning (src/memory-sync/pull.ts's own-file-mismatch
-// loop) and this collector's own-file-mismatch warning below report for the
-// identical condition, so `--mode sync` (which concatenates pull's and
-// push's notes) reports it once, not twice under two slightly different
-// wordings.
+// The exact text that pull's own-file-mismatch warning
+// (src/memory-sync/pull.ts's own-file-mismatch loop) and this collector's
+// own-file-mismatch warning below both report for the identical condition,
+// so `--mode sync` (which concatenates pull's and push's notes) reports it
+// once, not twice under two slightly different wordings.
 function ownerMismatchNote(
   profile: string | undefined,
   ownerFileName: string,
@@ -394,9 +393,8 @@ function normalizeLocalRelativePath(rootDir: string, absolutePath: string): stri
 // name (POSIX allows it). Silently rewriting it to "/" would flatten
 // "logs/back\slash.md" into "shared/logs/back/slash.md", publishing the
 // file's content under a name the hub never held and that push, pull and
-// `restore --from-commit` can never map back to the original file (see
-// pandora .ai/runs/2026-09-11-memory-sync-wipe review R5, agent-tasks
-// 73ea60bf). Refuse instead of guessing.
+// `restore --from-commit` can never map back to the original file.
+// Refuse instead of guessing.
 function assertPortablePathSegment(value: string, sourceDescription: string, displayPath: string = value): string {
   if (process.platform === "win32") {
     return value.replace(/\\/g, "/");

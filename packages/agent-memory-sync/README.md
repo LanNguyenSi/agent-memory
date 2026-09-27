@@ -187,8 +187,9 @@ npm run lint
 npm run format
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, build, lint, and the
-coverage-gated test suite on every pull request and push to `master`.
+CI (the repository root's `.github/workflows/ci.yml`, one matrix job per
+package) runs typecheck, build, lint, and the coverage-gated test suite on
+every pull request and push to `master`.
 Tests invoke the compiled binary and assert on exit codes and
 stdout/stderr; run `npm run build` first. See
 [docs/ways-of-working.md](docs/ways-of-working.md) for full contribution
