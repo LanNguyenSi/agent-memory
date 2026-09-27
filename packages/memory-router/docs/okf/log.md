@@ -1,5 +1,12 @@
 # Bundle log
 
+- 2026-09-27T15:18:36Z, `semantic-search-silent-noop.md` notes that
+  `lint --conflicts --semantic` opens the index writable with the fixed
+  1536 width hint, which records that width on an index that has none yet,
+  so the never-embedded row holds only while no width is recorded;
+  `gate-composition-and-dedup.md` shows the `resolveBlended` call without
+  an options argument, as all three call sites make it. Re-stamped.
+
 - 2026-09-27T15:09:05Z: second fact-check pass on the concept docs
   and `index.md`, re-verified against the checked-out source at head.
   Replaced counted and exclusive claims about paths, throws, and callers
