@@ -102,7 +102,7 @@ const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 // section). readdirSync itself lists whatever is actually on disk,
 // including a real, filled-in profile a developer's own machine happens to
 // have sitting in this checkout (e.g. mac-mini.json copied from the
-// template) — it is the filesystem, not git, so it does not know or care
+// template): it is the filesystem, not git, so it does not know or care
 // what is tracked. The filter below is what keeps that real profile out of
 // this listing, so a local run over a machine with one already set up
 // matches CI (which never has one) instead of quietly picking up extra,

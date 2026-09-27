@@ -57,7 +57,7 @@
     "get this mismatch. It still never touches the remote path/tree",
     "(repositorySubdir alone determines that), so the raw value is still",
     "safe to differ across machines, as it does here: 'mac-mini' vs.",
-    "macbook.example.json's 'macbook' — each machine's own real filename.",
+    "macbook.example.json's 'macbook': each machine's own real filename.",
     "",
     "syncPaths' FIRST entry is a directory entry covering the ENTIRE rootDir",
     "(source '.'), so every file agent-memory-sync finds there is synced —",

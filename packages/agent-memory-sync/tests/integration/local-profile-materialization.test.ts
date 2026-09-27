@@ -139,7 +139,7 @@ test("a real, filled-in mac-mini profile actually syncs from that local, non-rep
   // to remote path memory/MEMORY.md. The DEFAULT config's syncPaths (used
   // when --config is silently ignored, see DEFAULT_SYNC_PATHS in
   // src/config/loader.ts) also matches a root MEMORY.md file, but under the
-  // bare destination "MEMORY.md" instead — a loose endsWith check cannot
+  // bare destination "MEMORY.md" instead; a loose endsWith check cannot
   // tell the two apart, so a `run` that dropped --config on the floor would
   // still pass it. Asserting the exact array pins the profile-dependent
   // destination and would fail on that regression.
@@ -151,7 +151,7 @@ test("a real, filled-in mac-mini profile actually syncs from that local, non-rep
 
   // appliedFiles is destination-relative and never carries repositorySubdir
   // (toRepositoryRelativePath applies that separately, once the file is
-  // actually written into the bare repo's working copy) — so the assertion
+  // actually written into the bare repo's working copy), so the assertion
   // above cannot catch a changed repositorySubdir on its own. Clone the
   // remote and check the file landed at the template's own committed
   // "pandora" subdir, not at some other value (e.g. a per-machine one).

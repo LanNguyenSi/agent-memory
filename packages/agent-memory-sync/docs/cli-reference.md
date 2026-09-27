@@ -172,7 +172,7 @@ the subcommand name.
 
 | Option                  | Description                                                                                                                     |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `--config PATH`         | Path to config file (default: `$XDG_CONFIG_HOME/agent-memory-sync/config.json`, else `~/.config/agent-memory-sync/config.json`) |
+| `--config PATH`         | Path to config file (default: `$XDG_CONFIG_HOME/agent-memory-sync/config.json`, else `~/.config/agent-memory-sync/config.json`). `run`, `watch` and `restore` refuse an explicitly named path (this flag or `AGENT_MEMORY_SYNC_CONFIG`) that does not exist, exit `3`, instead of running on defaults. |
 | `-o, --output <format>` | Output format: text, json, yaml (default: text)                                                                                 |
 | `-v, --verbose`         | Enable verbose output                                                                                                           |
 | `-q, --quiet`           | Suppress non-error output                                                                                                       |

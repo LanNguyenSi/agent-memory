@@ -140,18 +140,31 @@ Activation commands below already use; nothing about `--config` or the
 before this change:** the next `git pull` on this repository removes
 `profiles/mac-mini.json`/`profiles/macbook.json`/`profiles/linux.json` from
 the tracked tree (they are being untracked, not merely edited), and a plain
-`git pull` deletes a tracked file's working-tree copy along with it. **Before
-pulling**, copy the machine's current real profile somewhere safe, e.g.:
+`git pull` deletes a tracked file's working-tree copy along with it. Run
+every command of this migration, including the recovery block further down,
+from the `packages/agent-memory-sync` directory of this machine's checkout:
+the `profiles/...` paths below are relative to it. Replace `mac-mini` with
+this machine's profile name (`macbook`, `linux`, or any further machine's).
 
-```bash
-cp profiles/mac-mini.json /tmp/mac-mini.json.bak   # adjust the filename per machine
-```
+1. **Stop the periodic sync job/timer, pause `watch`, and pause any other
+   automation that pulls this checkout** (see "Behavior during the removal
+   window itself" below for why). How depends on how the machine runs them:
+   the launchd agents or systemd units set up in (b)/(c).
+2. Copy the machine's current real profile somewhere safe, outside the
+   checkout:
 
-After the pull completes, copy it back to the exact same path:
+   ```bash
+   cp profiles/mac-mini.json /tmp/mac-mini.json.bak
+   ```
 
-```bash
-cp /tmp/mac-mini.json.bak profiles/mac-mini.json
-```
+3. Pull, then copy the profile back to the exact same path:
+
+   ```bash
+   git pull
+   cp /tmp/mac-mini.json.bak profiles/mac-mini.json
+   ```
+
+4. Restart the periodic sync job and `watch`.
 
 That path is now git-ignored, so a future `git pull` never touches it again.
 The running `watch`/periodic-sync launchd or systemd unit needs no change at
@@ -163,7 +176,7 @@ step.
 **If a machine's backup copy was lost, recover it from git history, not
 from the `*.example.json` template.** A committed real profile can carry
 values that differ from a freshly-filled-in template's placeholders and
-defaults — a `profile` chosen for that machine specifically, a customized
+defaults: a `profile` chosen for that machine specifically, a customized
 `stateDir`, a `reachabilityTimeoutMs` tuned away from the default, and so
 on (a WSL/Linux machine's committed profile, for instance, used `"profile":
 "linux"` and `"stateDir": "~/.agent-memory-sync/linux"` with
@@ -171,49 +184,47 @@ on (a WSL/Linux machine's committed profile, for instance, used `"profile":
 `profile`/`stateDir` from `<linux-hostname>` and defaults
 `reachabilityTimeoutMs` to `5000`). Re-filling from the template silently
 replaces every one of those with a generic value instead of this machine's
-actual, previously-working one. Recover the real values instead:
+actual, previously-working one. Recover the real values instead, still from
+`packages/agent-memory-sync`:
 
 ```bash
-# Find the commit that removed profiles/<name>.json from the tracked tree
-# (the first result is that removal; its parent still has the file
-# tracked, from just before it was untracked):
-git log --diff-filter=D --oneline -- packages/agent-memory-sync/profiles/mac-mini.json
+# Find the commit that removed profiles/mac-mini.json from the tracked tree.
+# The pathspec is relative to this directory; the first result is that
+# removal, and its parent still has the file tracked:
+git log --diff-filter=D --oneline -- profiles/mac-mini.json
 
-# Check out that machine's config exactly as it was tracked, one commit
-# before the removal:
+# Write that machine's config exactly as it was tracked, one commit before
+# the removal. The path after the colon is relative to the repository root,
+# the redirect target relative to this directory:
 git show <that-commit>^:packages/agent-memory-sync/profiles/mac-mini.json > profiles/mac-mini.json
 ```
 
-adjusting the filename (`mac-mini.json`/`macbook.json`/`linux.json`, or any
-further machine's) per machine. This restores `profile`, `stateDir`,
-`reachabilityTimeoutMs` and everything else exactly as this machine was
-already running, rather than whatever a fresh template copy would default
-to; nothing else on that machine needs to change.
+This restores `profile`, `stateDir`, `reachabilityTimeoutMs` and everything
+else exactly as this machine was already running, rather than whatever a
+fresh template copy would default to; these three values must keep their
+previous values, and nothing else on that machine needs to change.
 
 **Behavior during the removal window itself.** A `watch` process already
 running when `git pull` removes the tracked profile keeps working fine
 through the whole window: it loaded its config once at startup and never
-re-reads the file from disk on a tick (see the Activation note above — the
-CLI's `[profile]` argument and the config file are both read exactly once,
-at process start). What is at risk is any OTHER invocation that starts
-fresh during that same window instead — a periodic `run --mode sync` tick
-firing on its schedule, or a `watch` restart (a crash, a reboot, or an
-operator reloading the launchd/systemd unit) — since that process loads its
-`--config`/`AGENT_MEMORY_SYNC_CONFIG` file from scratch and the profile is,
-for that moment, not there. It now fails clearly and immediately: exit `3`,
-naming the missing path (`config file '<path>' does not exist. ...`; every
-command that actually syncs — `run`, `watch`, `restore` — refuses a missing,
-explicitly-named config path this way, see the CHANGELOG). Before this
-fix, the same window instead loaded silently on bare defaults and only
-failed once it reached the remote-URL check, with a message that pointed at
-the wrong problem: `remote URL is not configured. Set 'remoteUrl' in the
-config file or pass --remote.` — same exit code (`3`), so existing
+re-reads the file from disk on a tick (`watch`'s action in
+`src/commands/watch.ts` calls `loadConfig` and resolves the run config once,
+before it starts the file watcher). What is at risk is any OTHER invocation
+that starts fresh during that same window instead (a periodic
+`run --mode sync` tick firing on its schedule, or a `watch` restart after a
+crash, a reboot, or an operator reloading the launchd/systemd unit), since
+that process loads its `--config`/`AGENT_MEMORY_SYNC_CONFIG` file from
+scratch and the profile is, for that moment, not there. It now fails clearly
+and immediately: exit `3`, naming the missing path
+(`config file '<path>' does not exist. ...`; every command that actually
+syncs, namely `run`, `watch` and `restore`, refuses a missing,
+explicitly-named config path this way, see the CHANGELOG). Before this fix,
+the same window instead loaded silently on bare defaults and only failed
+once it reached the remote-URL check, with a message that pointed at the
+wrong problem: `remote URL is not configured. Set 'remoteUrl' in the config
+file or pass --remote.`, with the same exit code (`3`), so existing
 exit-code-based alerting for a scheduled job still fires either way; only
-the message text is clearer now. Simplest of all: avoid the window
-entirely. **Stop the periodic sync job/timer and pause `watch`** (and any
-other automation that pulls this checkout) before running the `git pull`
-above, and only restart them once the backup copy is back at its real,
-filled-in path.
+the message text is clearer now. Step 1 above avoids the window entirely.
 
 ## a) Bootstrap the bare repo on the mini
 
@@ -226,12 +237,12 @@ ssh mini 'mkdir -p ~/memory-sync && git init --bare --initial-branch=main ~/memo
 
 This creates the empty bare repository every other machine's `remoteUrl`
 points at over ssh (`mini:~/memory-sync/pandora-memory.git` in
-macbook.example.json/linux.example.json — see the scp-like syntax note there). The
+macbook.example.json/linux.example.json; see the scp-like syntax note there). The
 mini's own profile template (mac-mini.example.json) points `remoteUrl` at the same
 repository's plain local filesystem path instead
 (`/Users/<user>/memory-sync/pandora-memory.git`), since it runs on the
 mini itself and doesn't need to loop back through ssh to reach its own
-bare repo — see that template's `"//"` field for the full reasoning. Nothing
+bare repo; see that template's `"//"` field for the full reasoning. Nothing
 else is required server-side — `agent-memory-sync` pushes plain commits
 over ordinary `git push`/`git fetch`/`git ls-remote`; there is no
 server-side hook or service to install.
@@ -288,10 +299,10 @@ absolute path outside `rootDir`; see any profile's `"//"` field for why), so
 these profiles. It is NOT merely a cosmetic label, though: `collectLocalSyncFiles`'
 push-side `ownerScoped` filter (`src/memory-sync/config.ts`) derives the
 owner filename for the `machine-state`/`frictions` entries from this same
-field — push only ever offers `<profile>.json` under an `ownerScoped`
+field: push only ever offers `<profile>.json` under an `ownerScoped`
 directory, so `"profile"` must equal this machine's own filename there
-(`mac-mini.json`, `macbook.json`, ...) or push silently — now: with a
-visible warning instead — finds no matching owner file and publishes no
+(`mac-mini.json`, `macbook.json`, ...) or push silently (now: with a
+visible warning instead) finds no matching owner file and publishes no
 `machine-state`/`frictions` state for that run. Passing it on the command
 line (see the CLI snippets below, and note the CLI's `[profile]` positional
 argument overrides the config file's field, so a mismatched or omitted
