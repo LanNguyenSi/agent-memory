@@ -1,6 +1,6 @@
-// ad1dba42: memory-router index was unusable on the Mac mini because the
+// memory-router index was unusable on the Mac mini because the
 // index-rebuild path shared embedBatch's 5s hook timeout, and a real Ollama
-// batch (nomic-embed-text 5-7s, bge-m3 8-17s, mm-v1-T008 reference corpus)
+// batch (nomic-embed-text 5-7s, bge-m3 8-17s, reference corpus)
 // blew past that on the first batch after a cold model load.
 //
 // Covers, end-to-end through indexer.ts (not just provider.ts in
@@ -143,7 +143,7 @@ test('semanticSearch: no env override → embedBatch call uses DEFAULT_TIMEOUT_M
   const dir = tmpMemoryDir();
   try {
     await withOpenAiKey(async () => {
-      // b1bbbf68 fix-round: also neutralize the hook-only knob, not just
+      // Also neutralize the hook-only knob, not just
       // the shared one. An ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
       // (e.g. exported in a shell profile, exactly as docs/scoring.md's own
       // recipe recommends) would otherwise win the precedence
@@ -183,7 +183,7 @@ test('MEMORY_ROUTER_EMBED_TIMEOUT_MS overrides both rebuildIndex and semanticSea
   const dir = tmpMemoryDir();
   try {
     await withOpenAiKey(async () => {
-      // b1bbbf68 fix-round: same ambient-hook-knob hazard as the test
+      // Same ambient-hook-knob hazard as the test
       // above. Without this, an ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
       // would win over the shared knob this test is exercising and the
       // semanticSearch assertion below would observe the ambient value
@@ -230,7 +230,7 @@ test('rebuildIndex: an invalid MEMORY_ROUTER_EMBED_TIMEOUT_MS (negative) falls b
   }
 });
 
-// b1bbbf68: MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS decouples the hook
+// MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS decouples the hook
 // (semanticSearch) path's embed-timeout budget from the shared
 // MEMORY_ROUTER_EMBED_TIMEOUT_MS knob above, which otherwise also raises
 // the index-rebuild path's budget any time a caller sets it. Precedence:
@@ -353,7 +353,7 @@ test('semanticSearch: an invalid MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS (negative) 
   }
 });
 
-// b1bbbf68 fix-round: an ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
+// An ambient MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS
 // (e.g. exported in a shell profile, exactly as docs/scoring.md's own
 // recipe recommends) must never leak into a test that means to observe the
 // "no hook override" or "shared knob governs" behavior. The two tests

@@ -35,7 +35,7 @@ test('user-prompt-submit emits hookSpecificOutput.additionalContext for a topic 
     parsed.hookSpecificOutput.additionalContext,
     /retarget its base to master/,
   );
-  // mm-v1-T004: the hook resolves through resolveBlended. This fixtures dir
+  // The hook resolves through resolveBlended. This fixtures dir
   // has no `.memory-router` index, so the semantic path contributes
   // nothing and resolveBlended must degrade to EXACTLY the old sync-only
   // topic-only score (flat 1.00), a post-hoc fix: an earlier version of

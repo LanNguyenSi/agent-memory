@@ -401,7 +401,7 @@ test('dimension mismatch on upsert or search throws', () => {
   }
 });
 
-// mm-v1-T003 fix-round MEDIUM #4: the real, reachable dimension-mismatch
+// The real, reachable dimension-mismatch
 // guards (upsert/putCachedQuery/search) append the exact rebuild command
 // when the caller supplied opts.rebuildCommand (rebuildIndex/semanticSearch
 // always do); a bare caller without it (like the test right above this
@@ -433,8 +433,8 @@ test('dimension mismatch on upsert/search/putCachedQuery includes the rebuild co
   }
 });
 
-// mm-v1-T003 fix-round MEDIUM #4: the stored-vs-physical internal
-// consistency check (never exercised by any test before this fix round).
+// The stored-vs-physical internal
+// consistency check.
 // A corrupted `embed_dimensions` meta row that disagrees with the actual
 // on-disk FLOAT[N] vec0 table must throw a clear "internally inconsistent"
 // error rather than silently trusting either value.
@@ -455,7 +455,7 @@ test('stored vs physical dimension mismatch (corrupted meta row) throws a clear 
   fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
 });
 
-// mm-v1-T003 fix-round HIGH #2: a store that has never recorded provenance
+// A store that has never recorded provenance
 // (storedProvider === null) is either brand-new or a legacy,
 // pre-provenance-tracking index whose rows already carry a real model tag.
 // openIndex must never blindly stamp the ACTIVE config onto such a store
@@ -464,8 +464,8 @@ test('stored vs physical dimension mismatch (corrupted meta row) throws a clear 
 // write a (false) embed_provider row before throwing.
 test('legacy index (no embed_* provenance meta) with rows under a different model throws a rebuild error and never stamps a false embed_provider', () => {
   const dbPath = tmpDb();
-  // Build a v2-schema file the way it would have looked BEFORE mm-v1-T003
-  // added provenance tracking: a real FLOAT[1536] vec table + entries.model
+  // Build a v2-schema file the way it would have looked before provenance
+  // tracking was added: a real FLOAT[1536] vec table + entries.model
   // populated (both pre-existing since the 0.2.0 v1->v2 migration), but no
   // embed_provider/embed_model/embed_dimensions meta rows at all.
   const raw = new Database(dbPath);
@@ -575,7 +575,7 @@ test('legacy index (no embed_* provenance meta) whose rows already match the act
   fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
 });
 
-// mm-v1-T007 fix round HIGH #1: `readonly: true` opens the underlying
+// `readonly: true` opens the underlying
 // better-sqlite3 connection with `{ readonly: true, fileMustExist: true }`
 // and skips every write-at-open-time path (WAL pragma, CREATE TABLE/CREATE
 // VIRTUAL TABLE DDL, applyMigrations, recordProvenance). The single

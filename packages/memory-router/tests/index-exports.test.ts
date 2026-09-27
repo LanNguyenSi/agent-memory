@@ -1,6 +1,6 @@
 // Smoke test for src/index.ts's public export surface (the programmatic
-// entry point, see the module's own header comment). mm-v1-T004 fix-round 2
-// LOW #7: resolveBlended (the score-blend resolver every hook/MCP/eval
+// entry point, see the module's own header comment). resolveBlended (the
+// score-blend resolver every hook/MCP/eval
 // caller is now retargeted at, see src/router.ts) was missing from this
 // export list — a direct `require('@lannguyensi/memory-router')` consumer
 // had no way to reach it even though it's the primary resolver going

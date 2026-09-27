@@ -200,7 +200,7 @@ test('memory_resolve hits the topic gate for a "force push" prompt', async () =>
   );
 });
 
-// mm-v1-T004: memory_resolve runs through the same resolveBlended path the
+// memory_resolve runs through the same resolveBlended path the
 // UserPromptSubmit hook uses (src/router.ts) instead of forking its own
 // resolve-then-maybe-resolveConfidence logic. This fixtures dir has no
 // `.memory-router` index, so the semantic path contributes nothing and

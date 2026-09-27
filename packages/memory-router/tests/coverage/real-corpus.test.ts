@@ -49,8 +49,7 @@ test('coverage suite: fixture is non-empty', () => {
   assert.ok(fixture.length > 0, 'prompts fixture must contain ≥1 labelled prompt');
 });
 
-// Hermetic against an ambient $MEMORY_ROUTER_DIR (mm-v1-T002 review round 2,
-// fix 3, enabled by fix 1's ctx.memoryDir threading below): the labelled
+// Hermetic against an ambient $MEMORY_ROUTER_DIR: the labelled
 // assertions in this suite must not depend on whatever $MEMORY_ROUTER_DIR
 // happens to be set to in the host environment running `npm test`.
 test('coverage suite: hermetic against ambient $MEMORY_ROUTER_DIR (ctx.memoryDir wins)', () => {
@@ -105,7 +104,7 @@ const stats: Stats = {
 
 for (const entry of fixture) {
   test(`prompt: ${entry.prompt}`, () => {
-    // memoryDir threaded explicitly (mm-v1-T002 review round 2, fix 1/3):
+    // memoryDir threaded explicitly:
     // the Topic Gate's vocabulary must come from THIS corpus (CORPUS_DIR —
     // the fixture corpus by default, or MEMORY_ROUTER_COVERAGE_CORPUS_DIR
     // in dogfood mode), not whatever $MEMORY_ROUTER_DIR (a DIFFERENT env

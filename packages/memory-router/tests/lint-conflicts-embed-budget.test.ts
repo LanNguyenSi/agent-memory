@@ -1,10 +1,10 @@
-// fe9c61bc: `memory-router lint --semantic` called embedBatch with no
+// `memory-router lint --semantic` called embedBatch with no
 // timeoutMs (inheriting embedBatch's 5s hook-tight DEFAULT_TIMEOUT_MS) and
 // shipped every missing pair-embed input in a single request, unchunked.
-// Reviewer measurement from PR #96 (Task ad1dba42): 64 real inputs take
+// Reviewer measurement from PR #96: 64 real inputs take
 // ~9.3s warm against Ollama/bge-m3, so any non-trivial corpus already blew
-// the 5s budget and aborted — same bug class rebuildIndex had before
-// mm-v1-T008 gave it INDEX_DEFAULT_TIMEOUT_MS + 64-batch chunking.
+// the 5s budget and aborted — same bug class rebuildIndex had before it
+// gained INDEX_DEFAULT_TIMEOUT_MS + 64-batch chunking.
 //
 // This file pins several things end-to-end through
 // lintMemoryDirForConflictsWithSemantic's real (non-embedFn-seam)
@@ -311,7 +311,7 @@ async function withEnvVar<T>(
   }
 }
 
-// 372ed7ab: the chunked missing-pair embed call let a raw fetch/HTTP error
+// The chunked missing-pair embed call let a raw fetch/HTTP error
 // through unenriched. Live repro (reviewer finding, PR #103): the operator
 // saw exactly "The operation was aborted due to timeout" on stderr/exit,
 // with no clue which provider/model/endpoint it was even talking to.
@@ -369,7 +369,7 @@ test('lint --semantic: a missing-pair embed error is enriched with describeEmbed
   }
 });
 
-// 372ed7ab: docs/commands.md documented an ollama-shaped enriched error
+// docs/commands.md documented an ollama-shaped enriched error
 // message that describeEmbedError can never actually produce
 // ("baseUrl=default" with no hint sentence): buildOllamaConfig always
 // resolves a concrete baseUrl, and describeEmbedError always appends the
@@ -414,7 +414,7 @@ test('lint --semantic: a missing-pair embed error against ollama is enriched wit
   }
 });
 
-// 372ed7ab: the enrichment above is only correct for the real embedBatch
+// The enrichment above is only correct for the real embedBatch
 // seam. When the caller supplies its own embedFn (the test seam every
 // other test in this file uses), that function never contacts `cfg`'s
 // provider/model/baseUrl, so wrapping its error with describeEmbedError

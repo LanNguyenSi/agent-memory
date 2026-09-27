@@ -275,8 +275,8 @@ module.exports = {
   // code in this package imports loadVocabularyOrThrow (production always
   // wants the never-throws loadVocabularyResult/loadVocabulary). Not
   // lint-enforced yet — a `lint --strict "no production import of
-  // loadVocabularyOrThrow"` rule is filed as a follow-up (task 0a32c3ad),
-  // out of scope for this fix round.
+  // loadVocabularyOrThrow"` rule is filed as a follow-up, out of scope for
+  // now.
   VOCAB_FILENAME,
   VocabularyError,
   loadVocabularyOrThrow,

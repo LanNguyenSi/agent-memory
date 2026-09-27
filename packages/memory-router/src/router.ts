@@ -15,8 +15,8 @@ const { semanticSearch } = require('./embed/indexer');
 // as `resolveConfidence` — callers that can't await leave it out.
 const DEFAULT_GATES: Gate[] = [topicGate, toolGate];
 
-// Uncalibrated-floor drop hint (agent-tasks d33f968c, review residual of
-// mm-v1-T008/PR #97): true once this process has emitted the stderr hint
+// Uncalibrated-floor drop hint (a review residual of PR #97): true once
+// this process has emitted the stderr hint
 // below. Module-level and never reset except by a fresh process — the
 // real caller (the hook binary, see src/hooks/user-prompt-submit.ts) is a
 // short-lived `node` process per prompt, so "once per process" already
@@ -101,14 +101,14 @@ interface ResolveBlendedDeps {
   ) => Promise<{ memory: Memory; score: number }[]>;
 }
 
-// mm-v1-T004: replaces the old "shadowed gates" resolver (sync topic/tool
+// Replaces the old "shadowed gates" resolver (sync topic/tool
 // gates first, confidence gate only when they were silent — see `resolve` +
 // `resolveConfidence` above, both left unchanged for their existing callers,
 // see the module-level comment). That shadowing meant the Topic Gate's flat
 // 1.0 score pre-empted the semantic path on almost every real prompt (three
 // different prompts sharing a topic word produced an identical top-5,
-// regardless of what each prompt actually meant): see the mm-v1-T004 task
-// notes and the pre-blend eval baseline.
+// regardless of what each prompt actually meant): see the pre-blend eval
+// baseline.
 //
 // resolveBlended() instead combines every signal into one score per memory:
 //   score = semanticScore + topicBoost + typeModifier + recencyModifier
@@ -118,16 +118,16 @@ interface ResolveBlendedDeps {
 //   no HTTP call, no throw) when either is missing, so there is no separate
 //   availability probe here, and this call happens exactly once per prompt
 //   (one query embedding, or a query-cache hit — see src/embed/indexer.ts).
-//   A hit scoring below MEMORY_ROUTER_BLEND_MIN_SEMANTIC (fix-round 2,
-//   default 0.5) is dropped before it ever reaches this formula — treated
+//   A hit scoring below MEMORY_ROUTER_BLEND_MIN_SEMANTIC (default 0.5) is
+//   dropped before it ever reaches this formula — treated
 //   as "no semantic score" below, not as a weak one.
 // - topicBoost: the (deterministic) Topic Gate's match is no longer a
 //   standalone full-score hit; it can only nudge a memory's score, never
 //   flood it to 1.0 and shadow everything else.
 // - typeModifier / recencyModifier: small tie-breaking modifiers (memory
 //   `type`, file mtime decay). See src/gates/confidence.ts for the weight
-//   defaults (env-overridable; topicBoost/candidateK calibrated in
-//   mm-v1-T008, the relevance floor stays per-corpus — see
+//   defaults (env-overridable; topicBoost/candidateK calibrated against the
+//   reference corpus, the relevance floor stays per-corpus — see
 //   src/gates/confidence.ts and README "Calibration").
 // A memory with neither a semantic score nor a topic match contributes
 // nothing and is excluded — the modifiers alone can never surface an
@@ -166,7 +166,7 @@ async function resolveBlended(
   const maxHits = opts.maxHits ?? 5;
   const weights = loadBlendWeights();
 
-  // Candidate pool width. At the calibrated default (5, mm-v1-T008) the
+  // Candidate pool width. At the calibrated default (5) the
   // pool EQUALS the default cap: a memory outside the raw semantic
   // top-maxHits is not lifted into the result by topic/recency/type unless
   // the operator widens the pool via MEMORY_ROUTER_BLEND_CANDIDATE_K (then
@@ -186,7 +186,7 @@ async function resolveBlended(
     );
   }
 
-  // Relevance floor (mm-v1-T004 fix-round 2, HIGH): drop any semantic hit
+  // Relevance floor: drop any semantic hit
   // scoring below MEMORY_ROUTER_BLEND_MIN_SEMANTIC (model/provider-
   // conditional default, see resolveDefaultMinSemanticScore in
   // src/gates/confidence.ts) BEFORE the degradation guard below. A
@@ -201,8 +201,8 @@ async function resolveBlended(
   const semanticCandidateCount = semanticHits.length;
   semanticHits = semanticHits.filter((h) => h.score >= weights.minSemanticScore);
 
-  // Uncalibrated-floor drop hint (agent-tasks d33f968c, review residual of
-  // mm-v1-T008/PR #97): the model/provider-conditional floor above
+  // Uncalibrated-floor drop hint (a review residual of PR #97): the
+  // model/provider-conditional floor above
   // (src/gates/confidence.ts) has a specifically-calibrated entry for only
   // one model (bge-m3); every OTHER un-calibrated Ollama model (all-minilm,
   // mxbai-embed-large, nomic-embed-text, ...) falls through to the generic
@@ -219,7 +219,7 @@ async function resolveBlended(
   // minSemanticScoreSource === 'map'), an operator's own explicit
   // MEMORY_ROUTER_BLEND_MIN_SEMANTIC override (source === 'env'), or
   // OpenAI's own deliberate provider default (source === 'provider',
-  // agent-tasks d33f968c fix round: split out of 'fallback' because 0.5 is
+  // split out of 'fallback' because 0.5 is
   // OpenAI's documented default and an all-below-floor run there is the
   // normal junk-rejection outcome, not a sign the operator is missing a
   // calibration) — all three are a deliberate choice or provider-native
@@ -275,8 +275,7 @@ async function resolveBlended(
     // gate/reason attribution on "score > 0" would then mislabel that
     // candidate as a phantom topic hit (gate: 'topic', reason: '') even
     // though it has no topic match at all — it's semantic-originated (a
-    // real semanticById entry), just weighted zero (mm-v1-T004 fix-round 2
-    // LOW #9).
+    // real semanticById entry), just weighted zero.
     const hasSemanticHit = semanticById.has(id);
     const semanticScore = semanticById.get(id) ?? 0;
     const topicHit = topicById.get(id);
@@ -313,8 +312,8 @@ async function resolveBlended(
   return rankWithToolPrivilege(blended, toolHits, maxHits);
 }
 
-// Privileges deterministic Tool-Gate hits ahead of the maxHits cap
-// (mm-v1-T004 fix-round 2, MEDIUM #2): a memory ctx.tool directly matched
+// Privileges deterministic Tool-Gate hits ahead of the maxHits cap: a
+// memory ctx.tool directly matched
 // (score 1.0, see gates/tool.ts) must never be evicted from the result by
 // blend-scored memories whose semantic+topicBoost+modifiers sum happens to
 // exceed 1.0 — plain dedupeAndRank (highest score wins the slot) would let

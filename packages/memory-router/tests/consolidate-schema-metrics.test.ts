@@ -136,7 +136,7 @@ test('buildSchemaMetrics: legacyFormatRate is 0 (not NaN) on a corpus with zero 
   }
 });
 
-// mm-v1-T007 fix round LOW #6: topics classification mirrors loader.ts's
+// Topics classification mirrors loader.ts's
 // resolution precedence exactly, rather than checking non-empty-array
 // presence at each location independently of the other.
 test('scanRawFrontmatter: a top-level topics: [] shadows a non-empty metadata.topics (UNTAGGED, matching the loader), not TAGGED', () => {

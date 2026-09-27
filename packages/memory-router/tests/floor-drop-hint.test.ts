@@ -1,21 +1,20 @@
 // Unit tests for the once-per-process "uncalibrated floor dropped every
-// semantic candidate" stderr hint in resolveBlended (src/router.ts,
-// agent-tasks d33f968c, review residual of mm-v1-T008/PR #97's
-// model-conditional relevance floor). PR #97 made the un-overridden
-// MEMORY_ROUTER_BLEND_MIN_SEMANTIC default model/provider-CONDITIONAL, but
+// semantic candidate" stderr hint in resolveBlended (src/router.ts, a
+// review residual of PR #97's model-conditional relevance floor). PR #97
+// made the un-overridden MEMORY_ROUTER_BLEND_MIN_SEMANTIC default
+// model/provider-CONDITIONAL, but
 // only bge-m3 has a specifically-calibrated entry (src/gates/confidence.ts's
 // OLLAMA_MODEL_FLOOR_DEFAULTS) — every OTHER Ollama model (all-minilm,
 // mxbai-embed-large, nomic-embed-text, ...) falls through to the generic
 // provider fallback (0.78, calibrated against bge-m3's own cosine band, not
 // theirs) and can silently lose its entire semantic path if that model's
-// real cosine scores cluster below it. This file pins the cases from the
-// task's acceptance criteria plus two fix-round additions (d33f968c fix
-// round, findings 1 and 2 below): the hint fires exactly once for the
-// fallback-provenance total-loss case, and never for a calibrated map
-// entry, an explicit override, OpenAI's own deliberate provider default, a
-// run where at least one candidate still passed the floor, or a run where
-// the semantic path found no candidates to filter at all (empty result or a
-// caught search error).
+// real cosine scores cluster below it. This file pins the base cases plus
+// two later additions (findings 1 and 2 below): the hint fires exactly once
+// for the fallback-provenance total-loss case, and never for a calibrated
+// map entry, an explicit override, OpenAI's own deliberate provider
+// default, a run where at least one candidate still passed the floor, or a
+// run where the semantic path found no candidates to filter at all (empty
+// result or a caught search error).
 //
 // `node --test` isolates each test FILE into its own child process by
 // default (this package's `test`/`test:coverage` scripts pass a file glob
@@ -215,9 +214,8 @@ test('resolveBlended: an explicit MEMORY_ROUTER_BLEND_MIN_SEMANTIC override with
 });
 
 // --- Case "provider": OpenAI's own deliberate 0.5 default, all below -----
-//     -> no hint. Regression coverage (agent-tasks d33f968c fix round,
-//     finding 1): before this fix round, OpenAI resolved through the SAME
-//     'fallback' source Ollama's uncalibrated models use, so a completely
+//     -> no hint. Regression coverage: OpenAI used to resolve through the
+//     SAME 'fallback' source Ollama's uncalibrated models use, so a completely
 //     healthy OpenAI run (0.5 is OpenAI's own documented default; an
 //     all-below-floor result there is the normal junk-rejection outcome,
 //     not a calibration gap) misfired this hint with misleading calibration
@@ -278,9 +276,9 @@ test('resolveBlended: uncalibrated fallback floor with at least one candidate pa
 //     hint. Runs BEFORE case 1 below, for the same reason case 4 does — see
 //     the ordering note at the top of this file. --------------------------
 //
-// Regression coverage (agent-tasks d33f968c fix round, finding 2): deleting
-// the `semanticCandidateCount > 0 &&` conjunct from resolveBlended's guard
-// left the pre-fix suite fully green, because every other "no hint" case in
+// Regression coverage: deleting the `semanticCandidateCount > 0 &&`
+// conjunct from resolveBlended's guard leaves the rest of the suite fully
+// green, because every other "no hint" case in
 // this file either used a non-fallback source (map/env/provider) or had
 // semanticHits.length > 0 after filtering. semanticCandidateCount === 0 is
 // the one combination none of those exercise: fallback source AND
@@ -353,8 +351,8 @@ test('resolveBlended: uncalibrated fallback floor with a caught semantic-search 
 // The model name below is deliberately tag-suffixed and dirty
 // (leading/trailing whitespace, an embedded control byte) rather than the
 // plain "all-minilm" used by the other cases in this file: resolveBlended's
-// sanitizeModelNameForLog (agent-tasks d33f968c fix round, finding 4; the
-// env var is operator/misconfiguration-controlled provenance, same threat
+// sanitizeModelNameForLog (the env var is operator/misconfiguration-controlled
+// provenance, same threat
 // model as the resolveDefaultMinSemanticScoreDetail hasOwnProperty guard in
 // src/gates/confidence.ts) trims and strips control characters before
 // interpolating the model name into the stderr line, but deliberately keeps

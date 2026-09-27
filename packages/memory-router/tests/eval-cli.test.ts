@@ -40,7 +40,7 @@ test("eval: exits 0 on an error-free run and prints the aggregate summary", () =
   assert.match(stdout, /semantic path: inactive/);
   assert.match(stdout, /vocabulary: built-in default/);
   // No index is built for the fixture corpus, so the semantic gate cannot
-  // have won a slot for any of the 6 prompts (mm-v1-T004 fix-round 2 LOW #8).
+  // have won a slot for any of the 6 prompts.
   assert.match(stdout, /semantic contributed: 0\/6 prompts/);
   assert.match(stdout, /precision=0\.750 recall=0\.625 mrr=0\.750\s+\(n=4\)/);
   assert.match(stdout, /negative controls: 1\/2 passed/);

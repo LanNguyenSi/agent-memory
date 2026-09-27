@@ -76,7 +76,7 @@ test('NORMALIZATION_DESCRIPTION is a non-empty documented string', () => {
   assert.ok(NORMALIZATION_DESCRIPTION.length > 0);
 });
 
-// mm-v1-T007 fix round LOW #9: empty/whitespace-only bodies never form a
+// Empty/whitespace-only bodies never form a
 // dupe group; they're reported separately.
 test('findExactDupes: two memories with empty bodies never form a dupe group', () => {
   const memories = [memory('empty_a', ''), memory('empty_b', '   \n\t  ')];

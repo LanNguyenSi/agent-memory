@@ -16,8 +16,8 @@ const BIN = path.join(__dirname, '..', 'dist', 'cli.js');
 const FIXTURES = path.join(__dirname, 'fixtures', 'memories');
 const VOCAB_CORPUS = path.join(__dirname, 'fixtures', 'vocab');
 
-// Hermetic against an ambient $MEMORY_ROUTER_DIR (mm-v1-T002 review round 2,
-// fix 3): this suite's `--dir`-scoped assertions must pass identically
+// Hermetic against an ambient $MEMORY_ROUTER_DIR: this suite's
+// `--dir`-scoped assertions must pass identically
 // whether or not the host running these tests happens to have
 // $MEMORY_ROUTER_DIR set in its own environment. Every call strips the
 // inherited value before spawning; a test that specifically wants to

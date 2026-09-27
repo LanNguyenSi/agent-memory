@@ -1,4 +1,4 @@
-// mm-v1-T003: multi-provider embeddings (OpenAI + Ollama).
+// Multi-provider embeddings (OpenAI + Ollama).
 //
 // Covers:
 //  - provider.ts's resolveProviderConfig(): explicit selection, auto-detect
@@ -204,7 +204,7 @@ test('resolveProviderConfig: MEMORY_ROUTER_EMBED_PROVIDER normalization tolerate
 });
 
 // ---------------------------------------------------------------------
-// Model-env precedence (mm-v1-T003 fix-round MEDIUM #5): a stray
+// Model-env precedence: a stray
 // MEMORY_ROUTER_EMBED_MODEL left in the environment for OpenAI must not
 // silently misroute an auto-detected Ollama config. MEMORY_ROUTER_
 // OLLAMA_EMBED_MODEL is the Ollama-specific override for that path;
@@ -412,7 +412,7 @@ test('EMBED_DIMENSIONS stays exported at 1536 for src/lint/conflicts.ts backward
   assert.equal(EMBED_DIMENSIONS, 1536);
 });
 
-// 372ed7ab: src/lint/conflicts.ts also imports describeEmbedError from this
+// src/lint/conflicts.ts also imports describeEmbedError from this
 // module (same backward-compat re-export shape as EMBED_DIMENSIONS above).
 // Dropping the re-export typechecks clean (conflicts.ts's own import would
 // fail loudly at build time, catching that) but a require()-based drop
@@ -480,7 +480,7 @@ test('rebuildIndex: switching provider against an existing index throws with the
           assert.match(err.message, /provider=openai/);
           assert.match(err.message, /provider=ollama/);
           assert.match(err.message, /rm -rf/);
-          // Fix-round MEDIUM #3: both paths in the rebuild command are
+          // Both paths in the rebuild command are
           // shell single-quoted (see shellSingleQuote in indexer.ts), so
           // the dir must appear wrapped in literal single quotes here, not
           // bare.
@@ -531,7 +531,7 @@ test('semanticSearch: switching provider against an existing index throws instea
 });
 
 // ---------------------------------------------------------------------
-// rebuildCommandFor shell-quoting (mm-v1-T003 fix-round MEDIUM #3): a
+// rebuildCommandFor shell-quoting: a
 // memoryDir containing a space must not corrupt the printed remediation
 // command. Exercised indirectly (rebuildCommandFor isn't exported) through
 // the same provider-mismatch error path as the tests above.
@@ -587,7 +587,7 @@ test('rebuild command in a provider-mismatch error shell-quotes a memoryDir cont
 });
 
 // ---------------------------------------------------------------------
-// Friendly embed errors (mm-v1-T003 fix-round MEDIUM #6): an embedBatch
+// Friendly embed errors: an embedBatch
 // failure surfacing through rebuildIndex/semanticSearch is enriched with
 // the resolved provider/baseUrl/model, plus an ollama-specific
 // `ollama serve` / `ollama pull <model>` hint.
@@ -651,13 +651,13 @@ test('rebuildIndex: an embedBatch failure under openai is enriched with provider
 });
 
 // ---------------------------------------------------------------------
-// Real, reachable dimension mismatch (mm-v1-T003 fix-round MEDIUM #4): a
+// Real, reachable dimension mismatch: a
 // same-provider model switch to a DIFFERENT dimensionality must throw
 // through the actual upsert()/putCachedQuery() guards, WITH the rebuild
 // command attached (opts.rebuildCommand is always set by rebuildIndex/
 // semanticSearch), not the removed dead opts.dimensions-vs-opts.meta
-// branch in index-store.ts, which no real caller ever reached. Before this
-// fix round the dimension check threw a bare "dimension X != index
+// branch in index-store.ts, which no real caller ever reached. A prior
+// version's dimension check threw a bare "dimension X != index
 // dimension Y" with no rebuild hint, a mutation-survivor gap: nothing
 // asserted the hint text was present.
 // ---------------------------------------------------------------------
@@ -751,7 +751,7 @@ test('semanticSearch: a same-provider dimension switch on the query path throws 
 });
 
 // ---------------------------------------------------------------------
-// Missing test from review (mm-v1-T003 fix-round #10): end-to-end
+// End-to-end
 // auto-detect at the indexer level, empty env (no explicit provider, no
 // OPENAI_API_KEY), proves rebuildIndex/semanticSearch actually route
 // through the local Ollama config, not just resolveProviderConfig() in

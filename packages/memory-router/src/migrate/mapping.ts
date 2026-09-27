@@ -15,7 +15,7 @@
 //
 // Deliberately mirrors `topics.yml`'s shape (bare top-level list, see
 // src/vocab/loader.ts) rather than introducing a second file convention.
-// `id` gives the curator (mm-v1-T008, the Pandora corpus operator) a way to
+// `id` gives the curator (the Pandora corpus operator) a way to
 // pin a specific memory without needing full MEMORY.md section parsing,
 // which this mechanical migrate verb deliberately does not implement.
 //

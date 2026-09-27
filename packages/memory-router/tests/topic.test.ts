@@ -11,7 +11,7 @@ const fixturesDir = path.join(__dirname, 'fixtures', 'memories');
 // A foreign corpus vocabulary that does NOT declare `workflow` (or any of
 // the other built-in default topics) at all — used below to prove
 // ctx.memoryDir wins over an ambient $MEMORY_ROUTER_DIR rather than being
-// silently overridden by it (mm-v1-T002 review round 2, fixes 1 and 3).
+// silently overridden by it.
 const FIXTURE_VOCAB_DIR = path.join(__dirname, 'fixtures', 'vocab');
 
 test('topic gate fires on "merge PR 42" → workflow memory injected', () => {

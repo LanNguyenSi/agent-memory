@@ -5,7 +5,7 @@
 // and reads back the vectors already stored there. When the index is
 // missing, or was built under a different embedding provider/model than the
 // one currently configured (see index-store.ts's provenance-mismatch
-// contract, mm-v1-T003), the pass is skipped with an explicit reason instead
+// contract), the pass is skipped with an explicit reason instead
 // of either crashing or silently reporting nothing.
 //
 // Compatibility with the current provider config is checked the same way
@@ -14,7 +14,7 @@
 // pass it as `opts.meta` to openIndex, which throws when the on-disk index
 // disagrees. That throw is caught here and turned into a skip, not a crash.
 //
-// Read-only (mm-v1-T007 fix round HIGH #1): openIndex is asked for a
+// Read-only: openIndex is asked for a
 // readonly connection (`readonly: true`, see src/embed/index-store.ts).
 // This pass only ever reads embeddings; opening the index writable had no
 // functional purpose and, more importantly, meant a future bug here (a

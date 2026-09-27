@@ -348,10 +348,10 @@ test('embedBatch: explicit timeoutMs overrides the default', async () => {
 });
 
 // ─── resolveEmbedTimeoutMs / MEMORY_ROUTER_EMBED_TIMEOUT_MS ─────────────────
-// ad1dba42: the hook path (DEFAULT_TIMEOUT_MS, 5000) must stay tight so a
+// The hook path (DEFAULT_TIMEOUT_MS, 5000) must stay tight so a
 // prompt is never blocked for long; the index-rebuild path
 // (INDEX_DEFAULT_TIMEOUT_MS) needs a much larger budget instead, since a
-// real Ollama batch measured 5-17 s on the mm-v1-T008 corpus. Both defaults
+// real Ollama batch measured 5-17 s on the reference corpus. Both defaults
 // are overridable via one env var.
 
 test('the two path defaults are pinned: hook stays 5000ms, index rebuild is at least 60000ms and strictly larger than the hook default', () => {
@@ -405,7 +405,7 @@ for (const bad of [
 }
 
 // ─── resolveHookEmbedTimeoutMs / MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS ────────
-// b1bbbf68: MEMORY_ROUTER_EMBED_TIMEOUT_MS overrides both the hook
+// MEMORY_ROUTER_EMBED_TIMEOUT_MS overrides both the hook
 // (semanticSearch) and index-rebuild paths at once, so a persistent shell
 // export meant to give `index` more headroom also raises the hook's
 // per-prompt budget. MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS decouples the hook
@@ -438,7 +438,7 @@ test('resolveHookEmbedTimeoutMs: hook knob set → wins over both the shared kno
   });
 });
 
-// b1bbbf68 fix-round: pins the accepted upper boundary. Its rejected
+// Pins the accepted upper boundary. Its rejected
 // neighbor '3000000000' is already covered by the invalid table below;
 // this confirms parseTimeoutOverride's `<= 2147483647` check is inclusive,
 // not off-by-one.
