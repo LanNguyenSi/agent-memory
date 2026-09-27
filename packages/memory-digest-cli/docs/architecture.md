@@ -161,10 +161,7 @@ The repo has no root `package.json`/npm workspaces; CI (`.github/workflows/ci.ym
 --test-coverage-branches=80 --test-coverage-functions=92` thresholds, so a
    coverage regression fails the build
 
-There is no `prettier --check` step and no `npm pack` step in this workflow. A
-`packages/memory-digest-cli/.github/workflows/ci.yml` file also exists in this repo, but GitHub
-Actions only runs workflows from the repository root's `.github/workflows/`, so that nested file
-is never triggered.
+There is no `prettier --check` step and no `npm pack` step in this workflow.
 
 ## Testing Strategy
 
