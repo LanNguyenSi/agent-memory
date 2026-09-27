@@ -2,7 +2,7 @@
 // are local-only" section now documents: a machine's real profile is a
 // *.example.json template, copied somewhere local and git-ignored, with its
 // placeholders filled in. Nothing about that workflow changes how
-// agent-memory-sync resolves a profile — this test proves it end to end
+// agent-memory-sync resolves a profile. This test proves it end to end
 // against a materialized copy of the mac-mini template, at a path OUTSIDE
 // this repo's tracked profiles/ directory entirely (a stand-in for an
 // operator's own local, git-ignored location), so a regression that makes
@@ -24,7 +24,7 @@ const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 
 // Fills in the template's placeholders the way docs/machine-setup.md
 // instructs an operator to for a brand-new machine, with a fictitious user
-// and slug — chosen precisely so nothing under this fake "/Users/<fakeUser>"
+// and slug, chosen precisely so nothing under this fake "/Users/<fakeUser>"
 // path can exist on the machine actually running this test, keeping the
 // unmapped machine-state/frictions syncPaths entries (see below) inert
 // rather than merely sandboxed.
@@ -37,11 +37,11 @@ function materializeTemplate(templateFile: string, fakeUser: string, fakeSlug: s
 }
 
 test("a real, filled-in mac-mini profile parses into the documented settings after materialization", () => {
-  const fakeUser = "fixture-user";
-  const fakeSlug = "-Users-fixture-user-git-pandora";
+  const fakeUser = "<fixture-user>";
+  const fakeSlug = "-Users-<fixture-user>-git-pandora";
   const settings = materializeTemplate("mac-mini.example.json", fakeUser, fakeSlug);
 
-  // No placeholder survives filling in — a leftover '<...>' token would mean
+  // No placeholder survives filling in; a leftover '<...>' token would mean
   // this test (or a future template edit) missed one.
   const serialized = JSON.stringify(settings);
   assert.ok(!serialized.includes("<user>"), "materialized profile still contains an unresolved '<user>' placeholder");
@@ -58,8 +58,8 @@ test("a real, filled-in mac-mini profile parses into the documented settings aft
 
   // Materialize it at a path OUTSIDE packages/agent-memory-sync/profiles/
   // entirely (this test's own OS-tmpdir sandbox), then ask the CLI to parse
-  // it via `config show --config <path>` — the same code path `run`/`watch`/
-  // `restore` all go through (loadConfig in src/config/loader.ts) — proving
+  // it via `config show --config <path>`, the same code path `run`/`watch`/
+  // `restore` all go through (loadConfig in src/config/loader.ts), proving
   // resolution does not care where the real, local file lives.
   const root = createSandbox("local-profile-materialization-parse");
   const materializedPath = path.join(root, "not-under-repo-profiles-dir", "mac-mini.json");
@@ -74,20 +74,20 @@ test("a real, filled-in mac-mini profile parses into the documented settings aft
 });
 
 test("a real, filled-in mac-mini profile actually syncs from that local, non-repo path", () => {
-  const fakeUser = "fixture-user-2";
-  const fakeSlug = "-Users-fixture-user-2-git-pandora";
+  const fakeUser = "<fixture-user-2>";
+  const fakeSlug = "-Users-<fixture-user-2>-git-pandora";
   const settings = materializeTemplate("mac-mini.example.json", fakeUser, fakeSlug);
 
   const root = createSandbox("local-profile-materialization-sync");
   const remoteDir = initBareRemote(root);
 
   // The two machine-absolute syncPaths entries (machine-state, frictions)
-  // are left pointing at the fictitious /Users/fixture-user-2/.harness/...
-  // paths the materialized file itself carries — deliberately NOT remapped
+  // are left pointing at the fictitious /Users/<fixture-user-2>/.harness/...
+  // paths the materialized file itself carries, deliberately NOT remapped
   // into the sandbox. Since that user does not exist on any real machine,
   // those paths cannot exist locally either, so collectLocalSyncFiles (see
   // src/memory-sync/config.ts) treats both as an absent, non-required
-  // source and skips them without ever touching the filesystem — the same
+  // source and skips them without ever touching the filesystem, the same
   // missing-source tolerance every fresh real machine relies on before its
   // first machine-state/frictions write. Asserted explicitly below so a
   // change to that tolerance (or to this fixture's fake path no longer
@@ -114,7 +114,7 @@ test("a real, filled-in mac-mini profile actually syncs from that local, non-rep
   // --root-dir/--state-dir/--remote win over the file's own (fictitious)
   // values per resolveRunConfig's merge order (src/config/loader.ts), so
   // this push runs entirely against the sandbox even though the file on
-  // disk still carries /Users/fixture-user-2/... verbatim.
+  // disk still carries /Users/<fixture-user-2>/... verbatim.
   const push = runCli([
     "run",
     "mac-mini",
