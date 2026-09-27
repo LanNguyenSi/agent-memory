@@ -131,7 +131,7 @@ falling back to `~/.config/agent-memory-sync/config.json` when
 
 ```json
 {
-  "rootDir": "/home/user/agent-workspace",
+  "rootDir": "/home/<user>/agent-workspace",
   "remoteUrl": "/srv/git/agent-memory.git",
   "branch": "main",
   "repositorySubdir": "shared",
@@ -153,9 +153,11 @@ falling back to `~/.config/agent-memory-sync/config.json` when
 ```
 
 For a real multi-machine setup (Mac mini as source of truth, MacBook/Linux
-as fallbacks) see the committed profiles under
+as fallbacks) see the committed profile templates under
 [`profiles/`](profiles/) and [docs/machine-setup.md](docs/machine-setup.md)
-instead of hand-writing a config file from scratch.
+instead of hand-writing a config file from scratch. Each machine's actual,
+filled-in profile is local-only and git-ignored. See
+docs/machine-setup.md's "Real per-machine profiles are local-only" section.
 
 Config keys can be overridden via environment variables prefixed with
 `AGENT_MEMORY_SYNC_` (e.g. `AGENT_MEMORY_SYNC_REMOTE_URL`,

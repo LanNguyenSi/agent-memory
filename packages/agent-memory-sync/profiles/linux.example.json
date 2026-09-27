@@ -1,7 +1,10 @@
 {
   "//": [
     "Profile TEMPLATE for a third (Linux) machine — copy to e.g. linux.json,",
-    "fill in the placeholders, and drop the '.example' suffix. Pair with the",
+    "fill in the placeholders, and drop the '.example' suffix. That real",
+    "filename is git-ignored (see packages/agent-memory-sync/.gitignore and",
+    "docs/machine-setup.md's 'Real per-machine profiles are local-only'",
+    "section); it stays on this machine only. Pair with the",
     "systemd units documented in README.md (#systemd-unit) and",
     "docs/machine-setup.md (periodic sync timer) rather than the launchd",
     "templates (docs/launchd/), which are macOS-only.",

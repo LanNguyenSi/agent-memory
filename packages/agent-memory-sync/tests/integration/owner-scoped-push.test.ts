@@ -85,7 +85,7 @@ test(
     // CLI's [profile] positional argument overrides the config file's
     // "profile" field in resolveRunConfig's merge order (overrides applied
     // last) — the same "pass BOTH --config and the profile name" pattern
-    // profiles/mac-mini.json etc. document, and now load-bearing: the
+    // profiles/mac-mini.example.json etc. document, and now load-bearing: the
     // ownerScoped filter's `<profile>.json` filename comes from this field.
     const pushA1 = runCli(["run", "machine-a", "--config", configPathA, "--mode", "push", "--output", "json"]);
     const pushA1Payload = JSON.parse(pushA1.stdout).runs[0];

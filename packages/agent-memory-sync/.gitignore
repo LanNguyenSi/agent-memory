@@ -123,3 +123,14 @@ test-results/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# -------------------------
+# Real per-machine profiles (local-only, never committed)
+# -------------------------
+# A filled-in profile carries this machine's real home path, OS user name
+# and Claude Code workspace slug. Only the *.example.json templates ship;
+# copy one to the real filename below and fill in the placeholders. See
+# docs/machine-setup.md's "Real per-machine profiles are local-only"
+# section for the full setup and migration steps.
+profiles/*.json
+!profiles/*.example.json

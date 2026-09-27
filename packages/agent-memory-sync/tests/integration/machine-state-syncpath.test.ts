@@ -1,8 +1,8 @@
 // Pins the machine-state syncPaths convention (agent-tasks "agent-memory-sync:
 // machine-state syncPaths-Eintrag in beiden Maschinen-Profilen"): a second,
 // independent directory-kind syncPaths entry whose `source` is an ABSOLUTE
-// path OUTSIDE rootDir — mirroring profiles/mac-mini.json and
-// profiles/macbook.json's real machine-state entry, which points at
+// path OUTSIDE rootDir, mirroring profiles/mac-mini.example.json and
+// profiles/macbook.example.json's machine-state entry, which points at
 // ~/.harness/machine-state rather than anywhere under the Claude Code memory
 // rootDir. Covers two things the feature depends on, both already true of
 // collectLocalSyncFiles/mapRemotePathToLocalAbsolute in
