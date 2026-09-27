@@ -3,7 +3,7 @@ type: invariant
 title: Score-blend resolver, degraded mode, and confidence-floor provenance
 description: Where the blend formula and calibration tables actually live (pointer), the exact trigger for degraded mode including that its semantic-search catch is not scoped to network/API errors, and the four-state provenance tag that decides whether an all-below-floor run gets a stderr hint.
 tags: [score-blend, degraded-mode, relevance-floor, confidence-floor-provenance, resolveBlended]
-timestamp: 2026-09-27T14:18:37Z
+timestamp: 2026-09-27T14:48:54Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/gates/confidence.ts

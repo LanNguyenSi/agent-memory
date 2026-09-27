@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The five distinct conditions under which semanticSearch() returns an empty array instead of throwing, which of those are visible on stderr, and the contrasting embedding-index provenance guard that throws instead, including which of its four call sites actually let that throw reach an operator versus swallow it into the same silent degradation.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-09-27T14:18:37Z
+timestamp: 2026-09-27T14:48:54Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts

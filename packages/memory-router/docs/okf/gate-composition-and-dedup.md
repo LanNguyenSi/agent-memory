@@ -3,7 +3,7 @@ type: invariant
 title: Three resolvers, two dedup rules
 description: memory-router has three distinct ways to combine gate/signal hits into a ranked list, used by three different call sites; this maps each call site to its resolver and states the one real difference between the two dedup/ranking functions underneath them.
 tags: [gate-composition, dedup, resolveBlended, resolve, rankWithToolPrivilege]
-timestamp: 2026-09-27T14:18:37Z
+timestamp: 2026-09-27T14:48:54Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/gates/topic.ts
