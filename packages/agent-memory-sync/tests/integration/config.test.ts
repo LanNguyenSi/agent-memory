@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
-const { createSandbox, fileExists, runCli } = require("../helpers/cli.ts");
+const { createSandbox, fileExists, initBareRemote, runCli, writeText } = require("../helpers/cli.ts");
 
 test("config set, get, show, and reset manage the persisted config file", () => {
   const root = createSandbox("config");
@@ -72,7 +72,7 @@ test("config get on an unsupported key exits 3, distinct from an unset supported
 // Every command that actually syncs (run, watch, restore) now refuses an
 // explicitly named config path that does not exist, instead of loadConfig's
 // usual silent {} fallback (which would run on bare defaults as if nothing
-// were wrong — no remote, no real syncPaths). "config show"/"config get"
+// were wrong: no remote, no real syncPaths). "config show"/"config get"
 // keep the permissive fallback (loadConfig without requireExisting, see
 // src/config/loader.ts), since inspecting a not-yet-configured machine is a
 // legitimate use, unlike actually syncing against one.
@@ -90,6 +90,14 @@ test("run with a missing explicit --config path exits 3 naming the path, instead
     `expected the missing path in stderr, got: ${result.stderr}`
   );
   assert.match(result.stderr, /does not exist/);
+  // The fix hint points at restoring the file first. It must not suggest
+  // `config set`, which would create a stub that silently replaces a real
+  // profile lost during migration.
+  assert.match(
+    result.stderr,
+    /Restore the file \(see docs\/machine-setup\.md, section 'Real per-machine profiles are local-only'\)/
+  );
+  assert.doesNotMatch(result.stderr, /config set/);
 });
 
 test("watch with a missing explicit --config path exits 3 naming the path, before ever starting the watch loop", () => {
@@ -152,4 +160,72 @@ test("config set on a --config path that does not exist yet still creates it", (
 
   assert.equal(result.status, 0);
   assert.equal(fileExists(configPath), true);
+});
+
+// The first-run invariant: the refusal above applies only to a path the
+// caller named explicitly. A machine with no --config flag, no
+// AGENT_MEMORY_SYNC_CONFIG and no file at the default location still syncs
+// on defaults, as it always did.
+test("run with no --config, no AGENT_MEMORY_SYNC_CONFIG and no default config file still syncs on defaults", () => {
+  const root = createSandbox("config-first-run-defaults");
+  const remoteDir = initBareRemote(root);
+  const workspaceDir = path.join(root, "workspace");
+  const emptyXdgConfigHome = path.join(root, "empty-xdg-config-home");
+  writeText(path.join(workspaceDir, "MEMORY.md"), "first-run memory\n");
+  writeText(path.join(emptyXdgConfigHome, ".keep"), "");
+
+  const env = { ...process.env, XDG_CONFIG_HOME: emptyXdgConfigHome };
+  delete env.AGENT_MEMORY_SYNC_CONFIG;
+  assert.equal(fileExists(path.join(emptyXdgConfigHome, "agent-memory-sync", "config.json")), false);
+
+  const result = runCli(
+    [
+      "run",
+      "default",
+      "--remote",
+      remoteDir,
+      "--root-dir",
+      workspaceDir,
+      "--state-dir",
+      path.join(root, "state"),
+      "--mode",
+      "push",
+      "--output",
+      "json"
+    ],
+    { env, expectFailure: true }
+  );
+
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}: ${result.stderr}`);
+  const payload = JSON.parse(result.stdout).runs[0];
+  assert.equal(payload.status, "applied");
+  assert.deepEqual(payload.appliedFiles, ["MEMORY.md"]);
+});
+
+// Inspecting commands keep the permissive fallback for a missing explicit
+// path: `config show` reports empty settings, `config get` reports the key
+// as not set (exit 11, ConfigKeyNotSetError), neither refuses the path.
+test("config show on a missing explicit --config path exits 0 with empty settings", () => {
+  const root = createSandbox("config-show-missing-explicit");
+  const missingConfigPath = path.join(root, "does-not-exist.json");
+
+  const result = runCli(["config", "show", "--config", missingConfigPath, "--output", "json"], {
+    expectFailure: true
+  });
+
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}: ${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.path, missingConfigPath);
+  assert.deepEqual(payload.settings, {});
+});
+
+test("config get on a missing explicit --config path reports the key as not set (exit 11), not a missing file", () => {
+  const root = createSandbox("config-get-missing-explicit");
+  const missingConfigPath = path.join(root, "does-not-exist.json");
+
+  const result = runCli(["config", "get", "remoteUrl", "--config", missingConfigPath], { expectFailure: true });
+
+  assert.equal(result.status, 11);
+  assert.match(result.stderr, /config key 'remoteUrl' is not set/);
+  assert.doesNotMatch(result.stderr, /does not exist/);
 });

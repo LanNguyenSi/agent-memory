@@ -155,16 +155,17 @@ function defaultConfigPath(): string {
 // `options.requireExisting` is what `run`/`watch`/`restore` pass (every
 // command that actually syncs, as opposed to merely inspecting or writing
 // local configuration): with it set, a config path the caller explicitly
-// named — via `overridePath` (the CLI's --config flag) or the
+// named (via `overridePath`, the CLI's --config flag, or the
 // AGENT_MEMORY_SYNC_CONFIG environment variable, checked the same way
-// resolveConfigPath itself prioritizes them — that does not exist on disk is
+// resolveConfigPath itself prioritizes them) that does not exist on disk is
 // a CliError naming the missing path, instead of the silent {} fallback
 // below. That fallback stays exactly as before for every other caller
-// (`config show`/`config get`, and this same function used without the
-// option): a machine with no config file at all, and no explicit path or
-// env var pointing at one, is expected to run on defaults, and `config set`
-// (via readPersistedConfig, which never sets this option) must still be able
-// to create a brand-new file at a path that does not exist yet.
+// (`config show`, and this same function used without the option): a
+// machine with no config file at all, and no explicit path or env var
+// pointing at one, is expected to run on defaults. `config get` and
+// `config set` read through readPersistedConfig, which has its own
+// permissive fallback, so `config set` can still create a brand-new file at
+// a path that does not exist yet.
 async function loadConfig(
   overridePath?: string,
   options: { requireExisting?: boolean } = {}
@@ -173,8 +174,9 @@ async function loadConfig(
   if (!existsSync(configPath)) {
     if (options.requireExisting && (overridePath || process.env.AGENT_MEMORY_SYNC_CONFIG)) {
       throw new CliError(
-        `config file '${configPath}' does not exist. Pass an existing --config path, unset ` +
-          "AGENT_MEMORY_SYNC_CONFIG, or run 'agent-memory-sync config set' first to create one.",
+        `config file '${configPath}' does not exist. Restore the file (see docs/machine-setup.md, ` +
+          "section 'Real per-machine profiles are local-only'), or pass an existing --config path " +
+          "or unset AGENT_MEMORY_SYNC_CONFIG.",
         3
       );
     }
