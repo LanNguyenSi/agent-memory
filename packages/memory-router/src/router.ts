@@ -236,7 +236,7 @@ async function resolveBlended(
   ) {
     floorDropHintEmitted = true;
     process.stderr.write(
-      `memory-router: uncalibrated relevance floor ${weights.minSemanticScore} for model "${sanitizeModelNameForLog(weights.minSemanticScoreModel)}" dropped all ${semanticCandidateCount} semantic candidate(s) this run; set MEMORY_ROUTER_BLEND_MIN_SEMANTIC to override, or calibrate a floor for this model, see README "Calibration" (#calibration-mm-v1-t008).\n`,
+      `memory-router: uncalibrated relevance floor ${weights.minSemanticScore} for model "${sanitizeModelNameForLog(weights.minSemanticScoreModel)}" dropped all ${semanticCandidateCount} semantic candidate(s) this run; set MEMORY_ROUTER_BLEND_MIN_SEMANTIC to override, or calibrate a floor for this model, see README "Calibration" (#calibration).\n`,
     );
   }
 
