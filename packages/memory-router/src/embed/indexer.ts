@@ -11,9 +11,8 @@ const {
 const { openIndex } = require('./index-store');
 const { debug } = require('../debug');
 
-// Legacy constant, kept ONLY because src/lint/conflicts.ts (out of scope
-// for mm-v1-T003 — see task constraints) imports it and passes it as a
-// `dimensions` hint to `openIndex()` for its own opportunistic embedding
+// Legacy constant, kept ONLY because src/lint/conflicts.ts imports it and
+// passes it as a `dimensions` hint to `openIndex()` for its own opportunistic embedding
 // reuse. Dimensions are no longer hardcoded anywhere in THIS file — see
 // "Dimensionality" below — index-store.ts derives the real dimension from
 // the index's own recorded/physical state and silently ignores a
@@ -108,7 +107,7 @@ interface IndexResult {
 
 async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
   // autoDetectOllama: true — this is THE call that lets the semantic path
-  // live on a machine with no OpenAI key (mm-v1-T003's whole point). See
+  // live on a machine with no OpenAI key. See
   // provider.ts's ResolveProviderConfigOptions doc for why this opt-in
   // flag exists instead of being the unconditional default.
   const cfg = resolveProviderConfig({ autoDetectOllama: true });
@@ -287,6 +286,6 @@ module.exports = {
   // Re-exported so src/lint/conflicts.ts's `--semantic` missing-pair embed
   // call can wrap its errors with the same provider/model/baseUrl context
   // as rebuildIndex and semanticSearch above, instead of carrying its own
-  // drifting copy (372ed7ab).
+  // drifting copy.
   describeEmbedError,
 };

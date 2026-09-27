@@ -153,7 +153,7 @@ test('consolidate --near-threshold: a value swallowing the next flag is rejected
   }
 });
 
-// mm-v1-T007 fix round LOW #8: `Number.parseFloat` alone silently accepts
+// `Number.parseFloat` alone silently accepts
 // trailing garbage ("0.5abc" -> 0.5); the parser must reject the whole
 // token instead of quietly truncating it to a number the user never typed.
 test('consolidate --near-threshold: a value with trailing garbage ("0.5abc") is rejected, not truncated to 0.5', () => {
@@ -190,7 +190,7 @@ test('consolidate --near-threshold=<n>: trailing garbage on the inline form is a
   }
 });
 
-// mm-v1-T007 fix round LOW #10: args.repoRoots (already parsed generically
+// args.repoRoots (already parsed generically
 // for `stale`) is threaded through into runConsolidate's stale pass.
 test('consolidate --repo-root: threaded through to the stale pass, changing whether a verify: path ref is reported stale', () => {
   const dir = copyStaticCorpus();

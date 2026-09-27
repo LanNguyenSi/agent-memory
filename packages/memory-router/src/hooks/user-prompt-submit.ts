@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   const memories = loadMemoriesFromDir(memoryDir);
   const ctx: RouterContext = { prompt: input.prompt, cwd: input.cwd, memoryDir };
 
-  // mm-v1-T004: resolveBlended runs the semantic search unconditionally
+  // resolveBlended runs the semantic search unconditionally
   // (whenever an index + provider are available) and blends it with the
   // Topic Gate as a boost rather than gating the semantic path behind
   // "sync gates were silent" — that shadowing was the reason the semantic

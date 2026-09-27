@@ -29,7 +29,7 @@ test('confidenceThreshold is clamped to [0, 0.85]', () => {
   assert.equal(confidenceThreshold(10), 0);
 });
 
-// --- Model-conditional relevance floor default (agent-tasks 3ef3ded3) -----
+// --- Model-conditional relevance floor default -----------------------------
 //
 // resolveDefaultMinSemanticScore() / loadBlendWeights().minSemanticScore's
 // un-overridden value depends on the resolved embedding provider/model
@@ -69,7 +69,7 @@ function withFloorEnv(
   }
 }
 
-test('resolveDefaultMinSemanticScore: explicit ollama, bge-m3 -> 0.78 (calibrated, mm-v1-T008 reference corpus)', () => {
+test('resolveDefaultMinSemanticScore: explicit ollama, bge-m3 -> 0.78 (calibrated against the reference corpus)', () => {
   withFloorEnv(
     { MEMORY_ROUTER_EMBED_PROVIDER: 'ollama', MEMORY_ROUTER_EMBED_MODEL: 'bge-m3' },
     () => {
@@ -217,7 +217,7 @@ test('loadBlendWeights: an invalid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override (no
   );
 });
 
-// --- minSemanticScoreSource / minSemanticScoreModel (agent-tasks d33f968c)
+// --- minSemanticScoreSource / minSemanticScoreModel ------------------------
 //
 // resolveBlended (src/router.ts) needs to tell a specifically-calibrated map
 // entry (bge-m3) and an operator's own explicit override apart from the
@@ -249,7 +249,7 @@ test('loadBlendWeights: minSemanticScoreSource is "fallback" for an un-calibrate
   );
 });
 
-test('loadBlendWeights: minSemanticScoreSource is "provider" for openai (its own deliberate 0.5 default, not an uncalibrated fallback — agent-tasks d33f968c fix round)', () => {
+test('loadBlendWeights: minSemanticScoreSource is "provider" for openai (its own deliberate 0.5 default, not an uncalibrated fallback)', () => {
   withFloorEnv(
     { MEMORY_ROUTER_EMBED_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-test-not-real' },
     () => {

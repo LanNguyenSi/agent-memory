@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   const additionalContext = renderHitsAsContext(hits);
   if (!additionalContext) return;
 
-  // TODO(15ca7a24): consider setting permissionDecision="ask" when any
+  // TODO: consider setting permissionDecision="ask" when any
   // hit's memory has severity="critical" so the user explicitly confirms
   // destructive ops. Deferred until we have a real critical-severity
   // corpus to calibrate against.

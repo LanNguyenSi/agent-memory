@@ -519,7 +519,7 @@ export async function lintMemoryDirForConflictsWithSemantic(
           // rebuildIndex — give it the larger index budget instead of
           // embedBatch's 5s hook-tight default. Without this, a corpus
           // with enough missing pairs blows the hook timeout and aborts
-          // (fe9c61bc; measured 85 inputs / ~9.3s-class Ollama batch
+          // (measured 85 inputs / ~9.3s-class Ollama batch
           // against the 5s default).
           timeoutMs: resolveEmbedTimeoutMs(INDEX_DEFAULT_TIMEOUT_MS),
         }));
@@ -543,7 +543,7 @@ export async function lintMemoryDirForConflictsWithSemantic(
         // (embed/indexer.ts): a raw fetch/HTTP failure (e.g. Node's literal
         // "The operation was aborted due to timeout" when AbortSignal.timeout
         // fires) used to reach the CLI with no indication of which
-        // provider/model/endpoint it came from (372ed7ab). Only enrich when
+        // provider/model/endpoint it came from. Only enrich when
         // this call actually went through our own embedBatch seam
         // (opts.embedFn unset): a caller-supplied embedFn never contacts
         // `cfg`'s provider/model/baseUrl, so attributing its error to that

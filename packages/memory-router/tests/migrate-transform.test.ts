@@ -514,7 +514,7 @@ test('migrate: a file missing the required name field is skipped', () => {
   }
 });
 
-// --- null/invalid frontmatter guard (fix-round 2, #3) -----------------------
+// --- null/invalid frontmatter guard -----------------------------------------
 
 test('migrate: an empty frontmatter block (--- \\n\\n ---) is skipped as "not a YAML object", not crashed on; a healthy neighbor is still planned', () => {
   const dir = mkTmpDir();
@@ -587,7 +587,7 @@ test('migrate: an unexpected planFile failure (file becomes unreadable after lis
   }
 });
 
-// --- non-array topics protection (fix-round 2, #4) ---------------------------
+// --- non-array topics protection ---------------------------------------------
 
 test('migrate: an existing non-empty top-level topics of an invalid shape (scalar string) is kept, never overwritten, and flagged for manual review', () => {
   const dir = mkTmpDir();
@@ -623,7 +623,7 @@ test('migrate: an empty-string top-level topics is treated as absent, falls thro
   }
 });
 
-// --- vocabulary disclosure (fix-round 2, #5) ---------------------------------
+// --- vocabulary disclosure ---------------------------------------------------
 
 test('migrate: planMigration reports vocabularySource "default" and vocabularyError null when no topics.yml exists', () => {
   const dir = mkTmpDir();
@@ -672,7 +672,7 @@ test('migrate: planMigration falls back to "default" and reports vocabularyError
   }
 });
 
-// --- separator preservation (fix-round 2, #8) --------------------------------
+// --- separator preservation --------------------------------------------------
 
 test('migrate --apply: a file with NO blank line after frontmatter keeps that exact separator (no blank line is forced in)', () => {
   const dir = mkTmpDir();
@@ -720,7 +720,7 @@ test('migrate --apply: a file WITH a blank line after frontmatter keeps exactly 
   }
 });
 
-// --- serialization fidelity: lineWidth (fix-round 2, #1) ---------------------
+// --- serialization fidelity: lineWidth ---------------------------------------
 
 test('migrate --apply: lineWidth:0 avoids yaml\'s default 80-col reflow; pre-existing frontmatter lines survive byte-identical when only `created` is appended', () => {
   const dir = mkTmpDir();

@@ -16,8 +16,8 @@ const BIN = path.join(__dirname, '..', 'dist', 'cli.js');
 const FIXTURES = path.join(__dirname, 'fixtures', 'memories');
 const VOCAB_CORPUS = path.join(__dirname, 'fixtures', 'vocab');
 
-// Hermetic against an ambient $MEMORY_ROUTER_DIR (mm-v1-T002 review round 2,
-// fix 3): this suite's `--dir`-scoped assertions must pass identically
+// Hermetic against an ambient $MEMORY_ROUTER_DIR: this suite's
+// `--dir`-scoped assertions must pass identically
 // whether or not the host running these tests happens to have
 // $MEMORY_ROUTER_DIR set in its own environment. Every call strips the
 // inherited value before spawning; a test that specifically wants to
@@ -144,7 +144,7 @@ test('--max-hits=n form accepts a positive integer', () => {
   assert.equal(status, 0);
 });
 
-// --- HIGH fix 1: dir-threading, not the $MEMORY_ROUTER_DIR env global -----
+// --- dir-threading, not the $MEMORY_ROUTER_DIR env global -----
 
 test('test verb: custom topics.yml at --dir applies even without $MEMORY_ROUTER_DIR set (ctx.memoryDir threading, not the env global)', () => {
   // VOCAB_CORPUS's topics.yml declares `incident_response`, which is not
@@ -164,7 +164,7 @@ test('test verb: custom topics.yml at --dir applies even without $MEMORY_ROUTER_
   assert.match(stdout, /topic · /);
 });
 
-// --- MEDIUM fix 3: hermetic against ambient $MEMORY_ROUTER_DIR ------------
+// --- hermetic against ambient $MEMORY_ROUTER_DIR ------------
 
 test('hermetic: an ambient $MEMORY_ROUTER_DIR in the calling process does not leak into the spawned CLI and override --dir', () => {
   const original = process.env.MEMORY_ROUTER_DIR;

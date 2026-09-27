@@ -17,7 +17,7 @@
 // longer duplicates that regex/parse/validate logic; it only derives its
 // own topics-shape bucketing (below) from the walk's output.
 //
-// topics classification (mm-v1-T007 fix round LOW #6): mirrors loader.ts's
+// topics classification mirrors loader.ts's
 // own resolution precedence EXACTLY (`fm.topics ?? fm.metadata?.topics ??
 // []`) rather than checking "is there a non-empty array at either
 // location" independently of each other. A top-level `topics:` key wins

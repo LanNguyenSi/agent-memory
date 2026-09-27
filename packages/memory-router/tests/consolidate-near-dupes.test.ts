@@ -211,9 +211,9 @@ test('findNearDupes: default threshold is DEFAULT_NEAR_THRESHOLD (0.95) when not
   }
 });
 
-// --- mm-v1-T007 fix round HIGH #1: read-only index access ---------------
+// --- Read-only index access ------------------------------------------
 
-test('findNearDupes: HIGH #1 regression guard: the near-dupes openIndex call requests a readonly connection', () => {
+test('findNearDupes: regression guard: the near-dupes openIndex call requests a readonly connection', () => {
   // WHY a source-level guard rather than a behavioral one, verified
   // empirically (see tests/index-store.test.ts's readonly tests, and the
   // module-level comment at the top of src/consolidate/near-dupes.ts):
@@ -286,7 +286,7 @@ test('findNearDupes: the index.sqlite file itself is byte-for-byte unchanged by 
   }
 });
 
-// --- mm-v1-T007 fix round: corrupted-index degrades to skipped, never crashes (LOW #10) ---
+// --- Corrupted-index degrades to skipped, never crashes ----------------
 
 test('findNearDupes: a corrupted/unreadable index file degrades to status "skipped" with a clear reason instead of crashing the whole consolidate run', () => {
   const dir = tmpMemoryDir();
@@ -315,7 +315,7 @@ test('findNearDupes: a corrupted/unreadable index file degrades to status "skipp
   }
 });
 
-// --- mm-v1-T007 fix round MEDIUM #2/#4: reason:null, threshold boundary, stale-model disclosure ---
+// --- reason:null, threshold boundary, stale-model disclosure -----------
 
 test('findNearDupes: reason is explicitly null (not simply absent) on an "ok" result, a stable key set', () => {
   const dir = tmpMemoryDir();

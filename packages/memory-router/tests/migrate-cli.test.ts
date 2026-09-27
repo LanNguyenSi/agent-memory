@@ -216,7 +216,7 @@ test('migrate: nonexistent corpus dir exits 1 with a clear message', () => {
   assert.match(stderr, /error: cannot read/);
 });
 
-// --- exit code: real write failures gate, dry-run/untagged never do (fix-round 2, #2) ---
+// --- exit code: real write failures gate, dry-run/untagged never do ------
 
 test('migrate --apply: a write failure (readonly target dir) exits 1, sources are left unchanged', () => {
   const dir = copyStaticCorpus();
@@ -248,7 +248,7 @@ test('migrate: a dry run always exits 0 even when files are untagged/missing typ
   }
 });
 
-// --- vocabulary disclosure (fix-round 2, #5) ---------------------------------
+// --- vocabulary disclosure ---------------------------------------------------
 
 test('migrate --json: vocabulary reports "default" with vocabularyError null when no topics.yml exists', () => {
   const dir = copyStaticCorpus();

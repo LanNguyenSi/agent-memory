@@ -1,4 +1,4 @@
-// Unit tests for resolveBlended (src/router.ts, mm-v1-T004): the
+// Unit tests for resolveBlended (src/router.ts): the
 // score-blend resolver that replaces the old "shadowed gates" resolver
 // (sync topic/tool gates first, confidence gate only when they stayed
 // silent). That shadowing meant a Topic Gate hit's flat 1.0 score
@@ -33,8 +33,7 @@ const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'memories');
 
 // Independent copies of src/gates/confidence.ts's BLEND_DEFAULTS and
 // TYPE_MODIFIER_UNITS, hardcoded here rather than imported/called, so the
-// "exact expected score" assertions below (mm-v1-T004 fix-round 2, MEDIUM
-// #3) actually catch a regression in those source constants instead of
+// "exact expected score" assertions below actually catch a regression in those source constants instead of
 // silently agreeing with a broken value (calling typeModifier/recencyModifier
 // to compute "expected" would make the assertion circular: a bug that zeros
 // out a weight would zero both sides identically). Keep these in sync with
@@ -161,7 +160,7 @@ test('resolveBlended: semantic score dominates the ranking when topic/recency/ty
   const a = fakeMemory('a');
   const b = fakeMemory('b');
   const ctx: RouterContext = { prompt: NO_TOPIC_PROMPT, memoryDir: NOVOCAB_DIR };
-  // Both scores must clear the fix-round-2 relevance floor (default 0.5,
+  // Both scores must clear the relevance floor (default 0.5,
   // MEMORY_ROUTER_BLEND_MIN_SEMANTIC) or the weaker one is dropped before
   // the blend even runs — this test is about dominance ranking, not the
   // floor, so both stay comfortably above it.
@@ -178,7 +177,7 @@ test("resolveBlended: a topic match boosts a memory's ranking (secondary signal,
     prompt: 'please review and merge this PR',
     memoryDir: NOVOCAB_DIR,
   };
-  // Both scores above the fix-round-2 relevance floor (default 0.5) so the
+  // Both scores above the relevance floor (default 0.5) so the
   // blend stays active for both memories; this test is about the topic
   // boost, not the floor.
   const hits = await resolveBlended(ctx, [withTopic, withoutTopic], '/fake/dir', {}, {
@@ -229,7 +228,7 @@ test('resolveBlended: recency breaks a tie between two memories with equal seman
   }
 });
 
-test("resolveBlended: type modifier nudges a tie (feedback outranks reference at equal semantic score, no topic, equal mtime) — exact score gap, insertion order reversed (mm-v1-T004 fix-round 2 MEDIUM #3d)", async () => {
+test("resolveBlended: type modifier nudges a tie (feedback outranks reference at equal semantic score, no topic, equal mtime) — exact score gap, insertion order reversed", async () => {
   // The original version of this test always passed `[feedbackMem,
   // referenceMem]` (feedback first) into resolveBlended. If typeModifier
   // were completely broken (e.g. always returned 0), the two scores would
@@ -308,7 +307,7 @@ test('resolveBlended: two prompts sharing the same topic but different semantic 
   );
 });
 
-test('resolveBlended: with a widened candidate pool (MEMORY_ROUTER_BLEND_CANDIDATE_K > maxHits, opt-in since mm-v1-T008) a memory ranked below maxHits on raw semantic score still wins a slot via topic boost', async () => {
+test('resolveBlended: with a widened candidate pool (MEMORY_ROUTER_BLEND_CANDIDATE_K > maxHits, an explicit opt-in) a memory ranked below maxHits on raw semantic score still wins a slot via topic boost', async () => {
   // 6 semantic candidates, strictly decreasing raw score, all above the
   // default floor (0.5). m5 ranks 6th by raw semantic score alone (outside
   // the raw top-maxHits=5) but carries a topic match: with the pool widened
@@ -362,11 +361,11 @@ test('resolveBlended: with a widened candidate pool (MEMORY_ROUTER_BLEND_CANDIDA
   }
 });
 
-test('resolveBlended: at calibrated defaults the candidate pool equals the cap — no topic-boost rescue from outside the raw semantic top-maxHits (mm-v1-T008)', async () => {
+test('resolveBlended: at calibrated defaults the candidate pool equals the cap — no topic-boost rescue from outside the raw semantic top-maxHits', async () => {
   // Same 6-candidate setup as above, but NO env override and a k-honoring
   // stub: the pool is max(maxHits=5, candidateK default 5) = 5, so m5
   // (raw rank 6) never enters the blend and its topic match cannot rescue
-  // it. Pins the deliberate mm-v1-T008 behavior change (candidateK 10 -> 5).
+  // it. Pins the deliberate behavior change (candidateK 10 -> 5).
   const maxHits = 5;
   const m0 = fakeMemory('m0');
   const m1 = fakeMemory('m1');
@@ -472,7 +471,7 @@ test('resolveBlended: a semantic-search failure degrades to the exact pre-blend 
 });
 
 test('resolveBlended: without an index/provider (real semanticSearch, no deps override), degraded output is byte-identical to resolve(), same ids, scores, reasons, and order, with more topic candidates than maxHits', async () => {
-  // Regression fixture for the mm-v1-T004 post-hoc fix: the original
+  // Regression fixture for a post-hoc fix: the original
   // degradation guard below only asserted SET equality of memory ids and a
   // "score is not exactly 1.0" property, using the 4-file shared fixtures
   // dir (all matching different topics, well under maxHits=5). That corpus
@@ -528,7 +527,7 @@ test('resolveBlended: without an index/provider (real semanticSearch, no deps ov
   }
 });
 
-// --- Relevance floor (mm-v1-T004 fix-round 2, HIGH #1) ---------------------
+// --- Relevance floor ------------------------------------------------------
 //
 // MEMORY_ROUTER_BLEND_MIN_SEMANTIC (pinned to 0.5 for this whole file, see
 // the file-level beforeEach/afterEach above; 0.5 was the flat default
@@ -580,7 +579,7 @@ test('resolveBlended: sub-floor semantic score plus a topic match degrades to EX
   );
 });
 
-test('resolveBlended: a candidate present only via a (floor-permitted) zero semantic score is labeled gate="confidence" with a non-empty reason, never a phantom "topic" gate hit with an empty reason (mm-v1-T004 fix-round 2 LOW #9)', async () => {
+test('resolveBlended: a candidate present only via a (floor-permitted) zero semantic score is labeled gate="confidence" with a non-empty reason, never a phantom "topic" gate hit with an empty reason', async () => {
   // Under the DEFAULT floor (0.5) an exact-zero semantic score can never
   // survive filtering, so this edge case is structurally unreachable in
   // production today. It becomes reachable the moment an operator sets
@@ -610,7 +609,7 @@ test('resolveBlended: a candidate present only via a (floor-permitted) zero sema
 });
 
 // --- Model-conditional relevance floor default, end-to-end through
-// resolveBlended() (agent-tasks 3ef3ded3) ----------------------------------
+// resolveBlended() -----------------------------------------------------
 //
 // The unit-level resolution (bge-m3 -> 0.78, provider fallback, openai ->
 // 0.5, explicit override always wins) is pinned directly against
@@ -690,7 +689,7 @@ test('resolveBlended: with no MEMORY_ROUTER_BLEND_MIN_SEMANTIC override and an o
 
 // --- Tool Gate passthrough (ctx.tool, e.g. MCP's memory_resolve) ----------
 
-test('resolveBlended: ctx.tool still resolves via the deterministic Tool Gate in an ACTIVE blend (non-empty semantic score elsewhere), unaffected by the semantic blend (mm-v1-T004 fix-round 2 MEDIUM #3a)', async () => {
+test('resolveBlended: ctx.tool still resolves via the deterministic Tool Gate in an ACTIVE blend (non-empty semantic score elsewhere), unaffected by the semantic blend', async () => {
   // A previous version of this test stubbed semanticSearch with an EMPTY
   // scoresById, which means semanticHits.length === 0 for every memory
   // here (there is only toolMem in the corpus) — resolveBlended's
@@ -719,7 +718,7 @@ test('resolveBlended: ctx.tool still resolves via the deterministic Tool Gate in
   assert.equal(toolHit.score, 1.0);
 });
 
-test('resolveBlended: a Tool-Gate hit is privileged ahead of the maxHits cap and is never evicted by blend-scored memories exceeding 1.0 (mm-v1-T004 fix-round 2 MEDIUM #2)', async () => {
+test('resolveBlended: a Tool-Gate hit is privileged ahead of the maxHits cap and is never evicted by blend-scored memories exceeding 1.0', async () => {
   // Three blended-only candidates each score semantic(0.95) + topicBoost
   // (default 0.05) + type/recency modifiers > 1.0 — strictly above the
   // Tool Gate's flat 1.0. With maxHits=2 and plain highest-score-wins
@@ -763,9 +762,9 @@ test('resolveBlended: MEMORY_ROUTER_BLEND_TOPIC_BOOST overrides the default topi
   const prev = process.env.MEMORY_ROUTER_BLEND_TOPIC_BOOST;
   process.env.MEMORY_ROUTER_BLEND_TOPIC_BOOST = '5';
   try {
-    // A semantic score above the fix-round-2 relevance floor (default 0.5,
+    // A semantic score above the relevance floor (default 0.5,
     // MEMORY_ROUTER_BLEND_MIN_SEMANTIC) is required here: since the
-    // mm-v1-T004 degradation fix, resolveBlended bypasses topicBoost/
+    // degradation fix, resolveBlended bypasses topicBoost/
     // recency/type entirely (returns the flat pre-blend resolve() output)
     // whenever the semantic path contributes nothing at all — including
     // when every hit is filtered out by the relevance floor — see the
@@ -785,14 +784,14 @@ test('resolveBlended: MEMORY_ROUTER_BLEND_TOPIC_BOOST overrides the default topi
   }
 });
 
-test('resolveBlended: a non-numeric MEMORY_ROUTER_BLEND_TOPIC_BOOST override falls back to the built-in default rather than producing NaN scores (active blend, exact score, mm-v1-T004 fix-round 2 MEDIUM #3b)', async () => {
+test('resolveBlended: a non-numeric MEMORY_ROUTER_BLEND_TOPIC_BOOST override falls back to the built-in default rather than producing NaN scores (active blend, exact score)', async () => {
   // The original version of this test stubbed semanticSearch with an EMPTY
   // scoresById, so semanticHits.length === 0 for the only memory in play —
   // the degradation guard short-circuits BEFORE loadBlendWeights()/
   // topicBoost is ever consulted, so the override's fallback behavior was
   // never actually exercised; `score > 0` also trivially holds for the
   // flat 1.0 degraded score regardless of the override. A non-empty
-  // semantic score above the fix-round-2 relevance floor (default 0.5)
+  // semantic score above the relevance floor (default 0.5)
   // keeps the blend active, and the exact expected score (computed from
   // hardcoded, independent constants — see top of file) proves the
   // fallback landed on exactly the built-in default (DEFAULT_TOPIC_BOOST),
@@ -828,7 +827,7 @@ test('resolveBlended: a non-numeric MEMORY_ROUTER_BLEND_TOPIC_BOOST override fal
   }
 });
 
-test('resolveBlended: a negative MEMORY_ROUTER_BLEND_TOPIC_BOOST override falls back to the built-in default rather than accepting a negative weight (mm-v1-T004 fix-round 2 LOW #6, analogous to the half-life guard)', async () => {
+test('resolveBlended: a negative MEMORY_ROUTER_BLEND_TOPIC_BOOST override falls back to the built-in default rather than accepting a negative weight (analogous to the half-life guard)', async () => {
   const withTopic = fakeMemory('with-topic', { topics: ['workflow'] });
   const ctx: RouterContext = {
     prompt: 'please review and merge this PR',
@@ -857,7 +856,7 @@ test('resolveBlended: a negative MEMORY_ROUTER_BLEND_TOPIC_BOOST override falls 
   }
 });
 
-test('resolveBlended: a non-positive MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS override falls back to the built-in default instead of dividing by zero (mtime chosen so the fallback is measurable, exact score, mm-v1-T004 fix-round 2 MEDIUM #3c)', async () => {
+test('resolveBlended: a non-positive MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS override falls back to the built-in default instead of dividing by zero (mtime chosen so the fallback is measurable, exact score)', async () => {
   // The original version of this test used mtime = now (age 0 days). At
   // age 0, decay = 0.5 ** (0 / halfLifeDays) === 1 for EVERY halfLifeDays
   // value (0, 30, or anything else) — the guard's fallback-vs-no-fallback
@@ -905,7 +904,7 @@ test('resolveBlended: a non-positive MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS o
   }
 });
 
-test('resolveBlended: MEMORY_ROUTER_BLEND_CANDIDATE_K overrides the semantic candidate-pool width passed to semanticSearch (mm-v1-T004 fix-round 2 LOW #5)', async () => {
+test('resolveBlended: MEMORY_ROUTER_BLEND_CANDIDATE_K overrides the semantic candidate-pool width passed to semanticSearch', async () => {
   const mem = fakeMemory('mem');
   const ctx: RouterContext = { prompt: NO_TOPIC_PROMPT, memoryDir: NOVOCAB_DIR };
   const prev = process.env.MEMORY_ROUTER_BLEND_CANDIDATE_K;

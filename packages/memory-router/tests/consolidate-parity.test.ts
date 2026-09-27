@@ -3,7 +3,7 @@
 // and its sibling loadMemoriesFromDirWithRejects (the read-only walk
 // src/consolidate/schema-metrics.ts's scanRawFrontmatter is built on).
 //
-// mm-v1-T008 fix round: the two functions used to duplicate their own
+// The two functions used to duplicate their own
 // per-file frontmatter regex + parse + validation logic independently, so
 // this suite's original job was catching PARSE-logic drift between them.
 // Since then, both walks call the exact same parseMemoryFileWithReason for
@@ -45,7 +45,7 @@
 //
 // This suite does NOT assert the two walks agree on topics
 // tagged/untagged/invalid-shape classification: see
-// tests/consolidate-schema-metrics.test.ts for that parity fix (LOW #6),
+// tests/consolidate-schema-metrics.test.ts for that parity fix,
 // which is a narrower, separately-tested concern.
 
 const test = require('node:test');

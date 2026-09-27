@@ -30,7 +30,7 @@ const DEFAULT_TIMEOUT_MS = 5000;
 // Index rebuilds have no prompt to block, so they can afford to wait: a real
 // 64-input batch against Ollama measured roughly 3.5-10 s warm and 11-17 s
 // for the first batch after a cold model load (reliably the slowest) on the
-// mm-v1-T008 reference corpus, so this budget must clear that cold worst
+// reference corpus, so this budget must clear that cold worst
 // case with margin, not just the typical case.
 const INDEX_DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -58,7 +58,7 @@ function resolveEmbedTimeoutMs(fallback: number): number {
 }
 
 // Hook-only env override, precedence over the shared
-// MEMORY_ROUTER_EMBED_TIMEOUT_MS knob above. b1bbbf68: a persistent
+// MEMORY_ROUTER_EMBED_TIMEOUT_MS knob above. A persistent
 // MEMORY_ROUTER_EMBED_TIMEOUT_MS export (shell profile) meant to give
 // `memory-router index` more headroom otherwise also raised the hook's
 // per-prompt budget by the same amount, and the hook (UserPromptSubmit)

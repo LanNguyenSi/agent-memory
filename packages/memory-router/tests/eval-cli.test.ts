@@ -40,7 +40,7 @@ test("eval: exits 0 on an error-free run and prints the aggregate summary", () =
   assert.match(stdout, /semantic path: inactive/);
   assert.match(stdout, /vocabulary: built-in default/);
   // No index is built for the fixture corpus, so the semantic gate cannot
-  // have won a slot for any of the 6 prompts (mm-v1-T004 fix-round 2 LOW #8).
+  // have won a slot for any of the 6 prompts.
   assert.match(stdout, /semantic contributed: 0\/6 prompts/);
   assert.match(stdout, /precision=0\.750 recall=0\.625 mrr=0\.750\s+\(n=4\)/);
   assert.match(stdout, /negative controls: 1\/2 passed/);
@@ -172,7 +172,7 @@ test("eval --semantic: warns loudly that it is a no-op (eval always attempts the
   assert.match(stderr, /warning: --semantic is a no-op with eval/);
 });
 
-// --- HIGH fix 1: dir-threading, not the $MEMORY_ROUTER_DIR env global -----
+// --- dir-threading, not the $MEMORY_ROUTER_DIR env global -----
 
 test("eval: custom topics.yml at --dir applies even without $MEMORY_ROUTER_DIR set (ctx.memoryDir threading, not the env global)", () => {
   // tests/fixtures/vocab/{topics.yml,golden.yml,feedback_incident.md}:
@@ -182,7 +182,7 @@ test("eval: custom topics.yml at --dir applies even without $MEMORY_ROUTER_DIR s
   // ctx.memoryDir), not a stray $MEMORY_ROUTER_DIR or the built-in default.
   // Spawned with an explicitly minimal env (PATH only, same pattern as the
   // "neither --dir nor env" test above) so $MEMORY_ROUTER_DIR is genuinely
-  // absent, matching the review's literal "mit entferntem MEMORY_ROUTER_DIR".
+  // absent.
   const VOCAB_CORPUS = path.join(__dirname, "fixtures", "vocab");
   const VOCAB_GOLDEN = path.join(VOCAB_CORPUS, "golden.yml");
   const cleanEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH };

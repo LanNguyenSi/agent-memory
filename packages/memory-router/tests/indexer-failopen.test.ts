@@ -9,7 +9,7 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-failopen-'));
 }
 
-// mm-v1-T003: plain "OPENAI_API_KEY missing" no longer means "no provider
+// Plain "OPENAI_API_KEY missing" no longer means "no provider
 // configured" by itself — indexer.ts's rebuildIndex/semanticSearch now
 // auto-detect a local Ollama config in that case (see
 // tests/embed-multi-provider.test.ts). The only way resolveProviderConfig()
@@ -79,7 +79,7 @@ test('semanticSearch returns [] when index file is missing', async () => {
   }
 });
 
-// mm-v1-T003 fix-round LOW #7: the "embedding index missing" stderr
+// The "embedding index missing" stderr
 // warning is a module-level once-per-process flag, not once-per-call: a
 // long-lived caller (e.g. the MCP server) hitting semanticSearch many
 // times per session over a still-missing index must not spam stderr on

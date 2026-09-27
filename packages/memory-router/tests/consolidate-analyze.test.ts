@@ -100,7 +100,7 @@ test('runConsolidate: default repoRoots falls back to [process.cwd()] without th
   }
 });
 
-// mm-v1-T007 fix round LOW #9: empty-body memories are wired through into
+// Empty-body memories are wired through into
 // exactDupes.emptyBodies, on a dedicated ad-hoc corpus (not the shared
 // static fixture, so its scannedCount assertions elsewhere stay untouched).
 test('runConsolidate: exactDupes.emptyBodies surfaces empty/whitespace-only-body memories', () => {

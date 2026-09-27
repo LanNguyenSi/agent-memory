@@ -25,7 +25,7 @@
 //   the on-disk version row untouched.
 //
 // Embed provenance (provider/model/dimensions), added for multi-provider
-// support (mm-v1-T003):
+// support:
 //   The generic `meta` key/value table (already used for `schema_version`)
 //   also carries `embed_provider` / `embed_model` / `embed_dimensions` rows,
 //   written once (INSERT ... ON CONFLICT DO NOTHING) the first time an
@@ -231,7 +231,7 @@ interface IndexStoreOptions {
     capacity: number;
   };
   // Open the connection strictly read-only (added for
-  // src/consolidate/near-dupes.ts, mm-v1-T007 fix round HIGH #1): the
+  // src/consolidate/near-dupes.ts): the
   // underlying `better-sqlite3` connection is opened with
   // `{ readonly: true, fileMustExist: true }`, and every write path this
   // module would otherwise take at open time is skipped: the

@@ -87,7 +87,7 @@ interface ParsedArgs {
   nearThreshold: number;
 }
 
-// Full-string numeric match (mm-v1-T007 fix round LOW #8): `Number.
+// Full-string numeric match: `Number.
 // parseFloat` alone silently accepts trailing garbage ("0.5abc" -> 0.5),
 // so a typo'd --near-threshold value used to pass validation with a
 // truncated, unintended number instead of being rejected. Anchored ^...$
@@ -352,7 +352,7 @@ Commands:
   test <prompt> [--dir <path>] [--semantic] [--max-hits <n>] [--json]
     Dry-run a prompt against the OLD sync-gates-first resolver (Topic Gate
     then Tool Gate; the Confidence Gate only when --semantic is passed) —
-    NOT the score-blend resolver (resolveBlended, mm-v1-T004) the
+    NOT the score-blend resolver (resolveBlended) the
     UserPromptSubmit hook and 'eval' below actually use today. This is a
     deliberate, documented divergence: 'test' stayed on the pre-blend
     resolver to dry-run the deterministic topic/tool gates (and the
@@ -375,7 +375,7 @@ Commands:
     the semantic signal actually contributed a hit to. A REPORT, not a
     gate: exits 0 on any error-free run regardless of how the metrics look.
     Mirrors exactly what the UserPromptSubmit hook selects for each
-    prompt: the score-blend resolver (resolveBlended, mm-v1-T004) —
+    prompt: the score-blend resolver (resolveBlended) —
     semantic score (once it clears the MEMORY_ROUTER_BLEND_MIN_SEMANTIC
     relevance floor) as the dominant signal, Topic Gate as a boost,
     recency/type as tie-breakers — unlike the 'test' verb above, which
@@ -459,7 +459,7 @@ Commands:
                     read-only. Runs only when the index exists AND is
                     compatible with the currently configured embedding
                     provider (same provenance contract 'memory-router
-                    index' enforces, mm-v1-T003); missing, incompatible, or
+                    index' enforces); missing, incompatible, or
                     unreadable (a corrupted index file) is SKIPPED with an
                     explicit reason in the report, never a silent gap or a
                     crash. --near-threshold sets the cosine floor (default

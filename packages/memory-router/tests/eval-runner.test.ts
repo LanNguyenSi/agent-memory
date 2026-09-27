@@ -3,18 +3,18 @@
 // Fixture: tests/fixtures/eval/corpus/ (4 memories, one per topic:
 // destructive_ops, workflow, deployment, security) + tests/fixtures/eval/golden.yml
 // (6 prompts). No embedding index is built for the fixture corpus, so the
-// semantic component of resolveBlended (src/router.ts, mm-v1-T004) is
+// semantic component of resolveBlended (src/router.ts) is
 // provably unreachable here (semanticSearch bails out on
 // existsSync(indexPath) before ever calling the OpenAI API — see
 // src/embed/indexer.ts) — the eval measures the topic-only degradation of
 // the blend path, deterministically, with no live network calls. Which
 // memory ids fire is unaffected by the blend-score rewrite: resolveBlended
 // degrades to EXACTLY the old flat-1.0 topic-only score/order when the
-// semantic path contributes nothing (a post-hoc mm-v1-T004 fix; an earlier
+// semantic path contributes nothing (a post-hoc fix; an earlier
 // version applied topicBoost/recency/type modifiers even in this degraded
 // case, which is exactly what broke the P/R/MRR degradation baseline this
 // eval verb exists to protect). The ids asserted below are the same before
-// and after mm-v1-T004 by construction; see tests/blend.test.ts for the
+// and after the score-blend rewrite by construction; see tests/blend.test.ts for the
 // byte-identical degraded-output pin proven directly against
 // resolveBlended.
 //
@@ -95,7 +95,7 @@ test("semanticPathAvailable: false for the fixture corpus (no index built)", () 
   assert.equal(semanticPathAvailable(CORPUS_DIR), false);
 });
 
-// mm-v1-T003 fix-round HIGH #1: semanticPathAvailable now calls
+// semanticPathAvailable now calls
 // resolveProviderConfig({ autoDetectOllama: true }), mirroring
 // rebuildIndex/semanticSearch exactly (see src/embed/indexer.ts). Before
 // this fix, a machine with no OPENAI_API_KEY but an index already built
@@ -359,8 +359,7 @@ test("runGoldenEval: full run against the fixture corpus + golden set matches th
   assert.equal(report.perPrompt.length, 6);
   // No index is built for the fixture corpus (see semanticPathActive above),
   // so the confidence gate can never win a slot for any prompt: every hit
-  // in this run comes from the topic-only degraded path (mm-v1-T004
-  // fix-round 2 LOW #8).
+  // in this run comes from the topic-only degraded path.
   assert.equal(
     report.semanticContributedCount,
     0,
@@ -448,12 +447,12 @@ test("runGoldenEval: missing golden file throws (caller maps this to exit 1)", a
   );
 });
 
-// --- promptToHits dependency-pinning tests (mm-v1-T004 rewrite) ----------
+// --- promptToHits dependency-pinning tests ------------------------------
 //
 // These call promptToHits with the `deps` test seam (its 4th, test-only
 // parameter — see src/eval/runner.ts) so they exercise the real
 // promptToHits control flow without touching the real router or the
-// embedding stack. mm-v1-T004 collapsed the old two-call
+// embedding stack. The score-blend rewrite collapsed the old two-call
 // (resolve-then-maybe-resolveConfidence) shape into a single exchange
 // point, resolveBlended; these tests pin the NEW shape with the same
 // rigor the old ones pinned the old shape: exact argument list, fail-open
@@ -536,7 +535,7 @@ test("promptToHits: degrades to [] rather than propagating, when resolveBlended 
   );
 });
 
-// --- loadGoldenFile expect-dedupe (MEDIUM fix) ---------------------------
+// --- loadGoldenFile expect-dedupe ---------------------------------------
 
 test("loadGoldenFile: deduplicates a prompt's expect ids so reported expect === scored expect", () => {
   const fs = require("node:fs");
@@ -563,7 +562,7 @@ test("loadGoldenFile: deduplicates a prompt's expect ids so reported expect === 
   }
 });
 
-// --- findUnknownExpectIds (MEDIUM fix) -----------------------------------
+// --- findUnknownExpectIds -----------------------------------------------
 
 test("findUnknownExpectIds: flags golden expect ids absent from the corpus, deduped across prompts", () => {
   const memories: Memory[] = [fakeMemory("real_a"), fakeMemory("real_b")];

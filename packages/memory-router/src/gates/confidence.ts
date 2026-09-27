@@ -30,13 +30,13 @@ function confidenceThreshold(ambiguity: number): number {
   return Math.max(0, 0.85 - ambiguity * 0.35);
 }
 
-// --- Score-blend weights (mm-v1-T004) --------------------------------------
+// --- Score-blend weights ---------------------------------------------------
 //
 // resolveBlended() (src/router.ts) combines a semantic score (the dominant
 // signal, a raw cosine similarity typically in [0.3, 0.9] for a real match),
 // a Topic Gate boost, and small recency/type modifiers into one score per
 // memory. The weights below are the DEFAULTS for that blend. topicBoost and
-// candidateK were CALIBRATED in mm-v1-T008 against the reference corpus
+// candidateK were CALIBRATED against the reference corpus
 // (289 memories, 16-positive/4-negative golden set, Ollama bge-m3): a small
 // topicBoost lets the semantic signal dominate the ranking (MRR 0.648 ->
 // 0.710 vs the pre-calibration 0.15), and a candidate pool of 5 stops
@@ -46,7 +46,7 @@ function confidenceThreshold(ambiguity: number): number {
 // CONDITIONAL (see resolveDefaultMinSemanticScore below), not a single
 // flat number: raw cosine ranges are provider- and model-specific (bge-m3
 // relevance sits ~0.75-0.85 where OpenAI embeddings score far lower), and
-// mm-v1-T008's flat 0.5 default left Ollama paths effectively unfiltered
+// a flat 0.5 default left Ollama paths effectively unfiltered
 // (measured 0/4 negative controls on the bge-m3 reference corpus with no
 // override). MEMORY_ROUTER_BLEND_MIN_SEMANTIC still overrides the resolved
 // default on every path when explicitly set (0.78 is bge-m3's measured
@@ -74,7 +74,7 @@ interface BlendWeights {
   /** Max additive contribution from a memory's `type`, see TYPE_MODIFIER_UNITS. */
   typeWeight: number;
   /**
-   * Relevance floor (mm-v1-T004 fix-round 2, HIGH): a semantic-search hit
+   * Relevance floor: a semantic-search hit
    * scoring below this is dropped BEFORE it can enter the blend at all (see
    * resolveBlended in src/router.ts) — treated exactly like "the semantic
    * path found nothing for this memory", not like a weak-but-real signal.
@@ -89,11 +89,10 @@ interface BlendWeights {
    */
   minSemanticScore: number;
   /**
-   * Where minSemanticScore's value came from (agent-tasks d33f968c, review
-   * residual of mm-v1-T008/PR #97; 'provider' split out of the original
-   * 'fallback' bucket in the d33f968c fix round): 'env' when an explicit,
-   * valid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override was present, 'map' when
-   * it resolved through a specifically-calibrated OLLAMA_MODEL_FLOOR_DEFAULTS
+   * Where minSemanticScore's value came from (a review residual of PR #97;
+   * 'provider' split out of the original 'fallback' bucket): 'env' when an
+   * explicit, valid MEMORY_ROUTER_BLEND_MIN_SEMANTIC override was present,
+   * 'map' when it resolved through a specifically-calibrated OLLAMA_MODEL_FLOOR_DEFAULTS
    * entry (today only bge-m3), 'provider' for OpenAI's PROVIDER_FLOOR_
    * DEFAULTS.openai (0.5 is OpenAI's own deliberate, documented default, not
    * an uncalibrated gap), 'fallback' otherwise — the un-calibrated
@@ -119,7 +118,7 @@ interface BlendWeights {
    * How many raw semantic-search candidates resolveBlended asks for before
    * capping the final result at maxHits (see semanticK in src/router.ts,
    * which takes Math.max(maxHits, this) — never narrower than the final
-   * cap). The calibrated default (5, mm-v1-T008) deliberately sets the
+   * cap). The calibrated default (5) deliberately sets the
    * candidate pool EQUAL to the default cap: on the golden set, a wider
    * pool only let weak semantic candidates flood the final cap (P 0.238 ->
    * 0.288, R 0.453 -> 0.547 going 10 -> 5 at floor 0.77). Consequence: a
@@ -158,7 +157,7 @@ interface BlendWeights {
 // OLLAMA_MODEL_FLOOR_DEFAULTS and PROVIDER_FLOOR_DEFAULTS.ollama carry the
 // same numeric value (0.78) today, but are deliberately kept as two
 // separate slots rather than one flat "ollama default": bge-m3 is the only
-// model mm-v1-T008 specifically calibrated (separates relevance from junk
+// model specifically calibrated (separates relevance from junk
 // at ~0.77-0.79 on the reference corpus); every OTHER Ollama model,
 // including nomic-embed-text, uses the provider-level fallback instead — a
 // deliberately conservative choice, not a specific calibration.
@@ -170,7 +169,7 @@ interface BlendWeights {
 // model-specific calibration only touches OLLAMA_MODEL_FLOOR_DEFAULTS,
 // without changing this resolution shape.
 //
-// Declared ABOVE BLEND_DEFAULTS (unlike the original mm-v1-T004 file order)
+// Declared ABOVE BLEND_DEFAULTS (unlike this file's original order)
 // so PROVIDER_FLOOR_DEFAULTS.openai below is already initialized where
 // BLEND_DEFAULTS.minSemanticScore references it.
 const OLLAMA_MODEL_FLOOR_DEFAULTS: Record<string, number> = {
@@ -199,8 +198,8 @@ const BLEND_DEFAULTS: BlendWeights = {
   minSemanticScore: PROVIDER_FLOOR_DEFAULTS.openai,
   // Same "unreachable, only here because BlendWeights requires every field"
   // note applies to these two: loadBlendWeights always computes its own
-  // source/model via resolveDefaultMinSemanticScoreDetail (agent-tasks
-  // d33f968c), never reads this struct's placeholders.
+  // source/model via resolveDefaultMinSemanticScoreDetail, never reads
+  // this struct's placeholders.
   minSemanticScoreSource: 'fallback',
   minSemanticScoreModel: null,
   candidateK: 5,
@@ -220,7 +219,7 @@ const BLEND_DEFAULTS: BlendWeights = {
 // normalization is exact-string on the family name only, not a fuzzy or
 // semantic match: a pinned tag whose normalized family matches an entry
 // here still has to satisfy the index's own provenance check first
-// (mm-v1-T003, unmodified: `meta.embed_model` compared to the resolved
+// (unmodified: `meta.embed_model` compared to the resolved
 // model string exactly). Pin a tag that does not match the index's
 // provenance and the provenance check rejects the query BEFORE this floor
 // ever gets a chance to apply — 0 hits plus a mismatch warning, not a
@@ -238,8 +237,8 @@ function normalizeOllamaModelName(model: string): string {
 // model resolution the actual embedding call would use for this prompt,
 // not a stricter or looser one.
 //
-// Returns provenance (source/model) alongside the numeric value (agent-tasks
-// d33f968c): resolveBlended (src/router.ts) needs to tell "this floor is a
+// Returns provenance (source/model) alongside the numeric value:
+// resolveBlended (src/router.ts) needs to tell "this floor is a
 // specifically-calibrated map entry (bge-m3)" apart from "this floor is
 // OpenAI's own deliberate provider default (0.5, not a calibration gap)"
 // apart from "this floor is the generic, un-calibrated Ollama provider
@@ -263,7 +262,7 @@ function resolveDefaultMinSemanticScoreDetail(): {
     // run here is the normal junk-rejection outcome, not a signal the
     // operator is missing a calibration. Keeps resolveBlended's stderr hint
     // (gated on source === 'fallback', src/router.ts) from misfiring on a
-    // healthy OpenAI run (agent-tasks d33f968c fix round).
+    // healthy OpenAI run.
     return { value: PROVIDER_FLOOR_DEFAULTS.openai, source: 'provider', model: cfg?.model ?? null };
   }
   const normalized = normalizeOllamaModelName(cfg.model);
@@ -290,7 +289,7 @@ function resolveDefaultMinSemanticScore(): number {
 // weights.recencyHalfLifeDays specifically (division-by-zero/inverted-decay
 // concern there) to every MEMORY_ROUTER_BLEND_* env override.
 //
-// envFloat delegates to envFloatResolved (agent-tasks d33f968c) so
+// envFloat delegates to envFloatResolved so
 // loadBlendWeights' minSemanticScoreSource can tell "the raw override
 // string was present AND valid" apart from "absent/invalid, fell back"
 // without re-deriving that validity check a second time (single source of
@@ -343,7 +342,7 @@ function loadBlendWeights(): BlendWeights {
 }
 
 // Relative per-type units, unitless, scaled by weights.typeWeight below.
-// Left as shaped after mm-v1-T008 (typeWeight sweeps showed no golden-set
+// Left as shaped (typeWeight sweeps showed no golden-set
 // effect beyond single-tie noise, see BLEND_DEFAULTS above): `feedback`
 // memories (corrective "always/never" rules) are the most consistently
 // actionable type in the corpus today, so they get the largest nudge;

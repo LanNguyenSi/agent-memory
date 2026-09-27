@@ -5,7 +5,7 @@
 //
 // Purpose: capture a baseline of the resolver's recall/precision so a
 // retrieval change is measurable against that baseline instead of vibes.
-// mm-v1-T004 (score-blend resolver) is one such change: the pre-blend
+// The score-blend resolver is one such change: the pre-blend
 // baseline was captured before promptToHits below was retargeted at
 // resolveBlended.
 const { existsSync } = require("node:fs");
@@ -33,7 +33,7 @@ interface PromptToHitsDeps {
 
 /**
  * Single source of truth for "which memories does this prompt select
- * today". mm-v1-T004: mirrors src/hooks/user-prompt-submit.ts EXACTLY —
+ * today". Mirrors src/hooks/user-prompt-submit.ts EXACTLY —
  * one call to resolveBlended(ctx, memories, dir), no opts object (so the
  * router's own default maxHits, 5, applies exactly as the hook's call
  * does), wrapped in the same defensive try/catch the hook has around its
@@ -250,8 +250,7 @@ export interface EvalReport {
    * prompts (see formatEvalReportText's "semantic contributed: N/M
    * prompts" line). Distinct from `semanticPathActive` above, which only
    * proves an index + provider are CONFIGURED, not that the semantic
-   * signal actually won a slot for any given prompt — mm-v1-T004
-   * fix-round 2 LOW #8.
+   * signal actually won a slot for any given prompt.
    */
   semanticContributedCount: number;
 }

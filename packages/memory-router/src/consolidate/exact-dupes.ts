@@ -13,7 +13,7 @@
 // stemming): the goal is to catch true byte-for-byte-modulo-whitespace
 // copies, not paraphrases (that's what the near-dupe cosine pass is for).
 //
-// Empty/whitespace-only bodies (mm-v1-T007 fix round LOW #9) are excluded
+// Empty/whitespace-only bodies are excluded
 // from grouping entirely: two memories that both happen to have no body
 // text share nothing meaningful, and would otherwise collapse into a
 // false-positive "dupe group" whose only common trait is being empty.

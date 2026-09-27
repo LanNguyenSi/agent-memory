@@ -1,5 +1,5 @@
 // CLI-level exit-code contract for `memory-router lint <dir>` (unknown-topics
-// path, the default check when no flag narrows it). mm-v1-T002 added
+// path, the default check when no flag narrows it). Lint added
 // report.vocabularyError for a rejected topics.yml but never wired it into
 // the exit code, so a CI step that only checks the exit code missed a broken
 // vocabulary whenever the fallback scan itself found no unknown-topic hits.

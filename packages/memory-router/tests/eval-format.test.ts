@@ -104,7 +104,7 @@ test("formatEvalReportText: header lines report golden path, corpus size, semant
   assert.match(text, /vocabulary: built-in default/);
 });
 
-test("formatEvalReportText: reports how many prompts the semantic gate actually contributed to, out of the total (mm-v1-T004 fix-round 2 LOW #8)", () => {
+test("formatEvalReportText: reports how many prompts the semantic gate actually contributed to, out of the total", () => {
   const report = buildReport();
   report.semanticContributedCount = 1;
   const text = formatEvalReportText(report);
@@ -125,7 +125,7 @@ test("formatEvalReportText: vocabulary line reflects a custom source verbatim", 
   assert.match(text, /vocabulary: custom \(\/tmp\/corpus\/topics\.yml\)/);
 });
 
-test("formatEvalReportText: semantic path active renders a configured-not-probed message (mm-v1-T003 fix-round HIGH #1)", () => {
+test("formatEvalReportText: semantic path active renders a configured-not-probed message", () => {
   const report = buildReport();
   report.semanticPathActive = true;
   const text = formatEvalReportText(report);
