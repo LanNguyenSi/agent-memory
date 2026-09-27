@@ -10,8 +10,8 @@
   dimension check, `search()`'s dimension check on a cache hit, the
   wrapped embed failure), states that the `resolveBlended` and
   `test --semantic` catches return the same hits as the unconfigured case
-  but write the full error text to stderr, adds the index-whose-entries-
-  were-all-removed silent path, and separates the `semanticSearch` callers
+  but write the full error text to stderr, adds the silent path for an
+  index whose entries were all removed, and separates the `semanticSearch` callers
   from the other `openIndex()` callers. This corrects the previous entry's
   "all five silent-`[]` paths" wording, which was not complete.
   `score-blend-resolver.md`: degraded-output and hint-exclusion prose

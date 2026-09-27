@@ -55,7 +55,7 @@ query that itself returns no rows:
 |---|---|---|---|
 | 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:208-209` | none |
 | 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:211-220` | one line per process (`missingIndexWarned`, `packages/memory-router/src/embed/indexer.ts:213-214`) |
-| 3 | Index exists but nothing has ever been embedded into it | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:784` | none |
+| 3 | Index exists, nothing has ever been embedded into it, and no width is recorded yet (see the `lint --conflicts --semantic` note below) | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:784` | none |
 | 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:156-161`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:616-621`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
 | 5 | The `k` nearest-neighbor rows the KNN query returned all carry a different model tag (or a pre-v2 `NULL` tag) than the caller's model | model filter runs after the KNN `LIMIT k`, `packages/memory-router/src/embed/index-store.ts:790-802` | see below |
 | 6 | A returned hit's `id` is not in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:265-275` | none |
@@ -162,7 +162,15 @@ writing:
 - `lint --conflicts --semantic`
   (`packages/memory-router/src/lint/conflicts.ts:489`) opens the index
   without `opts.meta`, so the provider-mismatch and legacy-provenance
-  checks, both conditioned on `opts.meta`, do not run for it.
+  checks, both conditioned on `opts.meta`, do not run for it. It opens the
+  index writable with the fixed `EMBED_DIMENSIONS` hint (1536,
+  `packages/memory-router/src/embed/indexer.ts:23`). On an index with no
+  recorded width, that open creates the vector table at 1536 and records
+  1536 as the index width (`packages/memory-router/src/embed/index-store.ts:487`,
+  `:505-507`), so a later `semanticSearch()` no longer takes row 3: under a
+  1536-wide model it returns `[]` through the KNN path, under any other
+  width it throws the dimension mismatch described above. An `openIndex()`
+  throw at this call site is not caught there.
 - The consolidate near-duplicate pass
   (`packages/memory-router/src/consolidate/near-dupes.ts:141-157`) opens it
   read-only with `opts.meta`, catches an `openIndex()` throw, and reports
