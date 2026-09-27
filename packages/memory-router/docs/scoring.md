@@ -3,14 +3,14 @@
 Deep-dive reference for the score-blend resolver's calibration history,
 the model-conditional relevance floor, and the embedding provider
 options. See the README's [How it works](../README.md#how-it-works) for
-the resolver's core mechanics and [Calibration](../README.md#calibration-mm-v1-t008)
+the resolver's core mechanics and [Calibration](../README.md#calibration)
 for the headline defaults this document backs.
 
 ## Signals in the blend
 
 | Signal | What it is | Role in the blend |
 |------|--------|---------------|
-| **Semantic score** | sqlite-vec cosine similarity between the prompt and each memory's embedding | The dominant signal, when an embedding index + provider are available. A score below the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, model/provider-conditional default, see [Calibration](../README.md#calibration-mm-v1-t008)) is dropped before it can enter the blend at all |
+| **Semantic score** | sqlite-vec cosine similarity between the prompt and each memory's embedding | The dominant signal, when an embedding index + provider are available. A score below the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, model/provider-conditional default, see [Calibration](../README.md#calibration)) is dropped before it can enter the blend at all |
 | **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory, not a standalone full-score hit |
 | **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
 | **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker |
@@ -254,7 +254,7 @@ serve` (or use the app) before `memory-router index`/normal hook usage.
 hook's confidence-gate path, the MCP `memory-search` tool, the eval
 runner) defaults to a tight 5s (it must never block a prompt for long)
 while `memory-router index`'s rebuild defaults to a much more generous
-60s per batch, because a real 64-input Ollama batch on the mm-v1-T008
+60s per batch, because a real 64-input Ollama batch on the calibration
 reference corpus measured roughly 3.5-10s warm and 11-17s for the first
 batch after a cold model load, which used to blow past the old shared 5s
 budget. `MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS` decouples the two: it

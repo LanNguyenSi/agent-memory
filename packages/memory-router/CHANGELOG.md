@@ -10,6 +10,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `eval --json`'s help text pointed the JSON schema pointer at `README.md`, which no longer holds that section after the docs restructure. It now links the "`memory-router eval` metric definitions and JSON schema" section of `docs/commands.md` by its GitHub URL, since `docs/` is not part of the published npm package.
 
+### Changed
+
+- README's "Calibration" heading no longer carries a task-tracker id in its title or generated anchor. The floor-drop runtime stderr hint in `src/router.ts` now points readers at `README.md#calibration` instead of the old `#calibration-mm-v1-t008` anchor; the pinning test in `tests/floor-drop-hint.test.ts` and the anchor references in `docs/scoring.md` were updated to match. No calibration values or logic changed.
+
 ## [0.7.1] - 2026-09-10
 
 ### Changed

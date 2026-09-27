@@ -382,7 +382,7 @@ test('resolveBlended: uncalibrated fallback floor with all semantic candidates b
       assert.equal(first.stderr.length, 1, 'expected exactly one stderr write on the first call');
       assert.equal(
         first.stderr[0],
-        'memory-router: uncalibrated relevance floor 0.78 for model "all-minilm:latest" dropped all 2 semantic candidate(s) this run; set MEMORY_ROUTER_BLEND_MIN_SEMANTIC to override, or calibrate a floor for this model, see README "Calibration" (#calibration-mm-v1-t008).\n',
+        'memory-router: uncalibrated relevance floor 0.78 for model "all-minilm:latest" dropped all 2 semantic candidate(s) this run; set MEMORY_ROUTER_BLEND_MIN_SEMANTIC to override, or calibrate a floor for this model, see README "Calibration" (#calibration).\n',
         'expected the raw whitespace/control byte stripped from the model name, the :latest tag suffix kept',
       );
 

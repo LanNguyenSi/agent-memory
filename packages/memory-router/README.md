@@ -123,7 +123,7 @@ rather than sequential gates, the calibration measurement history, the
 model-conditional relevance floor table, and the embedding provider
 reference (selection, overrides, timeout budgets, query cache).
 
-### Calibration (mm-v1-T008)
+### Calibration
 
 The default `topicBoost` (0.05) and `candidateK` (5) come from a
 2026-08-14 calibration run on the reference corpus (289 memories,
