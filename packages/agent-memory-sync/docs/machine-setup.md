@@ -9,9 +9,10 @@ This document wires together the pieces already documented individually
 - **MacBook** (and any further machines) — fallbacks. They push debounced
   snapshots via `watch` and pull periodically via a scheduled `run --mode
   sync` (see below — **both are required**, not just `watch`).
-- **All machines share ONE remote tree, via `repositorySubdir` — not via the
-  profile name.** Every committed profile (`profiles/*.json`) sets
-  `"repositorySubdir": "pandora"`, identically. This is the only config
+- **All machines share ONE remote tree, via `repositorySubdir`, not via the
+  profile name.** Every profile under `profiles/` (the committed
+  `*.example.json` templates, and every machine's real, local-only profile
+  alike) sets `"repositorySubdir": "pandora"`, identically. This is the only config
   field that determines where in the bare repo a machine's files land (see
   `toRepositoryRelativePath` in `src/memory-sync/config.ts`); the `"profile"`
   field is a completely separate, purely local setting (see (b) below). An
@@ -105,13 +106,125 @@ This document wires together the pieces already documented individually
   `run --mode pull` manually. Both `watch` **and** the periodic sync job
   must be running on every fallback machine.
 
-Machine-specific values (paths, SSH alias) are committed as profile files
-under `profiles/`: `profiles/macbook.json`, `profiles/mac-mini.json`,
-`profiles/linux.json` (the Linux desktop set up via (c) below), and a
-template for further machines, `profiles/linux.example.json`. Each profile
-file documents its own placeholders and the namespace-divergence gotcha
-in its `"//"` field — read the profile you're activating before copying
-commands from here.
+Machine-specific values (paths, SSH alias) live in profile files under
+`profiles/`. Only the templates are committed: `profiles/mac-mini.example.json`,
+`profiles/macbook.example.json`, and `profiles/linux.example.json` (the
+generic template for a further machine, e.g. the Linux desktop set up via
+(c) below). Each machine's own real, filled-in profile
+(`profiles/mac-mini.json`, `profiles/macbook.json`, `profiles/linux.json`, ...)
+is local-only, never committed. See "Real per-machine profiles are
+local-only" below for why and how to set one up. Each template documents
+its own placeholders and the namespace-divergence gotcha in its `"//"`
+field: read the template you're activating from before copying commands
+from here.
+
+### Real per-machine profiles are local-only
+
+A filled-in profile carries this machine's real home path, OS user name and
+Claude Code workspace slug, exactly the kind of machine-specific data that
+should never sit in a shared, committed repository. `packages/agent-memory-sync/.gitignore`
+ignores every `profiles/*.json` file except the `*.example.json` templates,
+so `profiles/mac-mini.json`, `profiles/macbook.json`, `profiles/linux.json`
+(or any further machine's real profile) exist only on the machine they
+belong to.
+
+**Setting up a machine's real profile:** copy the matching template, e.g.
+`cp profiles/mac-mini.example.json profiles/mac-mini.json`, and replace
+every placeholder inside it (`<user>`, `<claude-code-slug-for-this-machine>`,
+...) with this machine's real values, exactly as the template's own `"//"`
+field instructs. The result stays at the same `profiles/<name>.json` path the
+Activation commands below already use; nothing about `--config` or the
+`[profile]` positional argument changes.
+
+**Migration for a machine that already has a real profile committed from
+before this change:** the next `git pull` on this repository removes
+`profiles/mac-mini.json`/`profiles/macbook.json`/`profiles/linux.json` from
+the tracked tree (they are being untracked, not merely edited), and a plain
+`git pull` deletes a tracked file's working-tree copy along with it. Run
+every command of this migration, including the recovery block further down,
+from the `packages/agent-memory-sync` directory of this machine's checkout:
+the `profiles/...` paths below are relative to it. Replace `mac-mini` with
+this machine's profile name (`macbook`, `linux`, or any further machine's).
+
+1. **Stop the periodic sync job/timer, pause `watch`, and pause any other
+   automation that pulls this checkout** (see "Behavior during the removal
+   window itself" below for why). How depends on how the machine runs them:
+   the launchd agents or systemd units set up in (b)/(c).
+2. Copy the machine's current real profile somewhere safe, outside the
+   checkout:
+
+   ```bash
+   cp profiles/mac-mini.json /tmp/mac-mini.json.bak
+   ```
+
+3. Pull, then copy the profile back to the exact same path:
+
+   ```bash
+   git pull
+   cp /tmp/mac-mini.json.bak profiles/mac-mini.json
+   ```
+
+4. Restart the periodic sync job and `watch`.
+
+That path is now git-ignored, so a future `git pull` never touches it again.
+The running `watch`/periodic-sync launchd or systemd unit needs no change at
+all: it already invokes the CLI with `--config /absolute/path/to/profiles/<name>.json`
+(or the equivalent `AGENT_MEMORY_SYNC_CONFIG` environment line), an absolute
+path that resolves exactly the same file before and after this migration
+step.
+
+**If a machine's backup copy was lost, recover it from git history, not
+from the `*.example.json` template.** A committed real profile can carry
+values that differ from a freshly-filled-in template's placeholders and
+defaults: a `profile` chosen for that machine specifically, a customized
+`stateDir`, a `reachabilityTimeoutMs` tuned away from the default, and so
+on (a WSL/Linux machine's committed profile, for instance, used `"profile":
+"linux"` and `"stateDir": "~/.agent-memory-sync/linux"` with
+`"reachabilityTimeoutMs": 10000`, while `linux.example.json` derives
+`profile`/`stateDir` from `<linux-hostname>` and defaults
+`reachabilityTimeoutMs` to `5000`). Re-filling from the template silently
+replaces every one of those with a generic value instead of this machine's
+actual, previously-working one. Recover the real values instead, still from
+`packages/agent-memory-sync`:
+
+```bash
+# Find the commit that removed profiles/mac-mini.json from the tracked tree.
+# The pathspec is relative to this directory; the first result is that
+# removal, and its parent still has the file tracked:
+git log --diff-filter=D --oneline -- profiles/mac-mini.json
+
+# Write that machine's config exactly as it was tracked, one commit before
+# the removal. The path after the colon is relative to the repository root,
+# the redirect target relative to this directory:
+git show <that-commit>^:packages/agent-memory-sync/profiles/mac-mini.json > profiles/mac-mini.json
+```
+
+This restores `profile`, `stateDir`, `reachabilityTimeoutMs` and everything
+else exactly as this machine was already running, rather than whatever a
+fresh template copy would default to; these three values must keep their
+previous values, and nothing else on that machine needs to change.
+
+**Behavior during the removal window itself.** A `watch` process already
+running when `git pull` removes the tracked profile keeps working fine
+through the whole window: it loaded its config once at startup and never
+re-reads the file from disk on a tick (`watch`'s action in
+`src/commands/watch.ts` calls `loadConfig` and resolves the run config once,
+before it starts the file watcher). What is at risk is any OTHER invocation
+that starts fresh during that same window instead (a periodic
+`run --mode sync` tick firing on its schedule, or a `watch` restart after a
+crash, a reboot, or an operator reloading the launchd/systemd unit), since
+that process loads its `--config`/`AGENT_MEMORY_SYNC_CONFIG` file from
+scratch and the profile is, for that moment, not there. It now fails clearly
+and immediately: exit `3`, naming the missing path
+(`config file '<path>' does not exist. ...`; every command that actually
+syncs, namely `run`, `watch` and `restore`, refuses a missing,
+explicitly-named config path this way, see the CHANGELOG). Before this fix,
+the same window instead loaded silently on bare defaults and only failed
+once it reached the remote-URL check, with a message that pointed at the
+wrong problem: `remote URL is not configured. Set 'remoteUrl' in the config
+file or pass --remote.`, with the same exit code (`3`), so existing
+exit-code-based alerting for a scheduled job still fires either way; only
+the message text is clearer now. Step 1 above avoids the window entirely.
 
 ## a) Bootstrap the bare repo on the mini
 
@@ -124,12 +237,12 @@ ssh mini 'mkdir -p ~/memory-sync && git init --bare --initial-branch=main ~/memo
 
 This creates the empty bare repository every other machine's `remoteUrl`
 points at over ssh (`mini:~/memory-sync/pandora-memory.git` in
-macbook.json/linux.example.json — see the scp-like syntax note there). The
-mini's own profile (mac-mini.json) points `remoteUrl` at the same
+macbook.example.json/linux.example.json; see the scp-like syntax note there). The
+mini's own profile template (mac-mini.example.json) points `remoteUrl` at the same
 repository's plain local filesystem path instead
 (`/Users/<user>/memory-sync/pandora-memory.git`), since it runs on the
 mini itself and doesn't need to loop back through ssh to reach its own
-bare repo — see that profile's `"//"` field for the full reasoning. Nothing
+bare repo; see that template's `"//"` field for the full reasoning. Nothing
 else is required server-side — `agent-memory-sync` pushes plain commits
 over ordinary `git push`/`git fetch`/`git ls-remote`; there is no
 server-side hook or service to install.
@@ -176,20 +289,30 @@ What that override does and does not affect is more subtle than it looks —
 see the next paragraph before assuming it controls where state files land.
 
 **What the profile name actually controls — and what it does not.** The
-`"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) is, in
-general, only a fallback: `resolveRunConfig()` derives a default `stateDir`
-of `.agent-memory-sync/<profile>` (relative to `rootDir`) *when `stateDir`
-is not set explicitly*. Every committed profile under `profiles/` sets
-`stateDir` explicitly (a machine-specific absolute path outside `rootDir`;
-see any profile's `"//"` field for why), so `"profile"` currently has **no
-effect on any file path at all** for these profiles — it only ends up
-recorded as a cosmetic label inside that machine's own `state.json`
-(`StateStore.loadState()`'s default `profile` field) and echoed in a run's
-JSON/text output. Passing it on the command line anyway (see the CLI
-snippets below) keeps invocations self-documenting and that label correct;
-it is not load-bearing for path resolution here. Either way it has **no
-effect on the remote** and is safe to differ, or even coincide, across
-machines. The field that must be identical everywhere for machines to
+`"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) is,
+for `stateDir` specifically, only a fallback: `resolveRunConfig()` derives a
+default `stateDir` of `.agent-memory-sync/<profile>` (relative to `rootDir`)
+*when `stateDir` is not set explicitly*. Every profile under `profiles/`
+(template and real alike) sets `stateDir` explicitly (a machine-specific
+absolute path outside `rootDir`; see any profile's `"//"` field for why), so
+`"profile"` has no effect on `stateDir`, or on any other file path, for
+these profiles. It is NOT merely a cosmetic label, though: `collectLocalSyncFiles`'
+push-side `ownerScoped` filter (`src/memory-sync/config.ts`) derives the
+owner filename for the `machine-state`/`frictions` entries from this same
+field: push only ever offers `<profile>.json` under an `ownerScoped`
+directory, so `"profile"` must equal this machine's own filename there
+(`mac-mini.json`, `macbook.json`, ...) or push silently (now: with a
+visible warning instead) finds no matching owner file and publishes no
+`machine-state`/`frictions` state for that run. Passing it on the command
+line (see the CLI snippets below, and note the CLI's `[profile]` positional
+argument overrides the config file's field, so a mismatched or omitted
+positional is the more common way to trigger this) keeps that filter
+correct as well as the run self-documenting; it is load-bearing for push
+here, just not for `stateDir`/path resolution. See any mac-mini/macbook
+profile's `"//"` field for the full paragraph this summarizes. Either way it
+has **no effect on the remote** and is safe to differ, or even coincide,
+across machines for that reason alone. The field that must be identical
+everywhere for machines to
 actually see each other's changes is `repositorySubdir` — see the shared
 remote tree bullet at the top of this document. Committing a profile with
 a machine-specific `repositorySubdir` (as an earlier version of these
@@ -447,11 +570,12 @@ bullet at the top of this document.
 
 ## e) machine-state payload (toolchain snapshots)
 
-Every committed machine profile (`profiles/mac-mini.json`,
-`profiles/macbook.json`, `profiles/linux.json`), and the template,
-`profiles/linux.example.json`, carries a **second, independent**
-`syncPaths` entry alongside the `memory` one described at the top of this
-document:
+Every machine profile, each machine's real, local-only
+`profiles/mac-mini.json`/`profiles/macbook.json`/`profiles/linux.json`, and
+the committed templates they were copied from (`profiles/mac-mini.example.json`,
+`profiles/macbook.example.json`, `profiles/linux.example.json`), carries a
+**second, independent** `syncPaths` entry alongside the `memory` one
+described at the top of this document:
 
 ```json
 { "source": "/Users/<user>/.harness/machine-state", "destination": "machine-state", "kind": "directory", "ownerScoped": true }
@@ -532,8 +656,10 @@ exist ahead of any sync.
 
 ## f) frictions payload (friction-log exports)
 
-Every committed profile (`profiles/mac-mini.json`, `profiles/macbook.json`,
-`profiles/linux.json`, `profiles/linux.example.json`) also carries an
+Every machine profile, real, local-only profiles and the committed
+templates alike (`profiles/mac-mini.json`, `profiles/macbook.json`,
+`profiles/linux.json`, `profiles/mac-mini.example.json`,
+`profiles/macbook.example.json`, `profiles/linux.example.json`), also carries an
 **independent** `syncPaths` entry pointing at `~/.harness/frictions` — the
 third entry in every one of them, after `memory` and `machine-state` (see
 (e) above; the template carries a placeholder `machine-state` entry too, so

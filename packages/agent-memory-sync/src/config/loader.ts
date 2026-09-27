@@ -152,9 +152,35 @@ function defaultConfigPath(): string {
   return path.join(baseDir, "agent-memory-sync", "config.json");
 }
 
-async function loadConfig(overridePath?: string): Promise<LoadedConfig> {
+// `options.requireExisting` is what `run`/`watch`/`restore` pass (every
+// command that actually syncs, as opposed to merely inspecting or writing
+// local configuration): with it set, a config path the caller explicitly
+// named (via `overridePath`, the CLI's --config flag, or the
+// AGENT_MEMORY_SYNC_CONFIG environment variable, checked the same way
+// resolveConfigPath itself prioritizes them) that does not exist on disk is
+// a CliError naming the missing path, instead of the silent {} fallback
+// below. That fallback stays exactly as before for every other caller
+// (`config show`, and this same function used without the option): a
+// machine with no config file at all, and no explicit path or env var
+// pointing at one, is expected to run on defaults. `config get` and
+// `config set` read through readPersistedConfig, which has its own
+// permissive fallback, so `config set` can still create a brand-new file at
+// a path that does not exist yet.
+async function loadConfig(
+  overridePath?: string,
+  options: { requireExisting?: boolean } = {}
+): Promise<LoadedConfig> {
   const configPath = resolveConfigPath(overridePath);
   if (!existsSync(configPath)) {
+    if (options.requireExisting && (overridePath || process.env.AGENT_MEMORY_SYNC_CONFIG)) {
+      throw new CliError(
+        `config file '${configPath}' does not exist. Restore the file (see docs/machine-setup.md, ` +
+          "section 'Real per-machine profiles are local-only'), or pass an existing --config path " +
+          "or unset AGENT_MEMORY_SYNC_CONFIG.",
+        3
+      );
+    }
+
     return {
       path: configPath,
       settings: {}

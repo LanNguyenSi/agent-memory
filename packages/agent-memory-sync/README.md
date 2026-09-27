@@ -80,7 +80,7 @@ second copy.
 | `0` | Success, including a tick that queued locally because the remote was unreachable. | Nothing. |
 | `1` | An unrecognized flag or argument, or another commander-level usage error (the parser exits before any command code runs). | Fix the invocation; `--help` on the subcommand lists what it accepts. |
 | `2` | A flag combination or value this command rejects: `--accept-mass-delete` together with `--allow-mass-delete`, an invalid `--mode`, a destination `restore` without `--yes`, a malformed sha or cron expression. | Fix the invocation. |
-| `3` | Configuration error: an unsupported key, or a config value that is present but invalid. For a supported key that simply has no value persisted yet, see `11` below. Also a local sync path (or an operator-typed `--path`) whose name contains a literal backslash on a non-win32 platform, naming the path; see [Sync behavior](docs/sync-behavior.md). | Fix the config file or the flag; for a backslash name, rename the file. |
+| `3` | Configuration error: an unsupported key, or a config value that is present but invalid. For a supported key that simply has no value persisted yet, see `11` below. Also a local sync path (or an operator-typed `--path`) whose name contains a literal backslash on a non-win32 platform, naming the path; see [Sync behavior](docs/sync-behavior.md). Also, for `run`, `watch` and `restore`, a config file named explicitly by `--config` or `AGENT_MEMORY_SYNC_CONFIG` that does not exist, naming the path. | Fix the config file or the flag; for a backslash name, rename the file; for a missing config file, restore the file or correct the path (see [Real per-machine profiles are local-only](docs/machine-setup.md#real-per-machine-profiles-are-local-only)). |
 | `4` | A git or remote operation failed. | Read the message; a push/fetch failure is queued instead of exiting, so this is usually a local git problem. |
 | `5` | A push plan was refused by the mass-delete guard: it would remove more of a destination, or of the plan as a whole, than the thresholds allow. | Check whether the local workspace was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. |
 | `6` | The replay queue has been failing to drain for longer than `queueEscalationThresholdMs`. | The remote is probably misconfigured rather than temporarily offline; check `remoteUrl`, `branch` and `repositorySubdir`. |
@@ -131,7 +131,7 @@ falling back to `~/.config/agent-memory-sync/config.json` when
 
 ```json
 {
-  "rootDir": "/home/user/agent-workspace",
+  "rootDir": "/home/<user>/agent-workspace",
   "remoteUrl": "/srv/git/agent-memory.git",
   "branch": "main",
   "repositorySubdir": "shared",
@@ -153,9 +153,11 @@ falling back to `~/.config/agent-memory-sync/config.json` when
 ```
 
 For a real multi-machine setup (Mac mini as source of truth, MacBook/Linux
-as fallbacks) see the committed profiles under
+as fallbacks) see the committed profile templates under
 [`profiles/`](profiles/) and [docs/machine-setup.md](docs/machine-setup.md)
-instead of hand-writing a config file from scratch.
+instead of hand-writing a config file from scratch. Each machine's actual,
+filled-in profile is local-only and git-ignored. See
+docs/machine-setup.md's "Real per-machine profiles are local-only" section.
 
 Config keys can be overridden via environment variables prefixed with
 `AGENT_MEMORY_SYNC_` (e.g. `AGENT_MEMORY_SYNC_REMOTE_URL`,

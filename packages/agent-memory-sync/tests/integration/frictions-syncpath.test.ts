@@ -1,8 +1,8 @@
 // Pins the frictions syncPaths convention (agent-tasks 343d5a8f: "agent-memory-sync:
 // frictions syncPaths-Eintrag in allen Maschinen-Profilen"): a third,
 // independent directory-kind syncPaths entry whose `source` is an ABSOLUTE
-// path OUTSIDE rootDir — mirroring profiles/mac-mini.json, profiles/macbook.json,
-// and profiles/linux.example.json's real frictions entry, which points at
+// path OUTSIDE rootDir, mirroring profiles/mac-mini.example.json, profiles/macbook.example.json,
+// and profiles/linux.example.json's frictions entry, which points at
 // ~/.harness/frictions rather than anywhere under the Claude Code memory
 // rootDir. This is the exact PR-#64 machine-state-syncpath pattern (see
 // tests/integration/machine-state-syncpath.test.ts) applied to the frictions

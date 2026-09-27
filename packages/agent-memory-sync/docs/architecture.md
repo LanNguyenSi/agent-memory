@@ -29,7 +29,7 @@ agent-memory-sync/
 │   ├── helpers/           # Shared test helpers
 │   ├── integration/       # Integration tests
 │   └── unit/              # Unit tests
-├── profiles/              # Committed per-machine configs (mac mini, MacBook, Linux)
+├── profiles/              # Per-machine configs (mac mini, MacBook, Linux); only *.example.json templates are committed, real profiles are local-only
 ├── docs/
 │   ├── architecture.md
 │   ├── ways-of-working.md

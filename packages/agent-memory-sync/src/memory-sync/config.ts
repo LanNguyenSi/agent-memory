@@ -9,7 +9,7 @@ interface SyncPathConfig {
   required?: boolean;
   // Marks a directory-kind entry as machine-exclusive (one owner file per
   // machine, named `<profile>.json` — the machine-state/frictions
-  // convention documented in profiles/linux.json). Absent/false is the
+  // convention documented in profiles/linux.example.json). Absent/false is the
   // pre-existing behavior (every file under the directory is offered).
   // See collectLocalSyncFiles' `options.ownerFilter` below: this field only
   // takes effect there, i.e. only for the PUSH collection, never for pull.

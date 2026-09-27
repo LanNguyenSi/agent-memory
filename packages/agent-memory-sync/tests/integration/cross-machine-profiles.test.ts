@@ -1,6 +1,6 @@
 // Pins the exact cross-machine scenario an orchestrator-run live E2E test
-// (real bare repo on the mac mini) caught broken: profiles/macbook.json and
-// profiles/mac-mini.json each wrote to their OWN top-level tree in the
+// (real bare repo on the mac mini) caught broken: profiles/macbook.example.json
+// and profiles/mac-mini.example.json each wrote to their OWN top-level tree in the
 // remote repo (repositorySubdir defaulted/was set per machine), so neither
 // machine ever saw the other's pushes — a mini `pull` after a MacBook
 // `push` reported applied=0. Separately, the profiles' syncPaths were
@@ -8,33 +8,35 @@
 // logs/ directories) that never covered the real memory directory's ~236
 // flat .md files, so even a same-tree push would have missed most content.
 //
-// This test loads the ACTUAL committed profile files (profiles/macbook.json,
-// profiles/mac-mini.json), so a regression in repositorySubdir (e.g.
+// This test loads the committed profile TEMPLATES (profiles/macbook.example.json,
+// profiles/mac-mini.example.json). The real, filled-in profiles a machine
+// actually runs from are local-only and git-ignored, see
+// docs/machine-setup.md's "Real per-machine profiles are local-only"
+// section, so a regression in repositorySubdir (e.g.
 // reintroducing a per-machine value) or in syncPaths shape (e.g. narrowing
 // back to named files/dirs, dropping an entry, changing 'kind'/'ownerScoped')
 // fails this test — everything about every syncPaths entry is taken from the
-// real files verbatim EXCEPT one field on the two entries whose 'source' is a
-// hardcoded machine-absolute path (machine-state, frictions; e.g.
-// mac-mini.json's "/Users/lannguyensi/.harness/machine-state").
+// template files verbatim EXCEPT one field on the two entries whose 'source' is a
+// placeholder machine-absolute path (machine-state, frictions; e.g.
+// mac-mini.example.json's "/Users/<user>/.harness/machine-state").
 //
 // Those two sources get remapped (remapAbsoluteSyncPathsIntoSandbox below)
 // into per-machine fake-$HOME directories under this test's own sandbox
 // before the CLI ever runs, and assertSyncPathSourcesWithinSandbox asserts
 // every syncPaths source — absolute sources directly, the "." memory
 // entry's relative source resolved against the sandboxed rootDir — actually
-// lands under the sandbox root before any sync executes. Without this, the
-// test is not hermetic: it silently reads/writes whatever
-// machine-state/frictions.json content happens to exist under the REAL
-// path baked into the committed profile (agent-tasks 112a0864) — on a
-// machine whose home genuinely is /Users/lannguyensi (e.g. the mini
-// itself), that is live operational content (measured: an unmodified run
-// of this file copies the real ~/.harness/machine-state/mac-mini.json and
-// ~/.harness/frictions/mac-mini.json verbatim into an uncleaned bare git
-// repo under the OS tmpdir). On a machine whose home is something else
-// (e.g. the MacBook, /Users/lan), the mini profile's hardcoded
-// /Users/lannguyensi/... source instead makes a pull step try to mkdir a
-// path outside any real home the current user can write to — the EACCES
-// this whole task starts from. Remapping removes both failure modes.
+// lands under the sandbox root before any sync executes. This guards against
+// two failure modes a REAL, filled-in profile (as opposed to the placeholder
+// template this test actually loads) would otherwise hit if someone pointed
+// this test at one directly: on a machine whose home genuinely matches a
+// real filled-in profile's hardcoded source, an unmapped run would silently
+// read/write whatever machine-state/frictions content already exists under
+// that real path (a live incident once did exactly this, copying real
+// operational files verbatim into an uncleaned bare git repo under the OS
+// tmpdir); on a machine whose home differs, that same hardcoded source
+// instead makes a pull step try to mkdir a path outside any real home the
+// current user can write to (EACCES). Remapping removes both failure modes
+// regardless of which profile (template or real) is ever loaded here.
 //
 // rootDir/stateDir/remoteUrl get the same treatment for a related but
 // distinct reason: nothing in the CLI reads them from the derived config
@@ -93,15 +95,26 @@ const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 // every test below iterate over fewer (or zero) files and report green
 // instead of catching the loss. The non-vacuity guard below restores that
 // detection while still auto-picking-up any future profile: it requires
-// at least the 4 known files to be present, by name, on every call.
+// at least the 3 known template files to be present, by name, on every
+// call. Only the *.example.json templates are committed; a machine's
+// real, filled-in profile is local-only and git-ignored (see
+// docs/machine-setup.md's "Real per-machine profiles are local-only"
+// section). readdirSync itself lists whatever is actually on disk,
+// including a real, filled-in profile a developer's own machine happens to
+// have sitting in this checkout (e.g. mac-mini.json copied from the
+// template): it is the filesystem, not git, so it does not know or care
+// what is tracked. The filter below is what keeps that real profile out of
+// this listing, so a local run over a machine with one already set up
+// matches CI (which never has one) instead of quietly picking up extra,
+// real, filled-in profiles this test was never meant to load.
 function listProfileFiles(): string[] {
   const files = readdirSync(PROFILES_DIR)
-    .filter((name: string) => name.endsWith(".json"))
+    .filter((name: string) => name.endsWith(".example.json"))
     .sort();
 
-  const knownProfiles = ["macbook.json", "mac-mini.json", "linux.json", "linux.example.json"];
+  const knownProfiles = ["mac-mini.example.json", "macbook.example.json", "linux.example.json"];
   assert.ok(
-    files.length >= 4,
+    files.length >= 3,
     `profiles/ must contain at least the ${knownProfiles.length} known machine profiles, found ${files.length}: ${JSON.stringify(files)} (PROFILES_DIR: ${PROFILES_DIR})`
   );
   const missing = knownProfiles.filter((name) => !files.includes(name));
@@ -172,9 +185,9 @@ function machineArgs(
   ];
 }
 
-// The only two syncPaths destinations any committed profile gives a
-// hardcoded machine-absolute 'source' (see profiles/mac-mini.json /
-// macbook.json / linux.json's "/Users/<user>/.harness/{machine-state,
+// The only two syncPaths destinations any committed profile template gives a
+// hardcoded machine-absolute 'source' (see profiles/mac-mini.example.json /
+// macbook.example.json / linux.example.json's "/Users/<user>/.harness/{machine-state,
 // frictions}" entries, pinned unmodified by the second test below). Every
 // other entry (the "." memory entry) is already relative to --root-dir, which
 // this test already sandboxes.
@@ -314,15 +327,16 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   const miniState = path.join(root, "mini-state");
 
   // Remap the machine-absolute machine-state/frictions syncPaths sources
-  // (real committed values: mac-mini.json's
-  // "/Users/lannguyensi/.harness/{machine-state,frictions}",
-  // macbook.json's "/Users/lan/..." equivalents) into this sandbox before
+  // (template placeholder values: mac-mini.example.json's
+  // "/Users/<user>/.harness/{machine-state,frictions}",
+  // macbook.example.json's equivalents) into this sandbox before
   // any CLI invocation. remapAbsoluteSyncPathsIntoSandbox asserts the result
   // is fully sandboxed; nothing below this point can read or write a real
-  // machine's ~/.harness — see the file-level comment above for the leak
-  // this closes (agent-tasks 112a0864).
+  // machine's ~/.harness. See the file-level comment above for the failure
+  // modes this closes, which a real filled-in profile can still hit even
+  // though the committed template cannot.
   const macbookRemap = remapAbsoluteSyncPathsIntoSandbox(
-    path.join(PROFILES_DIR, "macbook.json"),
+    path.join(PROFILES_DIR, "macbook.example.json"),
     root,
     "macbook",
     macbookRoot,
@@ -330,7 +344,7 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
     remoteDir
   );
   const miniRemap = remapAbsoluteSyncPathsIntoSandbox(
-    path.join(PROFILES_DIR, "mac-mini.json"),
+    path.join(PROFILES_DIR, "mac-mini.example.json"),
     root,
     "mac-mini",
     miniRoot,
@@ -494,7 +508,7 @@ test("macbook and mac-mini profiles share one remote tree and see each other's p
   );
 });
 
-test("all committed profiles (macbook, mac-mini, linux, linux.example) declare the same repositorySubdir", () => {
+test("all committed profile templates (mac-mini.example, macbook.example, linux.example) declare the same repositorySubdir", () => {
   // A narrower, faster companion to the end-to-end test above: pins the
   // specific config field that caused the divergence directly against the
   // committed files, independent of any CLI/git plumbing. profileFiles is
@@ -525,13 +539,14 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
     );
   }
 
-  // Pin the frictions syncPaths entry (agent-tasks 343d5a8f) directly
-  // against each committed profile file — deliberately placed in THIS test,
+  // Pin the frictions syncPaths entry directly
+  // against each committed profile template, deliberately placed in THIS test,
   // not the live push/pull E2E test above, because this one parses the
   // profile JSON via settingsByFile and never touches a real machine's home
-  // directory, so it stays green even where the E2E test's EACCES failure
-  // (mac-mini.json's hardcoded /Users/lannguyensi paths on a machine that
-  // isn't the mini) applies. Without this block, reverting the three
+  // directory, so it stays green even where a real, filled-in profile's
+  // hardcoded absolute path (which the template only carries as a
+  // placeholder) could hit the E2E test's EACCES failure on a machine that
+  // isn't the one the profile was filled in for. Without this block, reverting the three
   // profiles' new syncPaths entry left the suite fully green — nothing else
   // reads the committed profile files for this entry.
   function findEntriesByDestination(
@@ -565,11 +580,11 @@ test("all committed profiles (macbook, mac-mini, linux, linux.example) declare t
   }
 
   // Same pin for the machine-state entry, closing the identical #64
-  // coverage gap for every committed profile, including linux.example.json:
+  // coverage gap for every committed profile template, including linux.example.json:
   // the template now carries the entry too (placeholder <linux-username>
   // source), precisely so a future third machine copied from it starts with
-  // the entry present instead of repeating the hand-patch divergence
-  // linux.json/macbook.json/mac-mini.json needed before this fix (agent-tasks
+  // the entry present instead of repeating the hand-patch divergence the
+  // real linux/macbook/mac-mini profiles needed before this fix (agent-tasks
   // 10df0d9d; see machine-setup.md section e)/f)). The endsWith check below
   // tolerates the template's placeholder segment (the path is still
   // absolute-shaped and still ends with the literal suffix).
