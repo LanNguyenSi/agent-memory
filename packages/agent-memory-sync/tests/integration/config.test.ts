@@ -174,7 +174,7 @@ test("run with no --config, no AGENT_MEMORY_SYNC_CONFIG and no default config fi
   writeText(path.join(workspaceDir, "MEMORY.md"), "first-run memory\n");
   writeText(path.join(emptyXdgConfigHome, ".keep"), "");
 
-  const env = { ...process.env, XDG_CONFIG_HOME: emptyXdgConfigHome };
+  const env: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: emptyXdgConfigHome };
   delete env.AGENT_MEMORY_SYNC_CONFIG;
   assert.equal(fileExists(path.join(emptyXdgConfigHome, "agent-memory-sync", "config.json")), false);
 
