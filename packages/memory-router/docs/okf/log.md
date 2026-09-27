@@ -1,5 +1,26 @@
 # Bundle log
 
+- 2026-09-27T15:09:05Z: second fact-check pass on the concept docs
+  and `index.md`, re-verified against the checked-out source at head.
+  Replaced counted and exclusive claims about paths, throws, and callers
+  with lists that name the `rg` command they were enumerated from.
+  `semantic-search-silent-noop.md`: the loud-counterpart section now lists
+  the errors that can propagate out of `semanticSearch()` (provenance and
+  other open-time integrity errors, `putCachedQuery`'s fresh-query
+  dimension check, `search()`'s dimension check on a cache hit, the
+  wrapped embed failure), states that the `resolveBlended` and
+  `test --semantic` catches return the same hits as the unconfigured case
+  but write the full error text to stderr, adds the index-whose-entries-
+  were-all-removed silent path, and separates the `semanticSearch` callers
+  from the other `openIndex()` callers. This corrects the previous entry's
+  "all five silent-`[]` paths" wording, which was not complete.
+  `score-blend-resolver.md`: degraded-output and hint-exclusion prose
+  replaced by pointers into `docs/scoring.md` and the pinning tests.
+  `gate-composition-and-dedup.md`: call-site count dropped, the
+  gate-override and tool-privilege wording tightened. `native-deps-and-ci-smoke.md`:
+  probe-to-runtime wording corrected (the probe's `require` order differs).
+  Sources lists pruned to the files each doc cites and extended where a
+  doc now cites more.
 - 2026-09-27T14:48:54Z: fact-check pass on `score-blend-resolver.md`,
   `semantic-search-silent-noop.md`, and `gate-composition-and-dedup.md`,
   re-verified against the checked-out source at head. Corrected the

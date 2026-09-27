@@ -3,7 +3,7 @@ type: invariant
 title: Score-blend resolver, degraded mode, and confidence-floor provenance
 description: Pointer doc plus code anchors. Which function the blend callers run through, the router.ts lines behind each degraded-mode branch, and which confidence.ts branch sets each minSemanticScoreSource tag value that gates the floor-drop hint.
 tags: [score-blend, degraded-mode, relevance-floor, confidence-floor-provenance, resolveBlended]
-timestamp: 2026-09-27T14:48:54Z
+timestamp: 2026-09-27T15:09:05Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/gates/confidence.ts
