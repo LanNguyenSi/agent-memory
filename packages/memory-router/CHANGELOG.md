@@ -8,6 +8,7 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Semantic search no longer loses current-model hits to stale-model rows after a partial embedding-model switch. `search()` in `src/embed/index-store.ts` used to run the sqlite-vec KNN query with `LIMIT k` and only then drop rows carrying a different model, so stale rows nearest the query took slots and the caller got fewer than `k` hits, possibly none. It now filters by model while widening the KNN window (starts at `k`, x4 per retry, stops when `k` current-model rows are found, the index is exhausted, or the 4096-row sqlite-vec KNN ceiling is reached). No schema change, so existing index files work as is; a query whose first pass already yields `k` current rows costs the same single KNN pass as before. The stale-model warning is unchanged.
 - `eval --json`'s help text pointed the JSON schema pointer at `README.md`, which no longer holds that section after the docs restructure. It now links the "`memory-router eval` metric definitions and JSON schema" section of `docs/commands.md` by its GitHub URL, since `docs/` is not part of the published npm package.
 
 ### Changed

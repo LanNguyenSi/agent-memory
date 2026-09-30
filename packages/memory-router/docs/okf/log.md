@@ -1,5 +1,12 @@
 # Bundle log
 
+- 2026-09-30T06:54:06Z, `semantic-search-silent-noop.md` row 5 and the
+  crowding-out paragraph describe the model filter running inside a
+  widening KNN window instead of after a single `LIMIT k`, and the
+  `index-store.ts` line citations after the changed search path are
+  re-pointed; `native-deps-and-ci-smoke.md` re-verified against the changed
+  file and re-stamped. Re-stamped.
+
 - 2026-09-27T15:18:36Z, `semantic-search-silent-noop.md` notes that
   `lint --conflicts --semantic` opens the index writable with the fixed
   1536 width hint, which records that width on an index that has none yet,
