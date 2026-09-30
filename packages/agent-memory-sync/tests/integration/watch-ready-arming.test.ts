@@ -302,6 +302,19 @@ test("armingLimitWarnings warns for missing syncPaths that share an anchor, and 
     "one missing path configured more than once"
   );
 
+  // An unnormalized anchor spelling is compared as the resolved directory.
+  assert.deepEqual(
+    armingLimitWarnings([{ target: "/ws/./logs", anchor: "/ws/." }]),
+    [],
+    "one missing path with an unnormalized anchor"
+  );
+  const respelled = armingLimitWarnings([
+    { target: "/ws/./logs", anchor: "/ws/." },
+    { target: "/ws/notes", anchor: "/ws" }
+  ]);
+  assert.equal(respelled.length, 1, "differently spelled siblings share one anchor");
+  assert.match(respelled[0], /^2 missing syncPaths share the existing directory \/ws /);
+
   // Two nested paths under one anchor trigger both shapes.
   assert.equal(
     armingLimitWarnings([
