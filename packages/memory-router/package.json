@@ -67,6 +67,6 @@
     "typescript": "^5.7.2"
   },
   "overrides": {
-    "ip-address": "^10.1.1"
+    "ip-address": "^10.7.2"
   }
 }
