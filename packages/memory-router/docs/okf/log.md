@@ -1,5 +1,11 @@
 # Bundle log
 
+- 2026-09-30T11:14:55Z, `semantic-search-silent-noop.md`:
+  the `lint --conflicts --semantic` open-failure warning now appends the
+  `memory-router index <dir>` rebuild hint unless the reason already says
+  to rebuild; the `conflicts.ts` citation range was moved. Re-verified
+  against the changed code and re-stamped.
+
 - 2026-09-30T07:24:20Z, `semantic-search-silent-noop.md` and `native-deps-and-ci-smoke.md`
   re-verified after the comment-only change to `index-store.ts` and
   `indexer.ts` (line counts unchanged) and after merging the model-filter
