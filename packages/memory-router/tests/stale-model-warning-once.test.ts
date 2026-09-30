@@ -167,3 +167,40 @@ test("missing-index warning is unchanged: once per process, and never mixed with
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the stale and missing-index flags are independent: each warning appears once in the same process, in either order", async () => {
+  const indexed = tmpMemoryDir();
+  const empty = fs.mkdtempSync(
+    path.join(os.tmpdir(), "memory-router-stale-missing-"),
+  );
+  try {
+    for (const staleFirst of [true, false]) {
+      await withEnvAndStderr(async (setModel, stderr) => {
+        const { rebuildIndex, semanticSearch } = freshIndexer();
+        setModel(MODEL_OLD);
+        await rebuildIndex(indexed);
+        setModel(MODEL_NEW);
+        const stale = () => semanticSearch("stale query", [], indexed, 5);
+        const missing = () => semanticSearch("missing query", [], empty, 5);
+        if (staleFirst) {
+          await stale();
+          await missing();
+        } else {
+          await missing();
+          await stale();
+        }
+        await stale();
+        await missing();
+        assert.equal(count(stderr(), STALE_RE), 1, `staleFirst=${staleFirst}`);
+        assert.equal(
+          count(stderr(), MISSING_RE),
+          1,
+          `staleFirst=${staleFirst}`,
+        );
+      });
+    }
+  } finally {
+    fs.rmSync(indexed, { recursive: true, force: true });
+    fs.rmSync(empty, { recursive: true, force: true });
+  }
+});
