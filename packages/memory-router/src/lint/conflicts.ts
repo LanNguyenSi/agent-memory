@@ -502,7 +502,13 @@ export async function lintMemoryDirForConflictsWithSemantic(
         // to fresh embedding below, as when no index exists. The consolidate
         // near-dupes pass skips outright because the index is its only
         // embedding source.
-        const reason = err instanceof Error ? err.message : String(err);
+        // A raw SQLite reason (zero-byte or legacy pre-meta file) names no
+        // fix, so append the rebuild command; openIndex's own inconsistent-
+        // width message already says to rebuild, so it is not repeated.
+        const cause = err instanceof Error ? err.message : String(err);
+        const reason = /rebuild/i.test(cause)
+          ? cause
+          : `${cause}; run \`memory-router index ${dir}\` to rebuild it`;
         process.stderr.write(
           `[memory-router] --semantic: cannot open embedding index, embedding fresh without reuse (${reason})\n`,
         );
