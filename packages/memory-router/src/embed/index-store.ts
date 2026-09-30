@@ -548,6 +548,9 @@ function openIndex(opts: IndexStoreOptions): {
     }
     return _selectEmbeddingStmt;
   }
+  // sqlite-vec rejects a KNN `k` above 4096; the over-fetch in search() is
+  // bounded by it.
+  const MAX_KNN_K = 4096;
   function searchStmtLazy() {
     if (!_searchStmt) {
       _searchStmt = db.prepare(`
@@ -787,20 +790,35 @@ function openIndex(opts: IndexStoreOptions): {
         `query dimension ${queryEmbedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
-    const rows = searchStmtLazy().all(toBlob(queryEmbedding), k) as {
-      id: string;
-      model: string | null;
-      distance: number;
-    }[];
-    // Filter rows whose stored model differs from the caller's. Comparing
-    // cosines across embedding spaces is meaningless, so a row from a
-    // different model (or a pre-v2 NULL row) is dropped instead of being
-    // returned with a misleading similarity.
-    const filtered =
-      expectedModel === undefined
-        ? rows
-        : rows.filter((r) => r.model === expectedModel);
-    return filtered.map((r) => ({
+    const blob = toBlob(queryEmbedding);
+    type Row = { id: string; model: string | null; distance: number };
+    let rows: Row[];
+    if (expectedModel === undefined) {
+      rows = searchStmtLazy().all(blob, k) as Row[];
+    } else {
+      // The vec0 KNN `LIMIT k` runs before any model filter, so stale-model
+      // rows ranking inside the top k would take slots current-model rows
+      // just outside it should fill. Over-fetch instead: start at k and
+      // grow the fetch window (x4) until k current-model rows are found,
+      // the index is exhausted (the query returned fewer rows than asked),
+      // or the window hits sqlite-vec's KNN ceiling. Comparing cosines
+      // across embedding spaces is meaningless, so a row from a different
+      // model (or a pre-v2 NULL row) is never returned.
+      let fetch = Math.min(k, MAX_KNN_K);
+      for (;;) {
+        const all = searchStmtLazy().all(blob, fetch) as Row[];
+        rows = all.filter((r) => r.model === expectedModel);
+        if (
+          rows.length >= k ||
+          all.length < fetch ||
+          fetch >= MAX_KNN_K
+        ) {
+          break;
+        }
+        fetch = Math.min(fetch * 4, MAX_KNN_K);
+      }
+    }
+    return rows.slice(0, k).map((r) => ({
       id: r.id,
       similarity: Math.max(0, 1 - r.distance / 2),
     }));

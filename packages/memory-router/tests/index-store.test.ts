@@ -669,3 +669,208 @@ test('omitting readonly (existing callsites) keeps full read-write behavior unch
     fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
   }
 });
+
+// Model filtering happens inside the over-fetch loop of search(), not after a
+// single KNN LIMIT k, so stale-model rows nearest the query cannot crowd out
+// current-model rows.
+function seedCrowded(store: any, stale: number, current: number): void {
+  // Stale rows sit on the query axis; current rows are progressively further.
+  for (let i = 0; i < stale; i++) {
+    store.upsert(`stale-${i}`, 100, 'model-OLD', [1, i * 0.0001]);
+  }
+  for (let i = 0; i < current; i++) {
+    store.upsert(`cur-${i}`, 100, 'model-NEW', [1, 0.5 + i * 0.01]);
+  }
+}
+
+test('search returns k current-model hits when the nearest k rows are stale', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 60, 5);
+    const hits = store.search([1, 0], 3, 'model-NEW');
+    assert.deepEqual(
+      hits.map((h: { id: string }) => h.id),
+      ['cur-0', 'cur-1', 'cur-2'],
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search returns every current row when fewer than k exist, and stops', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 10, 2);
+    const hits = store.search([1, 0], 5, 'model-NEW');
+    assert.deepEqual(
+      hits.map((h: { id: string }) => h.id),
+      ['cur-0', 'cur-1'],
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search returns nothing when no row carries the current model', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 10, 0);
+    assert.deepEqual(store.search([1, 0], 3, 'model-NEW'), []);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search with all rows current is unchanged by the model filter', () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 0, 6);
+    const filtered = store.search([1, 0], 4, 'model-NEW');
+    const unfiltered = store.search([1, 0], 4);
+    assert.equal(filtered.length, 4);
+    assert.deepEqual(filtered, unfiltered);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search skips pre-v2 NULL-model rows that crowd the top k', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 0, 3);
+    // Simulate legacy untagged rows nearest the query.
+    const raw = new Database(dbPath);
+    sqliteVec.load(raw);
+    raw.prepare('UPDATE entries SET model = NULL WHERE id IN (?, ?)').run('cur-0', 'cur-1');
+    raw.close();
+    const hits = store.search([1, 0], 1, 'model-NEW');
+    assert.deepEqual(
+      hits.map((h: { id: string }) => h.id),
+      ['cur-2'],
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+// Counts KNN statement executions so the bounded retry's stop conditions are
+// observable, not only its results. The search loop is synchronous, so a
+// per-test timeout cannot interrupt a loop that never ends; the call budget
+// turns a runaway loop (for example a removed ceiling guard) into a named
+// failure by throwing from inside the statement.
+function countKnnCalls(fn: () => void, maxCalls = 50): number {
+  const proto = Database.prototype;
+  const origPrepare = proto.prepare;
+  let calls = 0;
+  proto.prepare = function (this: unknown, sql: string) {
+    const stmt = origPrepare.call(this, sql);
+    if (typeof sql === 'string' && sql.includes('MATCH')) {
+      const origAll = stmt.all.bind(stmt);
+      stmt.all = (...args: unknown[]) => {
+        calls++;
+        if (calls > maxCalls) {
+          throw new Error(`KNN call budget of ${maxCalls} exceeded`);
+        }
+        return origAll(...args);
+      };
+    }
+    return stmt;
+  };
+  try {
+    fn();
+  } finally {
+    proto.prepare = origPrepare;
+  }
+  return calls;
+}
+
+test('search stops widening once the index is exhausted', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 10, 2);
+    let hits: unknown[] = [];
+    const calls = countKnnCalls(() => {
+      hits = store.search([1, 0], 5, 'model-NEW');
+    });
+    assert.equal(hits.length, 2);
+    // k=5 fetch (5 rows, short), then x4 = 20 fetch (12 rows, exhausted).
+    assert.equal(calls, 2);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search takes a single KNN pass when the top k are all current', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 5, 6);
+    // Stale rows are nearest, so ask for the k nearest of the whole index
+    // under the stale model: satisfied by the first pass.
+    let hits: unknown[] = [];
+    const calls = countKnnCalls(() => {
+      hits = store.search([1, 0], 3, 'model-OLD');
+    });
+    assert.equal(hits.length, 3);
+    assert.equal(calls, 1);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search widening is capped at the sqlite-vec KNN ceiling', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    // More stale rows than the ceiling, all nearer than the one current row:
+    // the widening stops at the ceiling instead of erroring, so the far
+    // current row is out of reach (documented limit).
+    for (let i = 0; i < 4100; i++) {
+      store.upsert(`s-${i}`, 100, 'model-OLD', [1, i * 0.00001]);
+    }
+    store.upsert('c-0', 100, 'model-NEW', [0, 1]);
+    let hits: unknown[] = [{}];
+    const calls = countKnnCalls(() => {
+      hits = store.search([1, 0], 3, 'model-NEW');
+    });
+    assert.deepEqual(hits, []);
+    // Windows 3, 12, 48, 192, 768, 3072, then the 4096 ceiling: seven passes.
+    assert.equal(calls, 7);
+    assert.equal(store.search([1, 0], 3, 'model-OLD').length, 3);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search with a model filter and k above the KNN ceiling returns the current rows instead of throwing', { timeout: 10_000 }, () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 10, 7);
+    // The window is clamped to the sqlite-vec ceiling (4096), so a huge k
+    // yields every reachable current row: min(current rows, 4096).
+    const hits = store.search([1, 0], 5000, 'model-NEW');
+    assert.equal(hits.length, 7);
+    assert.deepEqual(
+      hits.map((h: { id: string }) => h.id),
+      ['cur-0', 'cur-1', 'cur-2', 'cur-3', 'cur-4', 'cur-5', 'cur-6'],
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
