@@ -137,7 +137,10 @@ when cosine similarity >= 0.85, reusing the embedding cache
 `memory-router index` already maintains; pairs not yet in the index are
 embedded on the fly without persisting. When `OPENAI_API_KEY` is unset the
 semantic step prints a stderr warning and falls back to the regex-only
-signal (fail-open: no provider configured).
+signal (fail-open: no provider configured). The lint only reads the index,
+never modifying it or its recorded width; if the index cannot be opened
+(unreadable file, legacy layout, inconsistent width) it prints one stderr
+warning and embeds the pairs on the fly instead, exit code unchanged.
 
 If an embed call for a missing pair actually errors (timeout, HTTP
 failure, malformed response) the failure is enriched with the same

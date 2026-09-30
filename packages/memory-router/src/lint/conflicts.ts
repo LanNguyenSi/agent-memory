@@ -496,26 +496,30 @@ export async function lintMemoryDirForConflictsWithSemantic(
       try {
         store = openIndex({ path: idxPath, readonly: true });
       } catch (err: unknown) {
-        // Same degrade as the consolidate near-dupes pass: an index that
-        // cannot be opened (corrupted, inconsistent width) skips the
-        // semantic step with one warning and leaves the regex-only report
-        // and the exit code as they are without --semantic.
+        // Here the index is only a reuse cache, so an index that cannot be
+        // opened (unreadable file, legacy layout, inconsistent width) costs
+        // nothing but the reuse: warn once with the reason and fall through
+        // to fresh embedding below, as when no index exists. The consolidate
+        // near-dupes pass skips outright because the index is its only
+        // embedding source.
         const reason = err instanceof Error ? err.message : String(err);
         process.stderr.write(
-          `[memory-router] --semantic skipped: cannot open embedding index (${reason})\n`,
+          `[memory-router] --semantic: cannot open embedding index, embedding fresh without reuse (${reason})\n`,
         );
-        return baseReport;
+        store = undefined;
       }
-      try {
-        for (const id of neededIds) {
-          // Pass cfg.model so cross-model rows (or pre-v2 NULL rows) are
-          // ignored. The matching memories will be embedded fresh below
-          // under the active model.
-          const emb = store.getEmbedding(id, cfg.model);
-          if (emb) embedByMemoryId.set(id, emb);
+      if (store) {
+        try {
+          for (const id of neededIds) {
+            // Pass cfg.model so cross-model rows (or pre-v2 NULL rows) are
+            // ignored. The matching memories will be embedded fresh below
+            // under the active model.
+            const emb = store.getEmbedding(id, cfg.model);
+            if (emb) embedByMemoryId.set(id, emb);
+          }
+        } finally {
+          store.close();
         }
-      } finally {
-        store.close();
       }
     }
   }

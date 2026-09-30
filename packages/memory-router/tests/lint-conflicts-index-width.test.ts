@@ -5,14 +5,17 @@
 // embed_dimensions=1536, after which semanticSearch and `memory-router
 // index` under a provider of another width threw a dimension mismatch until
 // the index was rebuilt. This file pins the read-only open, the
-// unchanged behaviour on an index that already has a width, and the
-// degrade (skip with one warning) when the index cannot be opened at all.
+// unchanged behaviour on an index that already has a width, that the index
+// file stays byte-identical (a writable open would migrate a legacy layout
+// or initialise an empty file), and the degrade when the index cannot be
+// opened at all (one warning, no reuse, fresh embedding as with no index).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
 
 const { openIndex } = require('../src/embed/index-store');
@@ -205,29 +208,81 @@ test('lint --semantic on an index with a recorded width still reuses stored embe
   }
 });
 
-test('lint --semantic skips with one warning and returns the regex-only report when the index cannot be opened', async () => {
+function sha256(file: string): string {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+// Runs the semantic lint against a corpus whose index file was prepared by
+// `prepare`, and returns the report, the captured stderr lines and the
+// index file hash before and after.
+async function lintWithIndex(
+  prepare: (idx: string) => void,
+): Promise<{
+  high: number;
+  warnings: string[];
+  before: string;
+  after: string;
+}> {
   const dir = tmpDir();
   writePair(dir);
   const idx = indexPath(dir);
   fs.mkdirSync(path.dirname(idx), { recursive: true });
-  fs.writeFileSync(idx, 'this is not a sqlite database');
-
+  prepare(idx);
+  const before = sha256(idx);
   const cap = captureStderr();
   try {
+    let high = 0;
     await withEnv(async () => {
-      const base = lintMemoryDirForConflicts(dir);
       const report = await lintMemoryDirForConflictsWithSemantic(dir, {
         semantic: true,
         embedFn: async (texts: string[]) => texts.map(() => [1, 0, 0]),
       });
-      assert.deepEqual(report, base, 'identical to the run without --semantic');
+      high = report.hits.filter((h: { severity: string }) => h.severity === 'high').length;
     });
-    const warnings = cap.lines.filter((l) =>
-      l.includes('--semantic skipped: cannot open embedding index'),
-    );
-    assert.equal(warnings.length, 1, 'exactly one warning line');
+    return {
+      high,
+      warnings: cap.lines.filter((l) => l.includes('cannot open embedding index')),
+      before,
+      after: sha256(idx),
+    };
   } finally {
     cap.restore();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+test('lint --semantic leaves a zero-byte index file byte-identical and still upgrades via fresh embeddings', async () => {
+  const r = await lintWithIndex((idx) => fs.writeFileSync(idx, ''));
+  assert.equal(r.after, r.before, 'index bytes unchanged (a writable open would initialise it)');
+  assert.equal(r.high, 1, 'semantic upgrade still happens without the index');
+  assert.equal(r.warnings.length, 1, 'exactly one warning line');
+});
+
+test('lint --semantic leaves a legacy pre-meta index file byte-identical and still upgrades via fresh embeddings', async () => {
+  const r = await lintWithIndex((idx) => {
+    const db = new Database(idx);
+    db.exec('CREATE TABLE entries (id TEXT PRIMARY KEY, mtime INTEGER NOT NULL)');
+    db.close();
+  });
+  assert.equal(r.after, r.before, 'index bytes unchanged (a writable open would migrate it)');
+  assert.equal(r.high, 1, 'semantic upgrade still happens without the index');
+  assert.equal(r.warnings.length, 1, 'exactly one warning line');
+});
+
+test('lint --semantic warns with the reason for an inconsistent-width index, leaves it unchanged and still upgrades', async () => {
+  const r = await lintWithIndex((idx) => {
+    const vec = new Array(WIDTH).fill(0).map((_v, i) => (i === 0 ? 1 : 0));
+    const store = openIndex({ path: idx });
+    store.upsert('some-memory', 1, MODEL, vec);
+    store.close();
+    const db = new Database(idx);
+    db.prepare("UPDATE meta SET value = '1536' WHERE key = 'embed_dimensions'").run();
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.close();
+  });
+  assert.equal(r.after, r.before, 'index bytes unchanged');
+  assert.equal(r.high, 1, 'semantic upgrade still happens without reuse');
+  assert.equal(r.warnings.length, 1, 'exactly one warning line');
+  assert.match(r.warnings[0], /internally inconsistent/, 'warning carries the reason');
+  assert.match(r.warnings[0], /delete it and rebuild/, 'warning carries the rebuild hint');
 });

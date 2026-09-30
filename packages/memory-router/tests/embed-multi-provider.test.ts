@@ -408,7 +408,7 @@ function stubFetchWithDimensions(dim: number): {
   } as unknown as { calls: number; restore: () => void };
 }
 
-test('EMBED_DIMENSIONS stays exported at 1536 for src/lint/conflicts.ts backward compat', () => {
+test('EMBED_DIMENSIONS stays exported at 1536', () => {
   assert.equal(EMBED_DIMENSIONS, 1536);
 });
 
