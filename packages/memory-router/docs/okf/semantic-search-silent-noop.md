@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-09-27T15:18:36Z
+timestamp: 2026-09-30T06:51:44Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -20,7 +20,7 @@ sources:
 
 # Semantic search's silent-no-op contract, and its loud counterpart
 
-`semanticSearch()` (`packages/memory-router/src/embed/indexer.ts:202-279`)
+`semanticSearch()` (`packages/memory-router/src/embed/indexer.ts:208-286`)
 is designed to return `[]`, not throw, when a corpus is not set up for
 semantic search. Separately, a set of integrity and provenance checks in
 the same subsystem throw instead, and what an operator sees for such a
@@ -53,19 +53,22 @@ query that itself returns no rows:
 
 | # | Condition | Where checked | stderr |
 |---|---|---|---|
-| 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:208-209` | none |
-| 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:211-220` | one line per process (`missingIndexWarned`, `packages/memory-router/src/embed/indexer.ts:213-214`) |
+| 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:214-215` | none |
+| 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:217-226` | one line per process (`missingIndexWarned`, `packages/memory-router/src/embed/indexer.ts:219-220`) |
 | 3 | Index exists, nothing has ever been embedded into it, and no width is recorded yet (see the `lint --conflicts --semantic` note below) | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:784` | none |
-| 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:156-161`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:616-621`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
+| 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:162-167`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:616-621`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
 | 5 | The `k` nearest-neighbor rows the KNN query returned all carry a different model tag (or a pre-v2 `NULL` tag) than the caller's model | model filter runs after the KNN `LIMIT k`, `packages/memory-router/src/embed/index-store.ts:790-802` | see below |
-| 6 | A returned hit's `id` is not in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:265-275` | none |
+| 6 | A returned hit's `id` is not in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:272-282` | none |
 
 Row 5 is the path that coincides with the stale-model line
-(`packages/memory-router/src/embed/indexer.ts:233-238`). That line is
-written on every call that opens the index and finds at least one
-stale-model row in it, whether or not this call's results lost anything
-to the filter, and it reports a corpus-wide count, not which query was
-affected. Row 5 is also a
+(`packages/memory-router/src/embed/indexer.ts:239-245`). That line is
+written the first time in a process that a call opens the index and finds
+at least one stale-model row in it (`staleModelWarned`,
+`packages/memory-router/src/embed/indexer.ts:240-241`), whether or not
+that call's results lost anything to the filter, and it reports a
+corpus-wide count, not which query was affected. Later calls in the same
+process stay silent, and a call that finds no stale rows does not use up
+the one warning. Row 5 is also a
 crowding-out case, not only an "everything is stale" case: the filter runs
 on the `k` rows the KNN `LIMIT` already picked, so stale rows inside the
 top `k` take slots that current-model rows just outside it would
@@ -75,7 +78,7 @@ ranking.
 
 Row 1 is easy to misread as "operator never configured embeddings."
 `resolveProviderConfig({ autoDetectOllama: true })`
-(`packages/memory-router/src/embed/indexer.ts:208`,
+(`packages/memory-router/src/embed/indexer.ts:214`,
 `packages/memory-router/src/embed/provider.ts:199-223`) auto-detects a
 local Ollama endpoint when no provider is set explicitly and no
 `OPENAI_API_KEY` is present
@@ -110,15 +113,15 @@ from `rg -n 'throw ' packages/memory-router/src/embed/index-store.ts packages/me
 - Fresh-query dimension mismatch, thrown by `putCachedQuery`
   (`packages/memory-router/src/embed/index-store.ts:757-760`, message
   starting `cached embedding dimension`), which `semanticSearch` calls at
-  `packages/memory-router/src/embed/indexer.ts:262`, before `search()` at
-  `packages/memory-router/src/embed/indexer.ts:264`.
+  `packages/memory-router/src/embed/indexer.ts:269`, before `search()` at
+  `packages/memory-router/src/embed/indexer.ts:271`.
 - `search()`'s own query-dimension check
   (`packages/memory-router/src/embed/index-store.ts:785-789`), reached
   only when the query vector came from the query cache
-  (`packages/memory-router/src/embed/indexer.ts:240`), since a freshly
+  (`packages/memory-router/src/embed/indexer.ts:247`), since a freshly
   embedded vector meets `putCachedQuery`'s check first.
 - Embed-call failure: `embedBatch()` rejects, and
-  `packages/memory-router/src/embed/indexer.ts:259-261` catches it and
+  `packages/memory-router/src/embed/indexer.ts:266-268` catches it and
   rethrows it wrapped by `describeEmbedError`.
 
 `upsert`'s throws (`packages/memory-router/src/embed/index-store.ts:594-611`)
@@ -152,7 +155,7 @@ These do not go through `semanticSearch()`. The call sites are the ones
 `rg -n 'openIndex\(' packages/memory-router/src` finds at the time of
 writing:
 
-- `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:132-136`),
+- `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:138-142`),
   run by `memory-router index`
   (`packages/memory-router/src/cli.ts:570-571`). `runIndex` has no catch;
   the CLI's top-level handler
