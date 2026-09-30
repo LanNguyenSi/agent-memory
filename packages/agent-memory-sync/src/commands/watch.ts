@@ -15,6 +15,12 @@ const { acquireStateDirLock } = require("../memory-sync/lock");
 const { buildCommitMessage } = require("../memory-sync/snapshot");
 const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
+const {
+  armingLimitWarnings,
+  collectMissingTargets,
+  resolveArmTimeoutMs,
+  waitForDeferredArming
+} = require("./watch-arming");
 
 type OutputFormat = "text" | "json" | "yaml";
 
@@ -104,6 +110,13 @@ function registerWatchCommand(program: import("commander").Command): void {
         path.isAbsolute(entry.source) ? entry.source : path.resolve(runConfig.rootDir, entry.source)
       );
 
+      // Taken before chokidar.watch(), so it matches what chokidar's own first
+      // stat() of each path sees. See ./watch-arming.ts.
+      const missingAtStart = collectMissingTargets(watchedPaths);
+      for (const limit of armingLimitWarnings(missingAtStart)) {
+        writeWarning(limit, outputOptions);
+      }
+
       const watcher = chokidar.watch(watchedPaths, {
         ignoreInitial: true,
         awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 }
@@ -115,6 +128,7 @@ function registerWatchCommand(program: import("commander").Command): void {
       let runsCompleted = 0;
       let shouldExit = false;
       let watcherClosed = false;
+      const armingAbort = new AbortController();
       let workChain: Promise<void> = Promise.resolve();
       let resolveDone!: () => void;
       const done = new Promise<void>((resolve) => {
@@ -126,6 +140,7 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         watcherClosed = true;
+        armingAbort.abort();
         await watcher.close();
         resolveDone();
       }
@@ -415,7 +430,31 @@ function registerWatchCommand(program: import("commander").Command): void {
       // test helper (tests/helpers/watch-process.ts) polls at a 25ms
       // cadence, which leaves comfortable margin above that threshold; see
       // that file's header comment for the full measurement notes.
-      watcher.on("ready", () => {
+      //
+      // chokidar's `ready` is also early for a syncPath that does not exist at
+      // start: it is counted ready at once, while the watch on its nearest
+      // existing ancestor is only opened by a later asynchronous step, and a
+      // write inside that gap is never delivered (agent-tasks 50a13ffe). So the
+      // line waits for that ancestor watch to show up in chokidar's own
+      // getWatched() state, bounded so an unarmable path cannot hang startup.
+      // Rationale and the state signal used: ./watch-arming.ts. chokidar can
+      // emit `ready` twice when a syncPath is missing (same file), so the
+      // handler runs once: one wait, one ready line, at most one warning.
+      watcher.once("ready", async () => {
+        if (missingAtStart.length > 0) {
+          const timeoutMs = resolveArmTimeoutMs();
+          const arming = await waitForDeferredArming(watcher, missingAtStart, { timeoutMs, signal: armingAbort.signal });
+          if (watcherClosed) {
+            return;
+          }
+          if (!arming.armed) {
+            writeWarning(
+              `could not confirm the watch on ${arming.pending.join(", ")} within ${timeoutMs}ms; ` +
+                "continuing without it, so a change to that path may be missed until watch is restarted",
+              outputOptions
+            );
+          }
+        }
         writeInfo(
           `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,
           outputOptions

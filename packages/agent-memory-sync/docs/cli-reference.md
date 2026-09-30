@@ -81,7 +81,18 @@ debounce window land as a single `update N memories` commit with a
 bulleted body listing each path. Deletions become `remove <path>`. With
 `--verbose`, each tick prints `watch tick pushing snapshot` to stderr the
 instant it starts the actual git work, ahead of the tick's own result line.
-`SIGINT` / `SIGTERM` flush any pending debounce before exiting. See
+`SIGINT` / `SIGTERM` flush any pending debounce before exiting. With
+`--verbose`, `watching N path(s) under ...` marks the watcher as armed. When a
+syncPath does not exist at start, `watch` first waits until its nearest
+existing directory is being watched, at most
+`AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS` milliseconds (default 5000; an invalid
+or negative value falls back to the default); on timeout it warns `could not
+confirm the watch on <paths>` and still prints the ready line, and a shutdown
+during the wait ends it without either. At startup `watch` also warns when two
+or more missing syncPaths share one existing directory, or when a missing
+syncPath's parent directory is missing as well: the ready line does not
+guarantee that a change to those paths is seen, so create the directories
+before starting `watch` or restart it after they exist. See
 [Sync behavior](sync-behavior.md) for what happens when a push fails, and
 [Service supervision](service-supervision.md) for running `watch` under
 systemd or launchd.
