@@ -1,5 +1,12 @@
 # Bundle log
 
+- 2026-09-30T06:51:55Z, `semantic-search-silent-noop.md`:
+  `lint --conflicts --semantic` now opens the index read-only without a width hint, so it no longer
+  records a width on an index that has none, and an `openIndex()` throw
+  there skips the semantic step with one stderr warning instead of
+  failing the command; the "Other `openIndex()` callers" entry and its
+  line reference were rewritten to match. Re-stamped.
+
 - 2026-09-27T15:18:36Z, `semantic-search-silent-noop.md` notes that
   `lint --conflicts --semantic` opens the index writable with the fixed
   1536 width hint, which records that width on an index that has none yet,

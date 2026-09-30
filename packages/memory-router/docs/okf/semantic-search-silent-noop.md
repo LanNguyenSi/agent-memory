@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-09-27T15:18:36Z
+timestamp: 2026-09-30T06:51:55Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -160,21 +160,25 @@ writing:
   exits non-zero, so a provider or legacy-provenance mismatch fails the
   command with the rebuild command in its text.
 - `lint --conflicts --semantic`
-  (`packages/memory-router/src/lint/conflicts.ts:489`) opens the index
+  (`packages/memory-router/src/lint/conflicts.ts:497`) opens the index
   without `opts.meta`, so the provider-mismatch and legacy-provenance
   checks, both conditioned on `opts.meta`, do not run for it. It opens the
-  index writable with the fixed `EMBED_DIMENSIONS` hint (1536,
-  `packages/memory-router/src/embed/indexer.ts:23`). On an index with no
-  recorded width, that open creates the vector table at 1536 and records
-  1536 as the index width (`packages/memory-router/src/embed/index-store.ts:487`,
-  `:505-507`), so a later `semanticSearch()` no longer takes row 3: under a
-  1536-wide model it returns `[]` through the KNN path, under any other
-  width it throws the dimension mismatch described above. An `openIndex()`
-  throw at this call site is not caught there.
+  index read-only (`readonly: true`) and passes no `dimensions` hint, so
+  the open never creates the vector table or records a width: on an index
+  with no recorded width the lookup finds no stored embeddings (the
+  `dimensions === null` guard in `getEmbedding`,
+  `packages/memory-router/src/embed/index-store.ts:632`) and the pass
+  embeds the pairs fresh, and a later `semanticSearch()` still takes row 3
+  under any model width. An `openIndex()` throw at this call site is
+  caught (`packages/memory-router/src/lint/conflicts.ts:498-508`): one
+  `--semantic skipped: cannot open embedding index` line goes to stderr and
+  the regex-only report is returned, so the command exits as it does
+  without `--semantic`.
 - The consolidate near-duplicate pass
   (`packages/memory-router/src/consolidate/near-dupes.ts:141-157`) opens it
   read-only with `opts.meta`, catches an `openIndex()` throw, and reports
-  the pass as skipped with the error message as its reason.
+  the pass as skipped with the error message as its reason (the lint
+  call site above degrades the same way, without `opts.meta`).
 
 `packages/memory-router/src/embed/index-store.ts:44-79` states why the
 provenance checks throw at all: embeddings from different providers are
