@@ -412,8 +412,8 @@ test('EMBED_DIMENSIONS stays exported at 1536', () => {
   assert.equal(EMBED_DIMENSIONS, 1536);
 });
 
-// src/lint/conflicts.ts also imports describeEmbedError from this
-// module (same backward-compat re-export shape as EMBED_DIMENSIONS above).
+// src/lint/conflicts.ts imports describeEmbedError from this module
+// (exported next to the legacy EMBED_DIMENSIONS constant above).
 // Dropping the re-export typechecks clean (conflicts.ts's own import would
 // fail loudly at build time, catching that) but a require()-based drop
 // would swallow the original embed error at runtime instead of enriching
