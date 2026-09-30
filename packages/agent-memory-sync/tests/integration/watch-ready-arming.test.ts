@@ -14,6 +14,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { createSandbox, writeProjectConfig, writeText } = require("../helpers/cli.ts");
 const {
   spawnWatch,
@@ -289,6 +290,18 @@ test("armingLimitWarnings warns for missing syncPaths that share an anchor, and 
   assert.equal(nested.length, 1);
   assert.match(nested[0], /^the parent directory of \/ws\/logs\/daily is missing as well/);
 
+  // One path configured twice (also spelled differently) is one chokidar
+  // target, not two sharing an anchor.
+  assert.deepEqual(
+    armingLimitWarnings([
+      { target: "/ws/logs", anchor: "/ws" },
+      { target: "/ws/logs", anchor: "/ws" },
+      { target: "/ws/./logs/", anchor: "/ws/." }
+    ]),
+    [],
+    "one missing path configured more than once"
+  );
+
   // Two nested paths under one anchor trigger both shapes.
   assert.equal(
     armingLimitWarnings([
@@ -335,6 +348,47 @@ test("watch warns at startup when a missing syncPath's parent directory is missi
   assert.doesNotMatch(stderr, SHARED_ANCHOR_WARNING);
 });
 
+// chokidar emits its own `ready` twice when two syncPaths are missing at start
+// (see src/commands/watch-arming.ts). A bound of 0 makes each handler run end
+// in the could-not-confirm warning at its first check, before the deferred step
+// can have opened anything, so a handler that runs per emit prints the warning
+// and the ready line twice, deterministically.
+test("watch prints its ready line and the could-not-confirm warning once, although chokidar emits ready twice", async () => {
+  const { configPath } = setupWorkspace("watch-ready-arming-once", ["logs", "notes"]);
+  const child = spawnWatch(watchArgs(configPath), { ...process.env, [ARM_TIMEOUT_ENV_VAR]: "0" });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  try {
+    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+    // A second handler run follows the first within milliseconds; 1 s is far
+    // beyond that.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+  const readyLines = stderr.match(new RegExp(READY_LINE.source, "g")) ?? [];
+  assert.equal(readyLines.length, 1, `expected one ready line. stderr: ${stderr}`);
+  const warnings = stderr.match(/could not confirm the watch/g) ?? [];
+  assert.equal(warnings.length, 1, `expected one could-not-confirm warning. stderr: ${stderr}`);
+});
+
+// Runs src/main.ts in a single node process (`node --import tsx`) instead of
+// through the tsx CLI launcher spawnWatch uses. That launcher relays SIGTERM to
+// its child and, when the child does not acknowledge the signal within its
+// short relay window (tsx 4.22.4 `relaySignalToChild`), SIGKILLs it and exits
+// 143 itself, which would decide the exit code and the exit time asserted
+// below instead of watch's own shutdown. `detached: true` keeps the process in
+// its own group so stopWatchProcessGroup can clean it up.
+function spawnWatchWithoutLauncher(args: string[], env: NodeJS.ProcessEnv) {
+  return spawn(process.execPath, ["--import", "tsx", "src/main.ts", ...args], {
+    env,
+    stdio: ["ignore", "ignore", "pipe"],
+    detached: true
+  });
+}
+
 // Pins the shutdown wiring in watch.ts: the arming wait ends when watch shuts
 // down, and a shutdown that lands during the wait prints neither the ready line
 // nor the could-not-confirm warning afterwards. The deferred step is delayed
@@ -344,7 +398,7 @@ test("watch warns at startup when a missing syncPath's parent directory is missi
 // shutdown message (a closed watcher not checked).
 test("a shutdown during the arming wait exits promptly and prints neither the ready line nor the could-not-confirm warning", { timeout: 30000 }, async () => {
   const { workspaceRoot, configPath } = setupMissingLogsWorkspace("watch-ready-arming-shutdown");
-  const child = spawnWatch(
+  const child = spawnWatchWithoutLauncher(
     watchArgs(configPath),
     delayedArmingEnv(workspaceRoot, {
       AGENT_MEMORY_SYNC_TEST_ARM_DELAY_MS: "8000",
@@ -373,7 +427,8 @@ test("a shutdown during the arming wait exits promptly and prints neither the re
     assert.doesNotMatch(stderr, READY_LINE, `the ready line came out before the shutdown. stderr: ${stderr}`);
 
     const signalledAt = Date.now();
-    process.kill(-child.pid, "SIGTERM");
+    // Only the watch process itself: no launcher in between.
+    process.kill(child.pid, "SIGTERM");
     const exitCode = await exited;
     const elapsed = Date.now() - signalledAt;
 

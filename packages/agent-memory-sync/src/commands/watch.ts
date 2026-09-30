@@ -437,8 +437,10 @@ function registerWatchCommand(program: import("commander").Command): void {
       // write inside that gap is never delivered (agent-tasks 50a13ffe). So the
       // line waits for that ancestor watch to show up in chokidar's own
       // getWatched() state, bounded so an unarmable path cannot hang startup.
-      // Rationale and the state signal used: ./watch-arming.ts.
-      watcher.on("ready", async () => {
+      // Rationale and the state signal used: ./watch-arming.ts. chokidar can
+      // emit `ready` twice when a syncPath is missing (same file), so the
+      // handler runs once: one wait, one ready line, at most one warning.
+      watcher.once("ready", async () => {
         if (missingAtStart.length > 0) {
           const timeoutMs = resolveArmTimeoutMs();
           const arming = await waitForDeferredArming(watcher, missingAtStart, { timeoutMs, signal: armingAbort.signal });

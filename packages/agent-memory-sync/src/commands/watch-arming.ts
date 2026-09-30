@@ -34,34 +34,39 @@
 // chokidar change) must not hang startup, so after ARM_TIMEOUT_MS the caller
 // warns naming the pending paths and prints the ready line anyway.
 //
-// Known limits (measured against chokidar 4.0.3 by writing straight after the
-// ready line and counting runs in which the watch tick started; agent-tasks
-// 50a13ffe). The signal proves one thing: the anchor's fs.watch exists. It is
-// per anchor, not per target, and it does not make the ready line a delivery
-// guarantee for every missing path:
-//   (a) two missing syncPaths (`logs`, `notes`) under one anchor: the anchor is
-//       listed as soon as the FIRST deferred step runs, while the second
-//       target's filtered listener is not registered yet. Write into `logs`:
-//       32 of 40 runs delivered at the base tree, 19 of 40 with the gate; with
-//       the first deferred stat delayed 400 ms, 0 of 6 on both. Write into
-//       `notes`: 4 of 10 at the base tree, 8 of 10 with the gate. The gate does
-//       not close this shape, and no improvement is shown for it.
-//   (b) chokidar throttles the anchor's directory read per directory
-//       (handler.js `_throttle('readdir', directory, 1000)`) and re-reads with
-//       the first caller's target, so of several targets sharing an anchor only
-//       one is delivered reliably. Same shape as (a).
-//   (c) a nested missing path (`logs/daily` with `logs` absent): chokidar
+// Known limits (chokidar 4.0.3; agent-tasks 50a13ffe). The signal proves one
+// thing: the anchor's fs.watch exists. It is per anchor, not per target, and it
+// does not make the ready line a delivery guarantee for every missing path:
+//   (a) two or more missing syncPaths under one anchor (`logs`, `notes`): their
+//       deferred steps share the anchor's single fs.watch. In handler.js,
+//       `setFsWatchListener` adds each later target's listener to the existing
+//       instance and `fsWatchBroadcast` calls the listeners in registration
+//       order; the first listener's `_handleRead` takes the anchor's
+//       `_throttle('readdir', directory, 1000)`, the later ones are throttled,
+//       and the closing re-read reuses the first caller's target, the only
+//       name `item === target` then matches. So only the target whose deferred
+//       listener registered first is delivered, and which one that is comes
+//       down to the stat/realpath completion race of the deferred steps inside
+//       chokidar, with or without the wait below. The wait does not close this
+//       shape.
+//   (b) a nested missing path (`logs/daily` with `logs` absent): chokidar
 //       re-adds it under the nearest existing ancestor for the leaf name, so
-//       the missing intermediate directory is never matched; 0 of 6 delivered
-//       on both trees.
-//   (d) a target created between chokidar's ENOENT stat and the deferred step
-//       is skipped, because the re-read of the anchor is skipped when a target
-//       is set; 0 of 6 delivered on both trees.
-// (a) to (d) exist at the base tree too; closing them needs a per-target gate or
-// a chokidar-side change, which is out of scope here (chokidar stays at 4.0.3).
-// `armingLimitWarnings` below tells the operator at startup when the
-// configured paths have shape (a), (b) or (c), since the ready line then does
-// not guarantee delivery for them.
+//       the missing intermediate directory is never matched.
+//   (c) a target created between chokidar's ENOENT stat and the deferred step
+//       is skipped, because `_handleDir` skips the anchor's initial read when a
+//       target is set.
+// (a) to (c) are chokidar's behaviour with or without this gate; closing them
+// needs a per-target gate or a chokidar-side change, which is out of scope here
+// (chokidar stays at 4.0.3). `armingLimitWarnings` below tells the operator at
+// startup when the configured paths have shape (a) or (b), since the ready line
+// then does not guarantee delivery for them.
+//
+// chokidar can also emit `ready` twice when a syncPath is missing at start:
+// every `_addToNodeFs` call reports readiness through the `_emitReady` closure
+// it captured when it started, while `add()`'s result handler counts a missing
+// path a second time through the current one, so the tally can reach its
+// target before a captured call that then emits `ready` again. watch.ts runs
+// its ready handler once.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -130,13 +135,22 @@ function collectMissingTargets(
 
 // One-line startup warnings for the shapes in the known-limits comment above
 // that the operator's own configuration can be checked for: two or more missing
-// syncPaths sharing one anchor (a, b), and a missing path whose parent is also
-// missing (c). Empty when neither applies, in particular for a single missing
-// path directly under an existing directory, the shape the gate does cover.
+// syncPaths sharing one anchor (a), and a missing path whose parent is also
+// missing (b). Empty when neither applies, in particular for a single missing
+// path directly under an existing directory, the shape the gate does cover. A
+// path configured twice is one chokidar target, so targets are deduplicated by
+// resolved path first.
 function armingLimitWarnings(targets: ArmingTarget[]): string[] {
   const warnings: string[] = [];
+  const unique = new Map<string, ArmingTarget>();
+  for (const entry of targets) {
+    const resolved = path.resolve(entry.target);
+    if (!unique.has(resolved)) {
+      unique.set(resolved, { target: resolved, anchor: path.resolve(entry.anchor) });
+    }
+  }
   const byAnchor = new Map<string, string[]>();
-  for (const { target, anchor } of targets) {
+  for (const { target, anchor } of unique.values()) {
     byAnchor.set(anchor, [...(byAnchor.get(anchor) ?? []), target]);
   }
   for (const [anchor, sharing] of byAnchor) {
@@ -147,7 +161,7 @@ function armingLimitWarnings(targets: ArmingTarget[]): string[] {
       );
     }
   }
-  const nested = targets.filter(({ target, anchor }) => path.dirname(target) !== anchor).map(({ target }) => target);
+  const nested = [...unique.values()].filter(({ target, anchor }) => path.dirname(target) !== anchor).map(({ target }) => target);
   if (nested.length > 0) {
     warnings.push(
       `the parent directory of ${nested.join(", ")} is missing as well; ` +
