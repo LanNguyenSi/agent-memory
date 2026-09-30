@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-09-30T07:06:26Z
+timestamp: 2026-09-30T07:24:20Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -146,9 +146,9 @@ are not on this path: `semanticSearch()` does not call `upsert`.
   (`packages/memory-router/src/embed/index-store.ts:424`, `:453`), is
   written on every call that throws.
 - `memory-router test --semantic`
-  (`packages/memory-router/src/cli.ts:757-766`) catches the throw from
+  (`packages/memory-router/src/cli.ts:760-769`) catches the throw from
   `resolveConfidence`, writes a `warning:` line that also interpolates
-  `String(err)` (`packages/memory-router/src/cli.ts:764`), and prints the
+  `String(err)` (`packages/memory-router/src/cli.ts:767`), and prints the
   sync-only hits.
 - MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:80-92`)
   has no catch in its handler: the error leaves the tool handler.
@@ -161,27 +161,36 @@ writing:
 
 - `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:138-142`),
   run by `memory-router index`
-  (`packages/memory-router/src/cli.ts:570-571`). `runIndex` has no catch;
+  (`packages/memory-router/src/cli.ts:573-574`). `runIndex` has no catch;
   the CLI's top-level handler
-  (`packages/memory-router/src/cli.ts:1133-1136`) prints the error and
+  (`packages/memory-router/src/cli.ts:1136-1139`) prints the error and
   exits non-zero, so a provider or legacy-provenance mismatch fails the
   command with the rebuild command in its text.
 - `lint --conflicts --semantic`
-  (`packages/memory-router/src/lint/conflicts.ts:489`) opens the index
+  (`packages/memory-router/src/lint/conflicts.ts:497`) opens the index
   without `opts.meta`, so the provider-mismatch and legacy-provenance
   checks, both conditioned on `opts.meta`, do not run for it. It opens the
-  index writable with the fixed `EMBED_DIMENSIONS` hint (1536,
-  `packages/memory-router/src/embed/indexer.ts:23`). On an index with no
-  recorded width, that open creates the vector table at 1536 and records
-  1536 as the index width (`packages/memory-router/src/embed/index-store.ts:487`,
-  `:505-507`), so a later `semanticSearch()` no longer takes row 3: under a
-  1536-wide model it returns `[]` through the KNN path, under any other
-  width it throws the dimension mismatch described above. An `openIndex()`
-  throw at this call site is not caught there.
+  index read-only (`readonly: true`) and passes no `dimensions` hint, so
+  the open never creates the vector table or records a width: on an index
+  with no recorded width the lookup finds no stored embeddings (the
+  `dimensions === null` guard in `getEmbedding`,
+  `packages/memory-router/src/embed/index-store.ts:635`) and the pass
+  embeds the pairs fresh, and a later `semanticSearch()` still takes row 3
+  under any model width. An `openIndex()` throw at this call site is
+  caught (`packages/memory-router/src/lint/conflicts.ts:498-510`): one
+  `--semantic: cannot open embedding index, embedding fresh without reuse`
+  line, carrying the error message as its reason, goes to stderr, only the
+  reuse of stored embeddings is skipped, and the pairs are embedded fresh
+  as when no index exists, so a zero-byte or legacy pre-meta index file is
+  left byte-identical and the semantic upgrade still happens; the index is
+  only a reuse cache here.
 - The consolidate near-duplicate pass
   (`packages/memory-router/src/consolidate/near-dupes.ts:141-157`) opens it
   read-only with `opts.meta`, catches an `openIndex()` throw, and reports
-  the pass as skipped with the error message as its reason.
+  the pass as skipped with the error message as its reason (the lint
+  call site above also warns on an open failure, without `opts.meta`, but
+  falls back to fresh embedding instead of skipping, since it does not need
+  the index).
 
 `packages/memory-router/src/embed/index-store.ts:44-79` states why the
 provenance checks throw at all: embeddings from different providers are

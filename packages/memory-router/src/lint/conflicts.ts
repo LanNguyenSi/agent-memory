@@ -39,7 +39,7 @@ const {
   INDEX_DEFAULT_TIMEOUT_MS,
 } = require('../embed/provider');
 const { openIndex } = require('../embed/index-store');
-const { indexPath, EMBED_DIMENSIONS, describeEmbedError } = require('../embed/indexer');
+const { indexPath, describeEmbedError } = require('../embed/indexer');
 
 export type ConflictSeverity = 'info' | 'high';
 
@@ -486,17 +486,40 @@ export async function lintMemoryDirForConflictsWithSemantic(
   if (cfg) {
     const idxPath = indexPath(dir);
     if (existsSync(idxPath)) {
-      const store = openIndex({ path: idxPath, dimensions: EMBED_DIMENSIONS });
+      // Read-only, no dimensions hint: this pass only looks embeddings up,
+      // and a writable open with a fixed width hint would record that width
+      // (and create the vector table) on an index that has none yet, making
+      // every later search or `memory-router index` under a provider of a
+      // different width throw a dimension mismatch. An index with no
+      // recorded width simply yields no stored embeddings here.
+      let store;
       try {
-        for (const id of neededIds) {
-          // Pass cfg.model so cross-model rows (or pre-v2 NULL rows) are
-          // ignored. The matching memories will be embedded fresh below
-          // under the active model.
-          const emb = store.getEmbedding(id, cfg.model);
-          if (emb) embedByMemoryId.set(id, emb);
+        store = openIndex({ path: idxPath, readonly: true });
+      } catch (err: unknown) {
+        // Here the index is only a reuse cache, so an index that cannot be
+        // opened (unreadable file, legacy layout, inconsistent width) costs
+        // nothing but the reuse: warn once with the reason and fall through
+        // to fresh embedding below, as when no index exists. The consolidate
+        // near-dupes pass skips outright because the index is its only
+        // embedding source.
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[memory-router] --semantic: cannot open embedding index, embedding fresh without reuse (${reason})\n`,
+        );
+        store = undefined;
+      }
+      if (store) {
+        try {
+          for (const id of neededIds) {
+            // Pass cfg.model so cross-model rows (or pre-v2 NULL rows) are
+            // ignored. The matching memories will be embedded fresh below
+            // under the active model.
+            const emb = store.getEmbedding(id, cfg.model);
+            if (emb) embedByMemoryId.set(id, emb);
+          }
+        } finally {
+          store.close();
         }
-      } finally {
-        store.close();
       }
     }
   }

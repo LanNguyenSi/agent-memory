@@ -70,13 +70,13 @@
 //   `opts.rebuildCommand` (rebuildIndex/semanticSearch always do).
 //   `opts.meta` (the provider/legacy-index guards above) and
 //   `opts.rebuildCommand` (the dimension-throw suffix) are both opt-in via
-//   the caller supplying them: src/lint/conflicts.ts (forbidden to modify
-//   for this task) opens the index with a legacy hardcoded `dimensions`
-//   hint and neither `opts.meta` nor `opts.rebuildCommand`; when that hint
-//   disagrees with a stored/physical dimension we already know, the REAL
-//   value wins silently (the hint is just ignored) rather than throwing, so
-//   that caller keeps working unmodified against a non-1536-dim (e.g.
-//   Ollama) index, see `EMBED_DIMENSIONS` in indexer.ts.
+//   the caller supplying them. A caller that passes a `dimensions` hint
+//   without `opts.meta` gets the lenient path: when that hint disagrees
+//   with a stored/physical dimension we already know, the REAL value wins
+//   silently (the hint is just ignored) rather than throwing. The
+//   `--semantic` path of src/lint/conflicts.ts passes neither a hint nor
+//   `opts.meta`: it opens the index `readonly` (see IndexStoreOptions),
+//   so it never creates tables or records a width.
 
 const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
@@ -204,8 +204,8 @@ function promptKey(prompt: string): string {
 interface IndexStoreOptions {
   path: string;
   // Optional hint. Callers that already know the dimension (fresh index,
-  // or a legacy caller like src/lint/conflicts.ts that pre-dates this
-  // feature) may supply it; a store that already has a recorded or
+  // or a caller without `opts.meta`, see the module-level comment) may
+  // supply it; a store that already has a recorded or
   // physical dimension ignores a disagreeing hint (see the module-level
   // comment above) rather than trusting it blindly. Omit entirely to let a
   // brand-new index defer table creation until the first upsert() learns
@@ -245,9 +245,9 @@ interface IndexStoreOptions {
   // their existing errors when the on-disk provenance disagrees with
   // `opts.meta`: readonly only removes the ability to WRITE, never the
   // ability to detect and report an incompatibility. Omit (default false)
-  // for every other caller; existing callsites (indexer.ts,
-  // lint/conflicts.ts) are unaffected and keep their full read-write
-  // behavior unchanged.
+  // for read-write callers such as indexer.ts. The `--semantic` path of
+  // lint/conflicts.ts opens with readonly and no dimensions hint, so an
+  // index without a recorded width stays without one.
   readonly?: boolean;
 }
 
@@ -410,8 +410,8 @@ function openIndex(opts: IndexStoreOptions): {
   }
 
   // Provider-mismatch check (only enforced when the caller supplies
-  // opts.meta — see module-level comment for why src/lint/conflicts.ts's
-  // legacy call, which doesn't pass opts.meta, is exempt).
+  // opts.meta; see the module-level comment for why a caller without
+  // opts.meta, such as the lint --semantic read, is exempt).
   if (
     opts.meta &&
     storedProvider !== null &&
@@ -434,8 +434,8 @@ function openIndex(opts: IndexStoreOptions): {
   // its existing rows disagree with it: a later search would then trust a
   // provenance meta row that lies about what's actually indexed. Only
   // reachable when opts.meta is supplied (rebuildIndex/semanticSearch);
-  // src/lint/conflicts.ts's legacy call (no opts.meta) is exempt, same as
-  // the provider-mismatch check above.
+  // a caller without opts.meta (the lint --semantic read) is exempt, same
+  // as the provider-mismatch check above.
   if (opts.meta && storedProvider === null) {
     const { n: rowCount } = db
       .prepare('SELECT COUNT(*) AS n FROM entries')

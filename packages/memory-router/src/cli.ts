@@ -339,6 +339,9 @@ Commands:
                         persisting. Skips with a stderr warning when
                         OPENAI_API_KEY is unset (fail-open: regex signal
                         still ships, exit code unaffected by the skip).
+                        An index that cannot be opened is never modified:
+                        a stderr warning is printed and the pairs are
+                        embedded on the fly instead.
     When no check flag is given, --drift + --unknown-topics run by default
     (--conflicts stays opt-in). Exits non-zero on any drift/topic finding,
     a rejected topics.yml (unknown-topics check only), or any HIGH conflict.

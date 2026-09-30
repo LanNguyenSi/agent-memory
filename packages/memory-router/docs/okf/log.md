@@ -1,5 +1,25 @@
 # Bundle log
 
+- 2026-09-30T07:24:20Z, `semantic-search-silent-noop.md` and `native-deps-and-ci-smoke.md`
+  re-verified after the comment-only change to `index-store.ts` and
+  `indexer.ts` (line counts unchanged) and after merging the model-filter
+  and once-per-process warning changes; the `getEmbedding` citation was
+  moved to its current line. Re-stamped.
+
+- 2026-09-30T07:01:07Z, `semantic-search-silent-noop.md`:
+  on an `openIndex()` failure `lint --conflicts --semantic` now warns once
+  and embeds fresh without reusing the index instead of skipping the
+  semantic step; the `cli.ts` line citations in this doc and in
+  `gate-composition-and-dedup.md` were moved for the three help-text lines
+  added to `src/cli.ts`. Re-stamped.
+
+- 2026-09-30T06:51:55Z, `semantic-search-silent-noop.md`:
+  `lint --conflicts --semantic` now opens the index read-only without a width hint, so it no longer
+  records a width on an index that has none, and an `openIndex()` throw
+  there skips the semantic step with one stderr warning instead of
+  failing the command; the "Other `openIndex()` callers" entry and its
+  line reference were rewritten to match. Re-stamped.
+
 - 2026-09-30T07:06:26Z, `semantic-search-silent-noop.md` row 5 now states that a `k` above the
   4096-row KNN ceiling with a model filter returns at most 4096 hits instead
   of throwing, and that the widening costs up to one extra full-table KNN

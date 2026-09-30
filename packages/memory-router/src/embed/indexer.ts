@@ -11,15 +11,15 @@ const {
 const { openIndex } = require('./index-store');
 const { debug } = require('../debug');
 
-// Legacy constant, kept ONLY because src/lint/conflicts.ts imports it and
-// passes it as a `dimensions` hint to `openIndex()` for its own opportunistic embedding
-// reuse. Dimensions are no longer hardcoded anywhere in THIS file — see
-// "Dimensionality" below — index-store.ts derives the real dimension from
+// Legacy constant, kept only as a backward-compatible export of this
+// module (a test pins it); no module in src/ uses it any more since
+// src/lint/conflicts.ts opens the index readonly without a hint.
+// Dimensions are not hardcoded anywhere in THIS file, see
+// "Dimensionality" below: index-store.ts derives the real dimension from
 // the index's own recorded/physical state and silently ignores a
-// disagreeing caller hint when it has no `opts.meta` (exactly
-// conflicts.ts's call shape), so that caller keeps working correctly even
-// against a non-1536-dim (e.g. Ollama) index without needing this constant
-// to be accurate.
+// disagreeing caller hint when it has no `opts.meta`, so an external
+// caller that still passes this constant keeps working against a
+// non-1536-dim (e.g. Ollama) index.
 const EMBED_DIMENSIONS = 1536;
 
 const INDEX_SUBDIR = '.memory-router';

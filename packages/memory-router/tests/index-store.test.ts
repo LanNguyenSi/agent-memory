@@ -658,8 +658,8 @@ test('readonly: true against a nonexistent file throws cleanly instead of creati
 
 test('omitting readonly (existing callsites) keeps full read-write behavior unchanged: a brand-new file still gets its tables created', () => {
   const dbPath = tmpDb();
-  // No `readonly` key at all, mirroring every pre-existing callsite
-  // (indexer.ts, lint/conflicts.ts, and every other test in this file).
+  // No `readonly` key at all, mirroring the read-write callsites
+  // (indexer.ts, and every other test in this file).
   const store = openIndex({ path: dbPath, dimensions: 2 });
   try {
     store.upsert('a', 100, M, [1, 0]);
