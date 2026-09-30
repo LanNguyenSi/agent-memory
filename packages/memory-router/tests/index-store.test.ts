@@ -669,3 +669,96 @@ test('omitting readonly (existing callsites) keeps full read-write behavior unch
     fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
   }
 });
+
+// Model filtering happens inside the over-fetch loop of search(), not after a
+// single KNN LIMIT k, so stale-model rows nearest the query cannot crowd out
+// current-model rows.
+function seedCrowded(store: any, stale: number, current: number): void {
+  // Stale rows sit on the query axis; current rows are progressively further.
+  for (let i = 0; i < stale; i++) {
+    store.upsert(`stale-${i}`, 100, 'model-OLD', [1, i * 0.0001]);
+  }
+  for (let i = 0; i < current; i++) {
+    store.upsert(`cur-${i}`, 100, 'model-NEW', [1, 0.5 + i * 0.01]);
+  }
+}
+
+test('search returns k current-model hits when the nearest k rows are stale', () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 60, 5);
+    const hits = store.search([1, 0], 3, 'model-NEW');
+    assert.deepEqual(
+      hits.map((h: { id: string }) => h.id),
+      ['cur-0', 'cur-1', 'cur-2'],
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search returns every current row when fewer than k exist, and stops', () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 10, 2);
+    const hits = store.search([1, 0], 5, 'model-NEW');
+    assert.deepEqual(
+      hits.map((h: { id: string }) => h.id),
+      ['cur-0', 'cur-1'],
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search returns nothing when no row carries the current model', () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 10, 0);
+    assert.deepEqual(store.search([1, 0], 3, 'model-NEW'), []);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search with all rows current is unchanged by the model filter', () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 0, 6);
+    const filtered = store.search([1, 0], 4, 'model-NEW');
+    const unfiltered = store.search([1, 0], 4);
+    assert.equal(filtered.length, 4);
+    assert.deepEqual(filtered, unfiltered);
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
+
+test('search skips pre-v2 NULL-model rows that crowd the top k', () => {
+  const dbPath = tmpDb();
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    seedCrowded(store, 0, 3);
+    // Simulate legacy untagged rows nearest the query.
+    const raw = new Database(dbPath);
+    sqliteVec.load(raw);
+    raw.prepare('UPDATE entries SET model = NULL WHERE id IN (?, ?)').run('cur-0', 'cur-1');
+    raw.close();
+    const hits = store.search([1, 0], 1, 'model-NEW');
+    assert.deepEqual(
+      hits.map((h: { id: string }) => h.id),
+      ['cur-2'],
+    );
+  } finally {
+    store.close();
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  }
+});
