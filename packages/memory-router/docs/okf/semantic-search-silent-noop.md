@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-09-30T07:06:26Z
+timestamp: 2026-09-30T07:24:20Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -174,7 +174,7 @@ writing:
   the open never creates the vector table or records a width: on an index
   with no recorded width the lookup finds no stored embeddings (the
   `dimensions === null` guard in `getEmbedding`,
-  `packages/memory-router/src/embed/index-store.ts:632`) and the pass
+  `packages/memory-router/src/embed/index-store.ts:635`) and the pass
   embeds the pairs fresh, and a later `semanticSearch()` still takes row 3
   under any model width. An `openIndex()` throw at this call site is
   caught (`packages/memory-router/src/lint/conflicts.ts:498-510`): one
