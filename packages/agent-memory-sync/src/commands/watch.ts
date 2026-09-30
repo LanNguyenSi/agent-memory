@@ -15,7 +15,12 @@ const { acquireStateDirLock } = require("../memory-sync/lock");
 const { buildCommitMessage } = require("../memory-sync/snapshot");
 const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
-const { collectMissingTargets, resolveArmTimeoutMs, waitForDeferredArming } = require("./watch-arming");
+const {
+  armingLimitWarnings,
+  collectMissingTargets,
+  resolveArmTimeoutMs,
+  waitForDeferredArming
+} = require("./watch-arming");
 
 type OutputFormat = "text" | "json" | "yaml";
 
@@ -108,6 +113,9 @@ function registerWatchCommand(program: import("commander").Command): void {
       // Taken before chokidar.watch(), so it matches what chokidar's own first
       // stat() of each path sees. See ./watch-arming.ts.
       const missingAtStart = collectMissingTargets(watchedPaths);
+      for (const limit of armingLimitWarnings(missingAtStart)) {
+        writeWarning(limit, outputOptions);
+      }
 
       const watcher = chokidar.watch(watchedPaths, {
         ignoreInitial: true,

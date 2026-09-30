@@ -30,7 +30,9 @@ if (delayDir) {
   fsp.stat = async function stat(target, ...rest) {
     if (watchOpened && !delayed && target === delayDir) {
       delayed = true;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      // unref'd: a shutdown test needs the process to end when the watch
+      // stops, not when this artificial delay runs out.
+      await new Promise((resolve) => setTimeout(resolve, delayMs).unref());
     }
     return realStat.call(this, target, ...rest);
   };

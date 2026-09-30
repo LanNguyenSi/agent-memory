@@ -33,6 +33,35 @@
 // The wait is bounded: a path that never arms (an unreadable ancestor, a
 // chokidar change) must not hang startup, so after ARM_TIMEOUT_MS the caller
 // warns naming the pending paths and prints the ready line anyway.
+//
+// Known limits (measured against chokidar 4.0.3 by writing straight after the
+// ready line and counting runs in which the watch tick started; agent-tasks
+// 50a13ffe). The signal proves one thing: the anchor's fs.watch exists. It is
+// per anchor, not per target, and it does not make the ready line a delivery
+// guarantee for every missing path:
+//   (a) two missing syncPaths (`logs`, `notes`) under one anchor: the anchor is
+//       listed as soon as the FIRST deferred step runs, while the second
+//       target's filtered listener is not registered yet. Write into `logs`:
+//       32 of 40 runs delivered at the base tree, 19 of 40 with the gate; with
+//       the first deferred stat delayed 400 ms, 0 of 6 on both. Write into
+//       `notes`: 4 of 10 at the base tree, 8 of 10 with the gate. The gate does
+//       not close this shape, and no improvement is shown for it.
+//   (b) chokidar throttles the anchor's directory read per directory
+//       (handler.js `_throttle('readdir', directory, 1000)`) and re-reads with
+//       the first caller's target, so of several targets sharing an anchor only
+//       one is delivered reliably. Same shape as (a).
+//   (c) a nested missing path (`logs/daily` with `logs` absent): chokidar
+//       re-adds it under the nearest existing ancestor for the leaf name, so
+//       the missing intermediate directory is never matched; 0 of 6 delivered
+//       on both trees.
+//   (d) a target created between chokidar's ENOENT stat and the deferred step
+//       is skipped, because the re-read of the anchor is skipped when a target
+//       is set; 0 of 6 delivered on both trees.
+// (a) to (d) exist at the base tree too; closing them needs a per-target gate or
+// a chokidar-side change, which is out of scope here (chokidar stays at 4.0.3).
+// `armingLimitWarnings` below tells the operator at startup when the
+// configured paths have shape (a), (b) or (c), since the ready line then does
+// not guarantee delivery for them.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -99,6 +128,35 @@ function collectMissingTargets(
   return targets;
 }
 
+// One-line startup warnings for the shapes in the known-limits comment above
+// that the operator's own configuration can be checked for: two or more missing
+// syncPaths sharing one anchor (a, b), and a missing path whose parent is also
+// missing (c). Empty when neither applies, in particular for a single missing
+// path directly under an existing directory, the shape the gate does cover.
+function armingLimitWarnings(targets: ArmingTarget[]): string[] {
+  const warnings: string[] = [];
+  const byAnchor = new Map<string, string[]>();
+  for (const { target, anchor } of targets) {
+    byAnchor.set(anchor, [...(byAnchor.get(anchor) ?? []), target]);
+  }
+  for (const [anchor, sharing] of byAnchor) {
+    if (sharing.length >= 2) {
+      warnings.push(
+        `${sharing.length} missing syncPaths share the existing directory ${anchor} (${sharing.join(", ")}); ` +
+          "the ready line does not guarantee that a change to them right after it is seen, only one of them may be delivered until watch is restarted"
+      );
+    }
+  }
+  const nested = targets.filter(({ target, anchor }) => path.dirname(target) !== anchor).map(({ target }) => target);
+  if (nested.length > 0) {
+    warnings.push(
+      `the parent directory of ${nested.join(", ")} is missing as well; ` +
+        "the ready line does not guarantee that a change there is seen until watch is restarted after the directories exist"
+    );
+  }
+  return warnings;
+}
+
 function listedUnder(watched: Record<string, string[]>, child: string): boolean {
   const entry = watched[path.dirname(child)];
   return Array.isArray(entry) && entry.includes(path.basename(child));
@@ -157,6 +215,7 @@ function waitForDeferredArming(
 }
 
 module.exports = {
+  armingLimitWarnings,
   ARM_POLL_INTERVAL_MS,
   ARM_TIMEOUT_ENV_VAR,
   DEFAULT_ARM_TIMEOUT_MS,

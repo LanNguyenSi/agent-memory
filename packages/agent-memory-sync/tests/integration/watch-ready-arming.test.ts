@@ -25,6 +25,7 @@ const {
 const {
   ARM_TIMEOUT_ENV_VAR,
   DEFAULT_ARM_TIMEOUT_MS,
+  armingLimitWarnings,
   collectMissingTargets,
   isTargetArmed,
   parseArmTimeoutMs,
@@ -37,6 +38,9 @@ const PRELOAD = path.resolve(process.cwd(), "tests", "helpers", "arming-delay-pr
 // the tests fast.
 const ARM_DELAY_MS = 400;
 const READY_LINE = /watching \d+ path\(s\) under/;
+// The two startup warnings for configurations the arming gate does not cover.
+const SHARED_ANCHOR_WARNING = /warning: \d+ missing syncPaths share the existing directory /;
+const NESTED_MISSING_WARNING = /warning: the parent directory of .* is missing as well/;
 
 function delayedArmingEnv(delayDir: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const existing = process.env.NODE_OPTIONS ? `${process.env.NODE_OPTIONS} ` : "";
@@ -49,10 +53,11 @@ function delayedArmingEnv(delayDir: string, extra: Record<string, string> = {}):
   };
 }
 
-// MEMORY.md exists, logs/ does not. The remote is a path that does not exist,
-// so a tick queues locally and exits 0: the test needs the tick to start, not
-// to publish anything.
-function setupMissingLogsWorkspace(name: string) {
+// MEMORY.md exists, and so does the workspace root; the directories named in
+// `missingDirs` do not. The remote is a path that does not exist, so a tick
+// queues locally and exits 0: the test needs the tick to start, not to publish
+// anything.
+function setupWorkspace(name: string, missingDirs: string[] = ["logs"]) {
   const root = createSandbox(name);
   const workspaceRoot = path.join(root, "workspace");
   const configPath = path.join(root, "config.json");
@@ -66,10 +71,14 @@ function setupMissingLogsWorkspace(name: string) {
     reachabilityTimeoutMs: 500,
     syncPaths: [
       { source: "MEMORY.md", destination: "MEMORY.md", kind: "file" },
-      { source: "logs", destination: "logs", kind: "directory" }
+      ...missingDirs.map((dir) => ({ source: dir, destination: dir, kind: "directory" }))
     ]
   });
   return { workspaceRoot, configPath };
+}
+
+function setupMissingLogsWorkspace(name: string) {
+  return setupWorkspace(name, ["logs"]);
 }
 
 function watchArgs(configPath: string): string[] {
@@ -115,6 +124,10 @@ test("watch prints its ready line only after the deferred watch for a missing sy
 
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
   assert.match(stderr, /watch tick pushing snapshot/);
+  // One missing syncPath directly under an existing directory is the shape the
+  // gate covers: no limits warning.
+  assert.doesNotMatch(stderr, SHARED_ANCHOR_WARNING);
+  assert.doesNotMatch(stderr, NESTED_MISSING_WARNING);
 });
 
 test("watch still prints its ready line, with a warning naming the path, when the deferred watch is not confirmed in time", async () => {
@@ -257,4 +270,123 @@ test("parseArmTimeoutMs takes a non-negative number and falls back to the defaul
   assert.equal(parseArmTimeoutMs("0"), 0);
   assert.equal(parseArmTimeoutMs("-5"), DEFAULT_ARM_TIMEOUT_MS);
   assert.equal(parseArmTimeoutMs("soon"), DEFAULT_ARM_TIMEOUT_MS);
+});
+
+test("armingLimitWarnings warns for missing syncPaths that share an anchor, and for a missing path whose parent is missing too", () => {
+  assert.deepEqual(armingLimitWarnings([]), []);
+  assert.deepEqual(armingLimitWarnings([{ target: "/ws/logs", anchor: "/ws" }]), [], "one missing path under an existing directory");
+
+  const shared = armingLimitWarnings([
+    { target: "/ws/logs", anchor: "/ws" },
+    { target: "/ws/notes", anchor: "/ws" },
+    { target: "/other/x", anchor: "/other" }
+  ]);
+  assert.equal(shared.length, 1);
+  assert.match(shared[0], /^2 missing syncPaths share the existing directory \/ws \(\/ws\/logs, \/ws\/notes\)/);
+  assert.ok(!shared[0].includes("\n"), "one line");
+
+  const nested = armingLimitWarnings([{ target: "/ws/logs/daily", anchor: "/ws" }]);
+  assert.equal(nested.length, 1);
+  assert.match(nested[0], /^the parent directory of \/ws\/logs\/daily is missing as well/);
+
+  // Two nested paths under one anchor trigger both shapes.
+  assert.equal(
+    armingLimitWarnings([
+      { target: "/ws/a/b", anchor: "/ws" },
+      { target: "/ws/c/d", anchor: "/ws" }
+    ]).length,
+    2
+  );
+});
+
+test("watch warns at startup when two missing syncPaths share an existing directory", async () => {
+  const { workspaceRoot, configPath } = setupWorkspace("watch-ready-arming-shared", ["logs", "notes"]);
+  const child = spawnWatch(watchArgs(configPath), { ...process.env, [ARM_TIMEOUT_ENV_VAR]: "1000" });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  try {
+    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+  assert.match(stderr, SHARED_ANCHOR_WARNING);
+  assert.ok(stderr.includes(`${path.join(workspaceRoot, "logs")}, ${path.join(workspaceRoot, "notes")}`), `both paths named. stderr: ${stderr}`);
+  assert.ok(stderr.search(SHARED_ANCHOR_WARNING) < stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${stderr}`);
+  assert.doesNotMatch(stderr, NESTED_MISSING_WARNING);
+});
+
+test("watch warns at startup when a missing syncPath's parent directory is missing as well", async () => {
+  const { workspaceRoot, configPath } = setupWorkspace("watch-ready-arming-nested", [path.join("logs", "daily")]);
+  const child = spawnWatch(watchArgs(configPath), { ...process.env, [ARM_TIMEOUT_ENV_VAR]: "1000" });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  try {
+    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+  assert.match(stderr, NESTED_MISSING_WARNING);
+  assert.ok(stderr.includes(path.join(workspaceRoot, "logs", "daily")), `the nested path is named. stderr: ${stderr}`);
+  assert.ok(stderr.search(NESTED_MISSING_WARNING) < stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${stderr}`);
+  assert.doesNotMatch(stderr, SHARED_ANCHOR_WARNING);
+});
+
+// Pins the shutdown wiring in watch.ts: the arming wait ends when watch shuts
+// down, and a shutdown that lands during the wait prints neither the ready line
+// nor the could-not-confirm warning afterwards. The deferred step is delayed
+// 8 s and the wait's bound is 4 s, both far above the time a prompt shutdown
+// needs, so a wait that outlives the shutdown either keeps the process alive
+// until its bound (an aborted signal not sent) or prints its result after the
+// shutdown message (a closed watcher not checked).
+test("a shutdown during the arming wait exits promptly and prints neither the ready line nor the could-not-confirm warning", { timeout: 30000 }, async () => {
+  const { workspaceRoot, configPath } = setupMissingLogsWorkspace("watch-ready-arming-shutdown");
+  const child = spawnWatch(
+    watchArgs(configPath),
+    delayedArmingEnv(workspaceRoot, {
+      AGENT_MEMORY_SYNC_TEST_ARM_DELAY_MS: "8000",
+      [ARM_TIMEOUT_ENV_VAR]: "4000"
+    })
+  );
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exited = new Promise<number>((resolve) => {
+    child.on("exit", (code: number | null) => resolve(code ?? -1));
+  });
+
+  try {
+    // The first fs.watch is the one on MEMORY.md, opened at chokidar's start;
+    // from there the deferred parent-directory step is the delayed one.
+    const startedWaitingAt = Date.now();
+    while (!stderr.includes(`arm-probe: fs.watch ${path.join(workspaceRoot, "MEMORY.md")}\n`)) {
+      assert.ok(Date.now() - startedWaitingAt < 20000, `watch never opened its first fs.watch. stderr: ${stderr}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    // chokidar's own `ready` follows within milliseconds and starts the wait;
+    // 500 ms is far inside the 8 s delay.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.doesNotMatch(stderr, READY_LINE, `the ready line came out before the shutdown. stderr: ${stderr}`);
+
+    const signalledAt = Date.now();
+    process.kill(-child.pid, "SIGTERM");
+    const exitCode = await exited;
+    const elapsed = Date.now() - signalledAt;
+
+    assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+    // Well under the 4 s bound: a wait that is not aborted keeps the process
+    // up until the bound.
+    assert.ok(elapsed < 2500, `expected a prompt exit after SIGTERM, took ${elapsed}ms. stderr: ${stderr}`);
+    const shutdownAt = stderr.indexOf("received SIGTERM");
+    assert.ok(shutdownAt >= 0, `no shutdown message. stderr: ${stderr}`);
+    const afterShutdown = stderr.slice(shutdownAt);
+    assert.doesNotMatch(afterShutdown, READY_LINE, "ready line printed after the shutdown");
+    assert.doesNotMatch(afterShutdown, /could not confirm the watch/, "warning printed after the shutdown");
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
 });
