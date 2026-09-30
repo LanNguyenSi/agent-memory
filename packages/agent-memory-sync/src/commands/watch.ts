@@ -120,6 +120,7 @@ function registerWatchCommand(program: import("commander").Command): void {
       let runsCompleted = 0;
       let shouldExit = false;
       let watcherClosed = false;
+      const armingAbort = new AbortController();
       let workChain: Promise<void> = Promise.resolve();
       let resolveDone!: () => void;
       const done = new Promise<void>((resolve) => {
@@ -131,6 +132,7 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         watcherClosed = true;
+        armingAbort.abort();
         await watcher.close();
         resolveDone();
       }
@@ -431,7 +433,7 @@ function registerWatchCommand(program: import("commander").Command): void {
       watcher.on("ready", async () => {
         if (missingAtStart.length > 0) {
           const timeoutMs = resolveArmTimeoutMs();
-          const arming = await waitForDeferredArming(watcher, missingAtStart, { timeoutMs });
+          const arming = await waitForDeferredArming(watcher, missingAtStart, { timeoutMs, signal: armingAbort.signal });
           if (watcherClosed) {
             return;
           }

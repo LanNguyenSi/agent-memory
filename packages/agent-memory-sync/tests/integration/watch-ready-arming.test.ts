@@ -207,26 +207,46 @@ test("waitForDeferredArming does not resolve while the state reads unarmed, and 
   assert.deepEqual(await waiting, { armed: true, pending: [] });
 });
 
-test("waitForDeferredArming gives up after the bound and names the paths still pending", async () => {
+// The explicit timeout turns a wait that never ends (the bound removed) into a
+// failure instead of a hang.
+test("waitForDeferredArming gives up after the bound and names the paths still pending", { timeout: 5000 }, async (t: { after: (fn: () => void) => void }) => {
+  const stop = new AbortController();
+  // Ends the wait if this test already failed on its timeout (the bound
+  // removed), so the failed run does not keep polling and hang the process.
+  t.after(() => stop.abort());
   const fake = { getWatched: () => ({ "/ws": ["MEMORY.md"] }) };
   const targets = [
     { target: "/ws/logs", anchor: "/ws" },
     { target: "/ws/MEMORY.md", anchor: "/ws" }
   ];
   const started = Date.now();
-  const result = await waitForDeferredArming(fake, targets, { timeoutMs: 80, pollMs: 2 });
+  const result = await waitForDeferredArming(fake, targets, { timeoutMs: 80, pollMs: 2, signal: stop.signal });
   const elapsed = Date.now() - started;
   assert.deepEqual(result, { armed: false, pending: ["/ws/logs"] });
   assert.ok(elapsed >= 80 && elapsed < 2000, `expected to give up shortly after the 80ms bound, took ${elapsed}ms`);
 });
 
-test("waitForDeferredArming treats a watcher that cannot report its state as unarmed and still ends at the bound", async () => {
+test("waitForDeferredArming ends at once when its signal aborts, without waiting for the bound", async () => {
+  const stop = new AbortController();
+  const fake = { getWatched: () => ({ "/ws": ["MEMORY.md"] }) };
+  const waiting = waitForDeferredArming(fake, [{ target: "/ws/logs", anchor: "/ws" }], {
+    timeoutMs: 60000,
+    pollMs: 2,
+    signal: stop.signal
+  });
+  stop.abort();
+  assert.deepEqual(await waiting, { armed: false, pending: ["/ws/logs"] });
+});
+
+test("waitForDeferredArming treats a watcher that cannot report its state as unarmed and still ends at the bound", { timeout: 5000 }, async (t: { after: (fn: () => void) => void }) => {
+  const stop = new AbortController();
+  t.after(() => stop.abort());
   const fake = {
     getWatched: () => {
       throw new Error("closed");
     }
   };
-  const result = await waitForDeferredArming(fake, [{ target: "/ws/logs", anchor: "/ws" }], { timeoutMs: 30, pollMs: 2 });
+  const result = await waitForDeferredArming(fake, [{ target: "/ws/logs", anchor: "/ws" }], { timeoutMs: 30, pollMs: 2, signal: stop.signal });
   assert.deepEqual(result, { armed: false, pending: ["/ws/logs"] });
 });
 

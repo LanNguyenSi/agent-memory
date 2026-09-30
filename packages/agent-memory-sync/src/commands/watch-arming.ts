@@ -121,11 +121,12 @@ function pendingTargets(watcher: WatchedState, targets: ArmingTarget[]): ArmingT
 }
 
 // Resolves once every target reads as armed in `watcher.getWatched()`, or with
-// the still-pending targets when `timeoutMs` elapses first. Never rejects.
+// the still-pending targets when `timeoutMs` elapses first or `signal` aborts
+// (watch shutting down). Never rejects.
 function waitForDeferredArming(
   watcher: WatchedState,
   targets: ArmingTarget[],
-  options: { timeoutMs?: number; pollMs?: number } = {}
+  options: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}
 ): Promise<ArmingResult> {
   const timeoutMs = options.timeoutMs ?? resolveArmTimeoutMs();
   const pollMs = options.pollMs ?? ARM_POLL_INTERVAL_MS;
@@ -145,7 +146,7 @@ function waitForDeferredArming(
         resolve({ armed: true, pending: [] });
         return;
       }
-      if (Date.now() - start >= timeoutMs) {
+      if (options.signal?.aborted || Date.now() - start >= timeoutMs) {
         resolve({ armed: false, pending: pending.map((entry) => entry.target) });
         return;
       }
