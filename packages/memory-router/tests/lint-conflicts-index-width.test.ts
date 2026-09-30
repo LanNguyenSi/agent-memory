@@ -208,6 +208,10 @@ test('lint --semantic on an index with a recorded width still reuses stored embe
   }
 });
 
+function countOf(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
+
 function sha256(file: string): string {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
@@ -256,6 +260,8 @@ test('lint --semantic leaves a zero-byte index file byte-identical and still upg
   assert.equal(r.after, r.before, 'index bytes unchanged (a writable open would initialise it)');
   assert.equal(r.high, 1, 'semantic upgrade still happens without the index');
   assert.equal(r.warnings.length, 1, 'exactly one warning line');
+  assert.equal(countOf(r.warnings[0], 'memory-router index'), 1, 'rebuild hint exactly once');
+  assert.match(r.warnings[0], /memory-router index \S+ to rebuild it/, 'hint names the memory dir');
 });
 
 test('lint --semantic leaves a legacy pre-meta index file byte-identical and still upgrades via fresh embeddings', async () => {
@@ -267,6 +273,8 @@ test('lint --semantic leaves a legacy pre-meta index file byte-identical and sti
   assert.equal(r.after, r.before, 'index bytes unchanged (a writable open would migrate it)');
   assert.equal(r.high, 1, 'semantic upgrade still happens without the index');
   assert.equal(r.warnings.length, 1, 'exactly one warning line');
+  assert.match(r.warnings[0], /no such table: meta/, 'raw reason kept');
+  assert.equal(countOf(r.warnings[0], 'memory-router index'), 1, 'rebuild hint exactly once');
 });
 
 test('lint --semantic warns with the reason for an inconsistent-width index, leaves it unchanged and still upgrades', async () => {
@@ -284,5 +292,6 @@ test('lint --semantic warns with the reason for an inconsistent-width index, lea
   assert.equal(r.high, 1, 'semantic upgrade still happens without reuse');
   assert.equal(r.warnings.length, 1, 'exactly one warning line');
   assert.match(r.warnings[0], /internally inconsistent/, 'warning carries the reason');
-  assert.match(r.warnings[0], /delete it and rebuild/, 'warning carries the rebuild hint');
+  assert.equal(countOf(r.warnings[0], 'rebuild'), 1, 'the existing rebuild hint is not repeated');
+  assert.equal(countOf(r.warnings[0], 'memory-router index'), 0, 'no second hint appended');
 });
