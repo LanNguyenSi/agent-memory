@@ -14,6 +14,25 @@
   failing the command; the "Other `openIndex()` callers" entry and its
   line reference were rewritten to match. Re-stamped.
 
+- 2026-09-30T07:06:26Z, `semantic-search-silent-noop.md` row 5 now states that a `k` above the
+  4096-row KNN ceiling with a model filter returns at most 4096 hits instead
+  of throwing, and that the widening costs up to one extra full-table KNN
+  scan per x4 step; `native-deps-and-ci-smoke.md` re-verified and
+  re-stamped. Re-stamped.
+
+- 2026-09-30T06:54:06Z, `semantic-search-silent-noop.md` row 5 and the
+  crowding-out paragraph describe the model filter running inside a
+  widening KNN window instead of after a single `LIMIT k`, and the
+  `index-store.ts` line citations after the changed search path are
+  re-pointed; `native-deps-and-ci-smoke.md` re-verified against the changed
+  file and re-stamped. Re-stamped.
+
+- 2026-09-30T06:51:44Z, `semantic-search-silent-noop.md` now says the stale-model stderr
+  line is written once per process (a `staleModelWarned` flag mirroring
+  `missingIndexWarned`), not on every call, and that a call finding no
+  stale rows does not use up the warning. Its `indexer.ts` line citations
+  were re-pointed to the shifted source. Re-stamped.
+
 - 2026-09-27T15:18:36Z, `semantic-search-silent-noop.md` notes that
   `lint --conflicts --semantic` opens the index writable with the fixed
   1536 width hint, which records that width on an index that has none yet,
