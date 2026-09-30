@@ -6,6 +6,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-30
+
 ### Fixed
 
 - `memory-router lint --conflicts --semantic` no longer changes the embedding index it reads. It opened the index writable with a fixed 1536-wide hint, which on an index with no recorded width (a first `memory-router index` whose embed call failed after the file was created, or an empty corpus) created the vector table and recorded a width of 1536, so a later search or `memory-router index` under a provider of another width threw a dimension mismatch until the index was rebuilt. It now opens the index read-only without a width hint, and an index that cannot be opened at all (unreadable file, legacy layout, inconsistent width) prints one stderr warning and is not used for reuse: the pairs are embedded fresh, as when no index exists, instead of failing the command. Pinned by `tests/lint-conflicts-index-width.test.ts`.
