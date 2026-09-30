@@ -8,6 +8,7 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `memory-router lint --conflicts --semantic` no longer changes the embedding index it reads. It opened the index writable with a fixed 1536-wide hint, which on an index with no recorded width (a first `memory-router index` whose embed call failed after the file was created, or an empty corpus) created the vector table and recorded a width of 1536, so a later search or `memory-router index` under a provider of another width threw a dimension mismatch until the index was rebuilt. It now opens the index read-only without a width hint, and an index that cannot be opened at all skips the semantic step with one stderr warning and leaves the regex-only report, as the consolidate near-duplicate pass does, instead of failing the command. Pinned by `tests/lint-conflicts-index-width.test.ts`.
 - `eval --json`'s help text pointed the JSON schema pointer at `README.md`, which no longer holds that section after the docs restructure. It now links the "`memory-router eval` metric definitions and JSON schema" section of `docs/commands.md` by its GitHub URL, since `docs/` is not part of the published npm package.
 
 ### Changed
