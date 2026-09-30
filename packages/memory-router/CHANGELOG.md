@@ -8,6 +8,7 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The stale-model index warning in `semanticSearch` (`src/embed/indexer.ts`) is now written once per process, as its comments always said, instead of on every search that finds stale rows. It uses a module-level flag mirroring the missing-index warning's, so long-running callers (the MCP server, `eval`) no longer repeat it per query; the warning text is unchanged. New tests in `tests/stale-model-warning-once.test.ts`.
 - `eval --json`'s help text pointed the JSON schema pointer at `README.md`, which no longer holds that section after the docs restructure. It now links the "`memory-router eval` metric definitions and JSON schema" section of `docs/commands.md` by its GitHub URL, since `docs/` is not part of the published npm package.
 
 ### Changed

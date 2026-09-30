@@ -48,9 +48,15 @@ function rebuildCommandFor(memoryDir: string): string {
 // server, can call semanticSearch many times per session): repeating this
 // on every single missing-index call would just be stderr noise once the
 // user has already seen the hint. Module-level flag, same
-// once-per-process shape as the intent already documented (see
-// semanticSearch below) for the stale-model warning.
+// once-per-process shape as the stale-model warning below.
 let missingIndexWarned = false;
+
+// Same once-per-process shape for the stale-model warning in semanticSearch:
+// a long-lived caller (the MCP server, eval) would otherwise repeat the
+// line on every query against the same stale index. Set only when a call
+// actually finds stale rows, so a process whose index was clean when first
+// searched still warns once if it later goes stale.
+let staleModelWarned = false;
 
 // Enriches an embedBatch() failure (a raw fetch/HTTP error) with the
 // resolved provider + baseUrl the call was actually made against, so a
@@ -231,7 +237,8 @@ async function semanticSearch(
     // meaningless, so search() filters them out below; the warning tells
     // the user to run `memory-router index` again to refresh.
     const stale = store.countEntriesWithStaleModel(cfg.model);
-    if (stale > 0) {
+    if (stale > 0 && !staleModelWarned) {
+      staleModelWarned = true;
       process.stderr.write(
         `[memory-router] embedding index has ${stale} entr(y/ies) under a different model than '${cfg.model}'; run \`memory-router index <dir>\` to rebuild.\n`,
       );
