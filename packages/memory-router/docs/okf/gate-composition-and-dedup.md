@@ -3,7 +3,7 @@ type: invariant
 title: Three resolvers, two dedup rules
 description: memory-router exports three resolvers that combine gate/signal hits into a ranked list; this maps each production call site to its resolver and gate set, and states how the two dedup/ranking functions underneath them differ.
 tags: [gate-composition, dedup, resolveBlended, resolve, rankWithToolPrivilege]
-timestamp: 2026-09-27T15:18:36Z
+timestamp: 2026-09-30T07:01:07Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/index.ts
@@ -32,7 +32,7 @@ allocate result slots differently.
 |---|---|---|
 | `PreToolUse` hook (`packages/memory-router/src/hooks/pre-tool-use.ts:30`) | `resolve(ctx, memories, { gates: [toolGate] })` | Tool Gate only, explicitly overriding `DEFAULT_GATES` |
 | `memory-router test` CLI verb, no `--semantic` | `resolve(ctx, memories, { maxHits })` (default `opts.gates`) | `DEFAULT_GATES = [topicGate, toolGate]` |
-| `memory-router test --semantic` | `resolve(...)` then `resolveConfidence(...)`, merged via `dedupeAndRank` (`packages/memory-router/src/cli.ts:753-766`) | Topic + Tool (sync) plus Confidence (async), as two separate calls |
+| `memory-router test --semantic` | `resolve(...)` then `resolveConfidence(...)`, merged via `dedupeAndRank` (`packages/memory-router/src/cli.ts:756-769`) | Topic + Tool (sync) plus Confidence (async), as two separate calls |
 | `UserPromptSubmit` hook, MCP `memory_resolve`, `memory-router eval` | `resolveBlended(ctx, memories, memoryDir)` | Semantic score (dominant) + Topic Gate (boost) + recency/type modifiers, plus Tool Gate only when `ctx.tool` is set |
 
 Two things worth stating explicitly:
@@ -44,7 +44,7 @@ Two things worth stating explicitly:
   `DEFAULT_GATES` is used by every `resolve()` call that passes no `gates`
   option (`packages/memory-router/src/router.ts:49`): among them the `test`
   CLI verb's `resolve(ctx, memories, { maxHits })` call
-  (`packages/memory-router/src/cli.ts:753`), run whether or not
+  (`packages/memory-router/src/cli.ts:756`), run whether or not
   `--semantic` is also passed, and `resolveBlended`'s own degraded
   fallback (`packages/memory-router/src/router.ts:248`, `return
   resolve(ctx, memories, { maxHits })`). That fallback shapes the
@@ -61,7 +61,7 @@ Two things worth stating explicitly:
   Gate run in isolation, with its own `maxHits` default (`3`, vs.
   `resolve`'s and `resolveBlended`'s `5`). Its only call site under
   `packages/memory-router/src` is the `test --semantic` path
-  (`packages/memory-router/src/cli.ts:758`), per
+  (`packages/memory-router/src/cli.ts:761`), per
   `rg -n 'resolveConfidence\b' packages/memory-router/src`, which also
   shows the package entry point re-exporting it
   (`packages/memory-router/src/index.ts:30`); `resolveBlended` does not

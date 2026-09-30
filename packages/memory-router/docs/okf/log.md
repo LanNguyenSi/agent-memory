@@ -1,5 +1,12 @@
 # Bundle log
 
+- 2026-09-30T07:01:07Z, `semantic-search-silent-noop.md`:
+  on an `openIndex()` failure `lint --conflicts --semantic` now warns once
+  and embeds fresh without reusing the index instead of skipping the
+  semantic step; the `cli.ts` line citations in this doc and in
+  `gate-composition-and-dedup.md` were moved for the three help-text lines
+  added to `src/cli.ts`. Re-stamped.
+
 - 2026-09-30T06:51:55Z, `semantic-search-silent-noop.md`:
   `lint --conflicts --semantic` now opens the index read-only without a width hint, so it no longer
   records a width on an index that has none, and an `openIndex()` throw
