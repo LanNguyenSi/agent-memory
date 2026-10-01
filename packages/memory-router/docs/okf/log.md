@@ -1,5 +1,11 @@
 # Bundle log
 
+- 2026-10-01T15:03:27Z, `semantic-search-silent-noop.md`:
+  re-verified the semantic lint open-failure warning against the changed
+  `conflicts.ts` condition. It preserves the width and newer-schema repair
+  advice and appends one rebuild hint to a raw reason even when its path
+  contains `rebuild`; the fallback to fresh embedding is unchanged.
+
 - 2026-09-30T11:14:55Z, `semantic-search-silent-noop.md`:
   the `lint --conflicts --semantic` open-failure warning now appends the
   `memory-router index <dir>` rebuild hint unless the reason already says

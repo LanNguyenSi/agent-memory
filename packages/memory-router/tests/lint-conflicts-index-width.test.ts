@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
 
-const { openIndex } = require('../src/embed/index-store');
+const { openIndex, CURRENT_SCHEMA_VERSION } = require('../src/embed/index-store');
 const { indexPath, semanticSearch } = require('../src/embed/indexer');
 const { loadMemoriesFromDir } = require('../src/memory/loader');
 const {
@@ -29,8 +29,8 @@ const {
 const MODEL = 'width-test-768';
 const WIDTH = 768;
 
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-lint-width-'));
+function tmpDir(prefix = 'memory-router-lint-width-'): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
 function writeMem(dir: string, name: string, frontmatter: string, body: string): void {
@@ -221,23 +221,36 @@ function sha256(file: string): string {
 // index file hash before and after.
 async function lintWithIndex(
   prepare: (idx: string) => void,
+  dirPrefix?: string,
+  openFailure?: (idx: string) => string,
 ): Promise<{
   high: number;
   warnings: string[];
   before: string;
   after: string;
 }> {
-  const dir = tmpDir();
+  const dir = tmpDir(dirPrefix);
   writePair(dir);
   const idx = indexPath(dir);
   fs.mkdirSync(path.dirname(idx), { recursive: true });
   prepare(idx);
   const before = sha256(idx);
   const cap = captureStderr();
+  const storeModule = require('../src/embed/index-store');
+  const conflictsPath = require.resolve('../src/lint/conflicts');
+  const originalOpenIndex = storeModule.openIndex;
+  let runLint = lintMemoryDirForConflictsWithSemantic;
+  if (openFailure) {
+    // The readonly lint open skips migration checks, so inject an openIndex
+    // error to exercise the warning's handling of a supplied reason.
+    storeModule.openIndex = () => { throw new Error(openFailure(idx)); };
+    delete require.cache[conflictsPath];
+    runLint = require('../src/lint/conflicts').lintMemoryDirForConflictsWithSemantic;
+  }
   try {
     let high = 0;
     await withEnv(async () => {
-      const report = await lintMemoryDirForConflictsWithSemantic(dir, {
+      const report = await runLint(dir, {
         semantic: true,
         embedFn: async (texts: string[]) => texts.map(() => [1, 0, 0]),
       });
@@ -250,6 +263,10 @@ async function lintWithIndex(
       after: sha256(idx),
     };
   } finally {
+    if (openFailure) {
+      storeModule.openIndex = originalOpenIndex;
+      delete require.cache[conflictsPath];
+    }
     cap.restore();
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -262,6 +279,33 @@ test('lint --semantic leaves a zero-byte index file byte-identical and still upg
   assert.equal(r.warnings.length, 1, 'exactly one warning line');
   assert.equal(countOf(r.warnings[0], 'memory-router index'), 1, 'rebuild hint exactly once');
   assert.match(r.warnings[0], /memory-router index \S+ to rebuild it/, 'hint names the memory dir');
+});
+
+test('lint --semantic gives one rebuild hint when a raw SQLite error contains a path named rebuild', async () => {
+  const r = await lintWithIndex(
+    (idx) => fs.writeFileSync(idx, ''),
+    'memory-router-rebuild-raw-error-',
+    (idx) => `SQLite open at ${idx}: no such table: meta`,
+  );
+  assert.equal(r.after, r.before, 'index bytes unchanged');
+  assert.equal(r.high, 1, 'semantic upgrade still happens without the index');
+  assert.equal(r.warnings.length, 1, 'exactly one warning line');
+  assert.match(r.warnings[0], /memory-router-rebuild-raw-error-/);
+  assert.equal(countOf(r.warnings[0], 'to rebuild it'), 1, 'hint added exactly once');
+});
+
+test('lint --semantic gives no rebuild hint when the on-disk schema needs a newer memory-router', async () => {
+  const r = await lintWithIndex(
+    (idx) => openIndex({ path: idx }).close(),
+    undefined,
+    () => `on-disk schema_version ${CURRENT_SCHEMA_VERSION + 1} is newer than this code supports (${CURRENT_SCHEMA_VERSION}); upgrade memory-router`,
+  );
+  assert.equal(r.after, r.before, 'index bytes unchanged');
+  assert.equal(r.high, 1, 'semantic upgrade still happens without reuse');
+  assert.equal(r.warnings.length, 1, 'exactly one warning line');
+  assert.match(r.warnings[0], /on-disk schema_version .* is newer than this code supports/);
+  assert.match(r.warnings[0], /upgrade memory-router/);
+  assert.equal(countOf(r.warnings[0], 'to rebuild it'), 0, 'no incorrect rebuild hint');
 });
 
 test('lint --semantic leaves a legacy pre-meta index file byte-identical and still upgrades via fresh embeddings', async () => {
