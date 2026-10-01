@@ -8,6 +8,7 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `lint --conflicts --semantic` now preserves the `upgrade memory-router` advice in a newer-schema index error instead of appending a rebuild hint. A raw open error still gets one rebuild hint when its index path contains `rebuild`; the existing inconsistent-width hint and fresh-embedding fallback remain unchanged.
 - The `memory-router lint --conflicts --semantic` warning printed when the embedding index cannot be opened now names the fix. For a zero-byte or legacy pre-meta index the reason was the raw SQLite text (for example `no such table: meta`) with no hint; the warning now ends with ``run `memory-router index <dir>` to rebuild it``. The inconsistent-width reason already says to rebuild and is not given a second hint. The fall-back (embed fresh without reuse) is unchanged. Pinned by `tests/lint-conflicts-index-width.test.ts`.
 
 ## [0.7.2] - 2026-09-30

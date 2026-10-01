@@ -503,12 +503,12 @@ export async function lintMemoryDirForConflictsWithSemantic(
         // near-dupes pass skips outright because the index is its only
         // embedding source.
         // A raw SQLite reason (zero-byte or legacy pre-meta file) names no
-        // fix, so append the rebuild command; openIndex's own inconsistent-
-        // width message already says to rebuild, so it is not repeated.
+        // fix, so append the rebuild command. The inconsistent-width reason
+        // already ends with that advice, while a newer schema needs a newer
+        // memory-router rather than a rebuild. Inspect those exact endings:
+        // the index path inside a raw error may itself contain "rebuild".
         const cause = err instanceof Error ? err.message : String(err);
-        const reason = /rebuild/i.test(cause)
-          ? cause
-          : `${cause}; run \`memory-router index ${dir}\` to rebuild it`;
+        const reason = indexOpenFailureReason(cause, dir);
         process.stderr.write(
           `[memory-router] --semantic: cannot open embedding index, embedding fresh without reuse (${reason})\n`,
         );
@@ -626,6 +626,15 @@ export async function lintMemoryDirForConflictsWithSemantic(
   }
 
   return { ...baseReport, hits: upgradedHits };
+}
+
+function indexOpenFailureReason(cause: string, dir: string): string {
+  const alreadyHasFix =
+    cause.endsWith('The file is likely corrupted — delete it and rebuild.') ||
+    cause.endsWith('; upgrade memory-router');
+  return alreadyHasFix
+    ? cause
+    : `${cause}; run \`memory-router index ${dir}\` to rebuild it`;
 }
 
 module.exports = {

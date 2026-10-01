@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-09-30T11:14:55Z
+timestamp: 2026-10-01T15:03:27Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -181,12 +181,17 @@ writing:
   `--semantic: cannot open embedding index, embedding fresh without reuse`
   line, carrying the error message as its reason (with
   ``run `memory-router index <dir>` to rebuild it`` appended unless the
-  message already says to rebuild, as the inconsistent-width one does),
+  reason ends in the inconsistent-width repair advice or the
+  newer-schema `upgrade memory-router` advice),
   goes to stderr, only the
   reuse of stored embeddings is skipped, and the pairs are embedded fresh
   as when no index exists, so a zero-byte or legacy pre-meta index file is
   left byte-identical and the semantic upgrade still happens; the index is
   only a reuse cache here.
+  The read-only open skips `applyMigrations`, so the newer-schema error is
+  not currently emitted by this lint path; its warning formatting still
+  preserves upgrade advice if that reason is supplied. A path containing
+  `rebuild` in a raw error does not suppress the rebuild hint.
 - The consolidate near-duplicate pass
   (`packages/memory-router/src/consolidate/near-dupes.ts:141-157`) opens it
   read-only with `opts.meta`, catches an `openIndex()` throw, and reports
