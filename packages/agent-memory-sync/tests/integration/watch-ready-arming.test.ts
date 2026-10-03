@@ -18,6 +18,7 @@
 // depending on CPU load.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { createSandbox, writeProjectConfig, writeText } = require("../helpers/cli.ts");
@@ -210,6 +211,23 @@ test("watch delivers a nested missing syncPath that is created one directory lev
   assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
+// The path appears empty, `watch` announces it, and only then does a file get
+// written: nothing is left for the re-read to find, so the file reaches the tick
+// through the watcher `watch` started for that path.
+test("watch delivers a file written into a missing syncPath after the path appeared and was announced", async () => {
+  const { exitCode, stderr } = await runWatch("watch-arming-after-appeared", ["logs"], 1, async ({ workspaceRoot, child, stderr }) => {
+    await waitForWatcherReady(stderr);
+    fs.mkdirSync(path.join(workspaceRoot, "logs"));
+    await waitForCount(child, stderr, /syncPath .*logs appeared, watching it/g, 1);
+    // The announcement is printed when the path is found, before its watcher
+    // is ready; the ready event follows within milliseconds.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    writeText(path.join(workspaceRoot, "logs", "late.md"), "late\n");
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.equal(count(stderr, TICK_STARTED), 1);
+});
+
 // Shape (c). The path and a file in it are created in the window where
 // chokidar's own deferred step has not run yet (the preload delays it by
 // ARM_DELAY_MS after the first fs.watch). chokidar 4.0.3 then skipped the
@@ -237,7 +255,7 @@ test("watch delivers a file that was created together with a missing syncPath be
   assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
-test("watch says which syncPaths it is waiting for and announces each one that appears, before and after its ready line", async () => {
+test("watch says which syncPaths it is waiting for and announces each one that appears", async () => {
   const { exitCode, stderr } = await runWatch("watch-arming-info", ["logs", "notes"], 1, async ({ workspaceRoot, stderr }) => {
     await waitForWatcherReady(stderr);
     writeText(path.join(workspaceRoot, "notes", "b.md"), "b\n");
