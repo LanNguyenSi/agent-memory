@@ -1,5 +1,10 @@
 # Bundle log
 
+- 2026-10-03T13:13:22Z, merged master into the staleness-template branch: master's
+  `ci.yml` now passes `matrix.package` to the native-dep smoke step through
+  `env: PACKAGE`, two lines longer. Re-pointed `native-deps-and-ci-smoke.md`
+  (`ci.yml:47-53` for the step, `:52` for the smoke command); claims
+  unchanged; re-stamped.
 - 2026-10-03T12:12:29Z, okf-staleness workflow re-synced from the okf-kit
   workflow template (fleet convergence ticket fdc01728): the workflow header
   now names the template as its source instead of calling the file a pattern
