@@ -65,8 +65,11 @@
 // directory (nothing is written into the operator's directories), from after
 // chokidar's `ready`, until the event arrives. It is bounded, like the poll
 // above. Not verified: whether the watches of one process share a stream in
-// libuv that a later watch would show to be live; the argument above does not
-// depend on it.
+// libuv that a later watch would show to be live. The argument above covers
+// kqueue file watches only: a directory watch also missed a write made after
+// one `setImmediate` in about 1 of 100 to 200 trials, so for a directory
+// syncPath a write right after the ready line can still be missed rarely,
+// unless that unverified shared-stream mechanism covers it.
 //
 // Not covered: a syncPath that is removed and created again after it appeared
 // is not re-armed, the same as a syncPath that existed at start. The one
