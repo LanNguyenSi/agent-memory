@@ -1,5 +1,18 @@
 # Bundle log
 
+- 2026-10-03T12:12:29Z, okf-staleness workflow re-synced from the okf-kit
+  workflow template (fleet convergence ticket fdc01728): the workflow header
+  now names the template as its source instead of calling the file a pattern
+  to keep in sync, the pin stays okf-kit@0.16.0, `--require-anchors` joined
+  the invocation, and the job stays warn-only. Measured on the tree before the
+  change with `okf-kit check --json <bundle>`: at okf-kit@0.16.0, 0 errors, 3
+  warnings, 0 notices (exit 0) plain and 0 errors, 103 warnings, 0 notices
+  (exit 0) with `--require-anchors`; at okf-kit@0.16.0, 0 errors, 3 warnings,
+  0 notices (exit 0) plain and 0 errors, 103 warnings, 0 notices (exit 0) with
+  `--require-anchors`. Of the anchored-run warnings, 100 are anchor-required
+  findings (full citations without an anchor); anchoring them is separate work
+  and none of them blocks anything.
+
 - 2026-10-01T15:03:27Z, `semantic-search-silent-noop.md`:
   re-verified the semantic lint open-failure warning against the changed
   `conflicts.ts` condition. It preserves the width and newer-schema repair
