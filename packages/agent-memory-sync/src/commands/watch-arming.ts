@@ -39,7 +39,7 @@
 // file found as a change. The re-read is what delivers a path that was created
 // together with its files before any watch could be opened (c), and it also
 // covers a write that lands in the first moments after an fs.watch is opened,
-// which Node on macOS can miss (nodejs/node#52601). A file that shows up both
+// which Node on macOS can miss (see the measurement below). A file that shows up both
 // in the re-read and as a chokidar event is one pending change, because the
 // pending set is keyed by path.
 //
@@ -48,24 +48,30 @@
 // missing path per interval. The latency it adds (at most one interval, 250 ms
 // by default) is far below the debounce window of the tick it feeds.
 //
-// The ready line also waits for the OS watch to be live (`confirmWatchLive`).
+// The ready line also waits for an OS watch to be live (`confirmWatchLive`).
 // chokidar's own `ready` follows the stat of each existing path, and the
-// fs.watch of an existing file is opened just before it; on macOS a freshly
-// opened fs.watch (libuv's FSEvents stream) can miss a write for a while after
-// it returned (nodejs/node#52601), and under CPU load that while is long
-// enough for a write right after the ready line to be lost, which is the
-// "no progress signal" stall of tests/helpers/watch-process.ts. Before this
-// change the gate on a missing path happened to add a few milliseconds there,
-// and `watch` with a missing path lost such a write far less often than one
-// without. The probe watches a scratch directory in the OS temp directory
-// (nothing is written into the operator's directories) from after chokidar's
-// `ready` and writes into it until the event arrives: libuv serves every
-// fs.watch of a process from one stream that it recreates when a path is added,
-// so an event for the later scratch watch shows that the stream that includes
-// the sync paths is live. It is bounded, like the poll above.
+// fs.watch of an existing file is opened just before it. Measured on macOS
+// with Node 26 (100 trials each, a scratch file or directory in the OS temp
+// directory): a write made synchronously right after `fs.watch(file)` returned
+// was missed 100 of 100 times, a write made after one `setImmediate` 0 of 100
+// times, and for `fs.watch(dir)` an immediate write was missed at most 2 of 100
+// times in any run. On macOS a file watch is kqueue-backed, so the
+// explanation that fits is that it is not live until the event loop has polled
+// once. Under CPU load the time until that poll is longer, which is how
+// a write right after the ready line was lost and the "no progress signal"
+// stall of tests/helpers/watch-process.ts arose. Waiting for an event on a
+// scratch watch guarantees at least that poll after the sync paths' watches
+// were opened. The probe writes only into a scratch directory in the OS temp
+// directory (nothing is written into the operator's directories), from after
+// chokidar's `ready`, until the event arrives. It is bounded, like the poll
+// above. Not verified: whether the watches of one process share a stream in
+// libuv that a later watch would show to be live; the argument above does not
+// depend on it.
 //
 // Not covered: a syncPath that is removed and created again after it appeared
-// is not re-armed, the same as a syncPath that existed at start.
+// is not re-armed, the same as a syncPath that existed at start. The one
+// exception is a path that is gone again at the moment `watch` is about to
+// open its watcher: that is checked and the path goes back to its tracker.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -137,13 +143,14 @@ function resolveStat(options: TrackOptions): (target: string) => Promise<unknown
 }
 
 // One independent poll per target. `onAppeared(target)` runs once, when the
-// target first exists; its promise is awaited only to report a rejection
-// through `onError`. The first check starts before this function returns, the
+// target first exists; its promise is awaited to report a rejection through
+// `onError` and to read its result: `false` means the target could not be used
+// after all (it vanished again), and polling for it starts over. The first check starts before this function returns, the
 // next one `pollMs` after the previous check finished, so checks of one target
 // never overlap.
 function trackMissingPaths(
   targets: string[],
-  onAppeared: (target: string) => void | Promise<void>,
+  onAppeared: (target: string) => void | boolean | Promise<void | boolean>,
   options: TrackOptions = {}
 ): MissingPathTracker {
   const pollMs = options.pollMs ?? DEFAULT_MISSING_POLL_MS;
@@ -172,10 +179,22 @@ function trackMissingPaths(
       return;
     }
     waiting.delete(target);
+    let outcome: void | boolean;
     try {
-      await onAppeared(target);
+      outcome = await onAppeared(target);
     } catch (error) {
       options.onError?.(target, error);
+      return;
+    }
+    if (outcome === false && !closed) {
+      // The handler could not use the path (it is gone again): wait for it
+      // anew, as if it had not appeared.
+      waiting.add(target);
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        void check(target);
+      }, pollMs);
+      timers.add(timer);
     }
   };
 
@@ -260,6 +279,9 @@ interface ConfirmOptions {
   // Directory the scratch directory is created in; the OS temp directory by
   // default.
   scratchRoot?: string;
+  // Called with the error when the probe itself cannot be set up or written
+  // (scratch directory, watch, write), as opposed to simply timing out.
+  onError?: (error: unknown) => void;
 }
 
 // Resolves true once an fs.watch opened now has delivered an event for a write
@@ -279,7 +301,8 @@ function confirmWatchLive(options: ConfirmOptions = {}): Promise<boolean> {
       live = true;
     });
     watcher.on("error", () => undefined);
-  } catch {
+  } catch (error) {
+    options.onError?.(error);
     return Promise.resolve(false);
   }
   const cleanup = () => {
@@ -309,8 +332,9 @@ function confirmWatchLive(options: ConfirmOptions = {}): Promise<boolean> {
       }
       try {
         fs.writeFileSync(path.join(scratch, "probe"), String(writes++));
-      } catch {
+      } catch (error) {
         cleanup();
+        options.onError?.(error);
         resolve(false);
         return;
       }

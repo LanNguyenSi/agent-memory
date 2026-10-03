@@ -146,6 +146,48 @@ test("trackMissingPaths reports a failing appearance handler through onError and
   }
 });
 
+test("trackMissingPaths waits for a target again when its handler returns false, and reports it when the handler accepts it", async () => {
+  const present = new Set(["/ws/logs"]);
+  const calls: string[] = [];
+  const answers = [false, undefined];
+  const tracker = trackMissingPaths(
+    ["/ws/logs"],
+    (target: string) => {
+      calls.push(target);
+      return answers.shift() as false | undefined;
+    },
+    { pollMs: 2, stat: fakeStat(present) }
+  );
+  try {
+    await until(() => calls.length === 2, "the second report of the target");
+    assert.deepEqual(calls, ["/ws/logs", "/ws/logs"]);
+    await sleep(30);
+    assert.equal(calls.length, 2, "a target the handler accepted is not reported again");
+    assert.deepEqual(tracker.pending(), []);
+  } finally {
+    tracker.close();
+  }
+});
+
+test("trackMissingPaths keeps a target pending while its handler keeps returning false, and stops on close", async () => {
+  const present = new Set(["/ws/logs"]);
+  let calls = 0;
+  const tracker = trackMissingPaths(
+    ["/ws/logs"],
+    () => {
+      calls += 1;
+      return false;
+    },
+    { pollMs: 2, stat: fakeStat(present) }
+  );
+  await until(() => calls >= 3, "repeated reports");
+  assert.deepEqual(tracker.pending(), ["/ws/logs"]);
+  tracker.close();
+  const callsAtClose = calls;
+  await sleep(40);
+  assert.ok(calls <= callsAtClose + 1, `kept polling after close (${callsAtClose} -> ${calls})`);
+});
+
 test("trackMissingPaths reports a path created on disk, including one under a parent that is created later", async () => {
   const root = createSandbox("watch-arming-track-real");
   const appeared: string[] = [];
@@ -225,6 +267,19 @@ test("confirmWatchLive ends at once when its signal is already aborted", async (
 test("confirmWatchLive resolves false, and does not throw, when the scratch directory cannot be created", async () => {
   const scratchRoot = path.join(createSandbox("watch-arming-live-missing"), "does-not-exist");
   assert.equal(await confirmWatchLive({ timeoutMs: 1000, scratchRoot }), false);
+});
+
+test("confirmWatchLive reports the cause through onError when the probe cannot be set up, and not on a plain timeout", async () => {
+  const errors: unknown[] = [];
+  const scratchRoot = path.join(createSandbox("watch-arming-live-onerror"), "does-not-exist");
+  assert.equal(await confirmWatchLive({ timeoutMs: 1000, scratchRoot, onError: (error: unknown) => errors.push(error) }), false);
+  assert.equal(errors.length, 1);
+  assert.match((errors[0] as Error).message, /ENOENT/);
+
+  const timedOut: unknown[] = [];
+  const ok = createSandbox("watch-arming-live-onerror-timeout");
+  assert.equal(await confirmWatchLive({ timeoutMs: 0, scratchRoot: ok, onError: (error: unknown) => timedOut.push(error) }), false);
+  assert.deepEqual(timedOut, []);
 });
 
 test("parseArmTimeoutMs takes a non-negative number and falls back to the default otherwise", () => {

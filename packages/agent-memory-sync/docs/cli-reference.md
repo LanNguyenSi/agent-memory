@@ -88,19 +88,26 @@ scratch directory in the OS temp directory has delivered an event, at most
 `AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS` milliseconds (default 5000; an invalid
 or negative value falls back to the default) after chokidar's scan, otherwise
 `watch` warns `could not confirm within <N>ms that the operating system file
-watch is live` and prints the line anyway. Nothing is written into a syncPath
-for this. A syncPath that does not exist at start is watched too: `watch` checks each such
-path on its own every 250 ms (a path under a directory that is missing as well
-is checked the same way), and as soon as one exists it starts a watcher for it
-and reports every file already inside it as a change, so a path that appears
-later, several paths missing under one directory, and a nested path whose
-parent directory is created later are all delivered. With `--verbose`, `watch`
-prints `N syncPath(s) do not exist yet and are checked every 250ms: <paths>`
-before the ready line, `syncPath <path> appeared, watching it` for each path
-that shows up, and `syncPath <path> is armed (N existing file(s) reported)` once
-its watcher is ready and the path has been read. A path that is removed and
-created again after it appeared is not re-armed, the same as one that existed at
-start. See
+watch is live` and prints the line anyway (if the probe cannot be set up at
+all, the warning reads `could not check that the operating system file watch is
+live (<cause>)`). The wait exists because, measured on macOS, a write made
+right after `fs.watch` on a file returned can be missed until the event loop
+has polled once; an event on the scratch watch shows that this has happened.
+Nothing is written into a syncPath for this, and a shutdown during the wait
+ends it without the ready line. A syncPath that does not exist at start is
+watched too: `watch` checks each such path on its own every 250 ms (a path
+under a directory that is missing as well is checked the same way), and as soon
+as one exists it starts a watcher for it and reports every file already inside
+it as a change, so a path that appears later, several paths missing under one
+directory, and a nested path whose parent directory is created later are all
+delivered. With `--verbose`, `watch` prints `N syncPath(s) do not exist yet and
+are checked every 250ms: <paths>` before the ready line, `syncPath <path>
+appeared, watching it` for each path that shows up, and `syncPath <path> is
+armed (N existing file(s) reported)` once its watcher is ready and the path has
+been read. A path that is gone again before its watcher can be opened is waited
+for anew (`syncPath <path> disappeared again before it could be watched,
+waiting for it`). A path that is removed and created again after it appeared is
+not re-armed, the same as one that existed at start. See
 [Sync behavior](sync-behavior.md) for what happens when a push fails, and
 [Service supervision](service-supervision.md) for running `watch` under
 systemd or launchd.

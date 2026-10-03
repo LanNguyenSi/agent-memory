@@ -1,3 +1,4 @@
+const fs = require("node:fs");
 const path = require("node:path");
 const chokidar = require("chokidar");
 const {
@@ -424,16 +425,28 @@ function registerWatchCommand(program: import("commander").Command): void {
       // What the path already held before the watch opened produces no event
       // (ignoreInitial), so the re-read reports it as a change; a file seen by
       // both the re-read and the watcher is one pending change.
-      async function armAppearedPath(target: string): Promise<void> {
+      async function armAppearedPath(target: string): Promise<boolean | void> {
         if (watcherClosed || shouldExit) {
           return;
+        }
+        // The path can be gone again by now (removed right after the tracker
+        // saw it). chokidar would then take its lossy missing-path branch for
+        // it, so it goes back to the tracker instead. Returning false does
+        // that. A path removed after this check and before its watcher is
+        // ready is not covered, like any removal after the path appeared.
+        if (!fs.existsSync(target)) {
+          writeInfo(`syncPath ${target} disappeared again before it could be watched, waiting for it`, outputOptions);
+          return false;
         }
         writeInfo(`syncPath ${target} appeared, watching it`, outputOptions);
         const appeared = createWatcher([target]);
         await new Promise<void>((resolve) => {
           // `ready` normally follows within milliseconds. The bound keeps a
           // watcher that never reports it from skipping the re-read.
+          // unref'd: a shutdown between the appearance and `ready` must not
+          // be held up by this bound.
           const bound = setTimeout(resolve, APPEARED_READY_BOUND_MS);
+          bound.unref();
           appeared.once("ready", () => {
             clearTimeout(bound);
             resolve();
@@ -482,9 +495,13 @@ function registerWatchCommand(program: import("commander").Command): void {
       // that file's header comment for the full measurement notes.
       //
       // The line also waits for an OS watch opened after chokidar's `ready` to
-      // deliver an event (confirmWatchLive, ./watch-arming.ts), the structural
-      // answer to the macOS gap described above; it is bounded, and a timeout
-      // is a warning, not a failure.
+      // deliver an event (confirmWatchLive, ./watch-arming.ts). Measured on
+      // macOS: a write made synchronously after fs.watch(file) returned was
+      // missed 100 of 100 times, one made after a single setImmediate 0 of
+      // 100, so a file watch is not live until the event loop has polled once;
+      // waiting for an event on a scratch watch guarantees at least that. The
+      // wait is bounded, and a timeout or a failure to set the probe up is a
+      // warning, not a failure.
       //
       // A syncPath that does not exist at start is never handed to chokidar,
       // whose handling of it is early and lossy (agent-tasks 50a13ffe,
@@ -506,13 +523,29 @@ function registerWatchCommand(program: import("commander").Command): void {
       if (existingAtStart.length > 0) {
         createWatcher(existingAtStart).once("ready", async () => {
           const timeoutMs = resolveArmTimeoutMs();
-          const live = await confirmWatchLive({ timeoutMs, signal: armingAbort.signal });
+          let setupError: unknown = null;
+          const live = await confirmWatchLive({
+            timeoutMs,
+            signal: armingAbort.signal,
+            onError: (error: unknown) => {
+              setupError = error;
+            }
+          });
           if (!live && !watcherClosed) {
-            writeWarning(
-              `could not confirm within ${timeoutMs}ms that the operating system file watch is live; ` +
-                "continuing, so a change made right after start may be missed until watch is restarted",
-              outputOptions
-            );
+            const consequence =
+              "continuing, so a change made right after start may be missed until watch is restarted";
+            if (setupError !== null) {
+              const reason = setupError instanceof Error ? setupError.message : String(setupError);
+              writeWarning(
+                `could not check that the operating system file watch is live (${reason}); ${consequence}`,
+                outputOptions
+              );
+            } else {
+              writeWarning(
+                `could not confirm within ${timeoutMs}ms that the operating system file watch is live; ${consequence}`,
+                outputOptions
+              );
+            }
           }
           announceReady();
         });
