@@ -1,64 +1,58 @@
-// Coverage for the arming gate on `watch`'s ready line (agent-tasks
-// 50a13ffe; mechanism and the state signal in src/commands/watch-arming.ts).
+// Coverage for `watch`'s handling of syncPaths that do not exist at start
+// (agent-tasks 50a13ffe, d09a0d3a; mechanism in src/commands/watch-arming.ts).
 //
-// chokidar's own `ready` fires while the watch for a sync path that is missing
-// at start (a `logs/` directory nobody created yet) is still to be opened, and
-// a write landing in that gap is never delivered. In production that gap is a
-// few milliseconds wide and only bites under CPU load, which made the stall it
-// causes irreproducible on demand. These tests widen the gap by construction
-// instead of waiting for load: tests/helpers/arming-delay-preload.cjs delays
-// the deferred step by a fixed time and logs every fs.watch() call, so the
-// assertions below are about ordering (was the watch opened before the ready
-// line?), not about timing luck.
+// chokidar 4.0.3 loses three shapes of missing syncPath: (a) two or more
+// missing paths under one existing directory (only the first target's deferred
+// listener is delivered), (b) a nested missing path whose parent is missing as
+// well (never matches), (c) a path created before chokidar's deferred step ran
+// (what it already holds is never read). `watch` therefore tracks each missing
+// path itself and gives it its own watcher once it appears. Each test below
+// writes into the path the way an operator's agent does, straight after the
+// ready line or before it, and then needs a tick to start for that write; the
+// tick count is the delivery signal (a tick runs whole-tree, so one delivered
+// path would otherwise hide a lost one: every path under test gets its own
+// tick, one after the other).
+//
+// tests/helpers/arming-delay-preload.cjs widens the gap in chokidar's deferred
+// step by construction, so the (c) test fails on the pre-change code without
+// depending on CPU load.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { createSandbox, writeProjectConfig, writeText } = require("../helpers/cli.ts");
 const {
   spawnWatch,
+  trackWatchProcessGroup,
   waitForWatcherReady,
   withTickDeadline,
   stopWatchProcessGroup,
   INACTIVITY_TIMEOUT_MS
 } = require("../helpers/watch-process.ts");
-const {
-  ARM_TIMEOUT_ENV_VAR,
-  DEFAULT_ARM_TIMEOUT_MS,
-  armingLimitWarnings,
-  collectMissingTargets,
-  isTargetArmed,
-  parseArmTimeoutMs,
-  waitForDeferredArming
-} = require("../../src/commands/watch-arming.ts");
 
 const PRELOAD = path.resolve(process.cwd(), "tests", "helpers", "arming-delay-preload.cjs");
-// Far larger than the few milliseconds the deferred step needs on its own, so
-// chokidar's `ready` reliably lands inside the gap, and small enough to keep
-// the tests fast.
+// Far larger than the few milliseconds chokidar's deferred step needs on its
+// own, so a path created right after the first fs.watch lands inside it.
 const ARM_DELAY_MS = 400;
 const READY_LINE = /watching \d+ path\(s\) under/;
-// The two startup warnings for configurations the arming gate does not cover.
-const SHARED_ANCHOR_WARNING = /warning: \d+ missing syncPaths share the existing directory /;
-const NESTED_MISSING_WARNING = /warning: the parent directory of .* is missing as well/;
+const TICK_STARTED = /watch tick pushing snapshot/g;
+// The line that ends a tick. The remote of these workspaces does not exist, so
+// a tick queues locally and the process keeps running until --max-runs.
+const TICK_ENDED = /watch tick (queued locally|produced no remote changes|pushed snapshot)/g;
 
-function delayedArmingEnv(delayDir: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+function delayedArmingEnv(delayDir: string): NodeJS.ProcessEnv {
   const existing = process.env.NODE_OPTIONS ? `${process.env.NODE_OPTIONS} ` : "";
   return {
     ...process.env,
     NODE_OPTIONS: `${existing}--require "${PRELOAD}"`,
     AGENT_MEMORY_SYNC_TEST_ARM_DELAY_DIR: delayDir,
-    AGENT_MEMORY_SYNC_TEST_ARM_DELAY_MS: String(ARM_DELAY_MS),
-    ...extra
+    AGENT_MEMORY_SYNC_TEST_ARM_DELAY_MS: String(ARM_DELAY_MS)
   };
 }
 
 // MEMORY.md exists, and so does the workspace root; the directories named in
-// `missingDirs` do not. The remote is a path that does not exist, so a tick
-// queues locally and exits 0: the test needs the tick to start, not to publish
-// anything.
-function setupWorkspace(name: string, missingDirs: string[] = ["logs"]) {
+// `missingDirs` (relative to the root, possibly nested) do not.
+function setupWorkspace(name: string, missingDirs: string[]) {
   const root = createSandbox(name);
   const workspaceRoot = path.join(root, "workspace");
   const configPath = path.join(root, "config.json");
@@ -78,313 +72,245 @@ function setupWorkspace(name: string, missingDirs: string[] = ["logs"]) {
   return { workspaceRoot, configPath };
 }
 
-function setupMissingLogsWorkspace(name: string) {
-  return setupWorkspace(name, ["logs"]);
+function watchArgs(configPath: string, maxRuns: number): string[] {
+  return ["watch", "default", "--config", configPath, "--debounce-ms", "300", "--max-runs", String(maxRuns), "--verbose", "--output", "json"];
 }
 
-function watchArgs(configPath: string): string[] {
-  return ["watch", "default", "--config", configPath, "--debounce-ms", "300", "--max-runs", "1", "--verbose", "--output", "json"];
+function count(text: string, pattern: RegExp): number {
+  return (text.match(pattern) ?? []).length;
 }
 
-test("watch prints its ready line only after the deferred watch for a missing syncPath is open, so an immediate write is seen", async () => {
-  const { workspaceRoot, configPath } = setupMissingLogsWorkspace("watch-ready-arming");
-  const child = spawnWatch(watchArgs(configPath), delayedArmingEnv(workspaceRoot));
+// Resolves once `pattern` matches `getStderr()` at least `atLeast` times;
+// rejects when the child ends first, so a child killed by withTickDeadline's
+// inactivity budget fails the wait instead of leaving it polling.
+function waitForCount(child: ReturnType<typeof spawn>, getStderr: () => string, pattern: RegExp, atLeast: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (count(getStderr(), pattern) >= atLeast) {
+        resolve();
+        return;
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        reject(new Error(`watch ended before ${pattern} matched ${atLeast} time(s). stderr: ${getStderr()}`));
+        return;
+      }
+      setTimeout(check, 25);
+    };
+    check();
+  });
+}
+
+// Runs `watch` over a workspace, lets `scenario` write into it, and returns the
+// exit code and stderr once the child has exited by itself (--max-runs reached).
+async function runWatch(
+  name: string,
+  missingDirs: string[],
+  maxRuns: number,
+  scenario: (ctx: {
+    workspaceRoot: string;
+    child: ReturnType<typeof spawn>;
+    stderr: () => string;
+  }) => Promise<void>,
+  env: (workspaceRoot: string) => NodeJS.ProcessEnv = () => process.env
+): Promise<{ exitCode: number; stderr: string }> {
+  const { workspaceRoot, configPath } = setupWorkspace(name, missingDirs);
+  const child = spawnWatch(watchArgs(configPath, maxRuns), env(workspaceRoot));
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
   });
-
-  const exitCode = await withTickDeadline(
-    child,
-    async () => {
-      await waitForWatcherReady(() => stderr);
-
-      // The deferred watch on the parent of the missing path must already be
-      // open at the point the ready line is out. The marker and the ready line
-      // share one stderr pipe, so their order in the captured text is their
-      // order in the child. Checked before the write so an early ready fails
-      // fast here instead of after the tick that would never come.
-      const watchOpenedAt = stderr.indexOf(`arm-probe: fs.watch ${workspaceRoot}\n`);
-      const readyAt = stderr.search(READY_LINE);
-      assert.ok(readyAt >= 0, `no ready line. stderr: ${stderr}`);
-      assert.ok(
-        watchOpenedAt >= 0 && watchOpenedAt < readyAt,
-        `ready line printed before the watch on ${workspaceRoot} was open. stderr: ${stderr}`
-      );
-
-      // Straight after the ready line, into the directory that was missing.
-      writeText(path.join(workspaceRoot, "logs", "trigger.md"), "trigger\n");
-
-      return new Promise<number>((resolve) => {
-        child.on("exit", (code: number | null) => resolve(code ?? -1));
-      });
-    },
-    INACTIVITY_TIMEOUT_MS,
-    () => stderr
-  ).finally(() => stopWatchProcessGroup(child));
-
-  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
-  assert.match(stderr, /watch tick pushing snapshot/);
-  // One missing syncPath directly under an existing directory is the shape the
-  // gate covers: no limits warning.
-  assert.doesNotMatch(stderr, SHARED_ANCHOR_WARNING);
-  assert.doesNotMatch(stderr, NESTED_MISSING_WARNING);
-});
-
-test("watch still prints its ready line, with a warning naming the path, when the deferred watch is not confirmed in time", async () => {
-  const { workspaceRoot, configPath } = setupMissingLogsWorkspace("watch-ready-arming-bound");
-  // The delayed arming (400ms) outlasts this 50ms bound.
-  const child = spawnWatch(watchArgs(configPath), delayedArmingEnv(workspaceRoot, { [ARM_TIMEOUT_ENV_VAR]: "50" }));
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
+  const exited = new Promise<number>((resolve) => {
+    child.on("exit", (code: number | null) => resolve(code ?? -1));
   });
-
   try {
-    await withTickDeadline(
+    const exitCode = await withTickDeadline(
       child,
       async () => {
-        await waitForWatcherReady(() => stderr);
+        await scenario({ workspaceRoot, child, stderr: () => stderr });
+        return exited;
       },
       INACTIVITY_TIMEOUT_MS,
       () => stderr
     );
+    return { exitCode, stderr };
   } finally {
     await stopWatchProcessGroup(child);
   }
+}
 
-  const missingLogs = path.join(workspaceRoot, "logs");
-  assert.match(stderr, new RegExp(`warning: could not confirm the watch on ${missingLogs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} within 50ms`));
-  const warningAt = stderr.indexOf("could not confirm the watch");
-  assert.ok(warningAt < stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${stderr}`);
-});
+// One write, one tick: waits for the tick the write must cause to start and
+// to end, so the next write cannot be merged into it by the debounce window.
+async function writeAndAwaitTick(
+  child: ReturnType<typeof spawn>,
+  stderr: () => string,
+  filePath: string,
+  tickNumber: number
+): Promise<void> {
+  writeText(filePath, `change ${tickNumber}\n`);
+  await waitForCount(child, stderr, TICK_STARTED, tickNumber);
+  await waitForCount(child, stderr, TICK_ENDED, tickNumber);
+}
 
-test("against real chokidar, the gate resolves only once the watch on the missing path's parent has been opened", async () => {
-  const chokidar = require("chokidar");
-  const root = createSandbox("watch-ready-arming-chokidar");
-  const workspaceRoot = path.join(root, "workspace");
-  writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
-  const watchedPaths = [path.join(workspaceRoot, "MEMORY.md"), path.join(workspaceRoot, "logs")];
-
-  const opened: string[] = [];
-  const realWatch = fs.watch;
-  fs.watch = function watch(target: string, ...rest: unknown[]) {
-    opened.push(target);
-    return realWatch.call(this, target, ...rest);
-  };
-  const missing = collectMissingTargets(watchedPaths);
-  const watcher = chokidar.watch(watchedPaths, { ignoreInitial: true });
-  try {
-    const result = await waitForDeferredArming(watcher, missing, { timeoutMs: 5000 });
-    assert.deepEqual(result, { armed: true, pending: [] });
-    assert.ok(opened.includes(workspaceRoot), `expected an fs.watch on ${workspaceRoot}, saw: ${opened.join(", ")}`);
-  } finally {
-    fs.watch = realWatch;
-    await watcher.close();
-  }
-});
-
-test("collectMissingTargets pairs each missing path with its nearest existing ancestor and skips existing paths", () => {
-  const existing = new Set(["/ws", "/ws/MEMORY.md", "/ws/a"]);
-  const exists = (candidate: string) => existing.has(candidate);
-  assert.deepEqual(collectMissingTargets(["/ws/MEMORY.md", "/ws/logs", "/ws/a/b/c"], exists), [
-    { target: "/ws/logs", anchor: "/ws" },
-    { target: "/ws/a/b/c", anchor: "/ws/a" }
-  ]);
-  assert.deepEqual(collectMissingTargets(["/ws/MEMORY.md"], exists), []);
-});
-
-test("isTargetArmed reads the ancestor's own listing under its parent, or the target itself", () => {
-  const target = { target: "/ws/logs", anchor: "/ws" };
-  assert.equal(isTargetArmed({ "/ws": ["MEMORY.md"] }, target), false, "sibling file watched, ancestor watch not yet open");
-  assert.equal(isTargetArmed({ "/ws": ["MEMORY.md"], "/": ["ws"] }, target), true, "ancestor listed under its parent");
-  assert.equal(isTargetArmed({ "/ws": ["MEMORY.md", "logs"] }, target), true, "target appeared and is tracked itself");
-  assert.equal(isTargetArmed({}, { target: "/x", anchor: "/" }), false);
-  assert.equal(isTargetArmed({ "/": [] }, { target: "/x", anchor: "/" }), true);
-});
-
-test("waitForDeferredArming does not resolve while the state reads unarmed, and resolves once it flips", async () => {
-  const state: Record<string, string[]> = { "/ws": ["MEMORY.md"] };
-  const fake = { getWatched: () => state };
-  const targets = [{ target: "/ws/logs", anchor: "/ws" }];
-
-  let resolved = false;
-  const waiting = waitForDeferredArming(fake, targets, { timeoutMs: 5000, pollMs: 2 }).then((result: unknown) => {
-    resolved = true;
-    return result;
+test("watch delivers a write into a missing syncPath straight after the ready line", async () => {
+  const { exitCode, stderr } = await runWatch("watch-arming-single", ["logs"], 1, async ({ workspaceRoot, stderr }) => {
+    await waitForWatcherReady(stderr);
+    writeText(path.join(workspaceRoot, "logs", "trigger.md"), "trigger\n");
   });
-
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  assert.equal(resolved, false, "resolved while the deferred watch was still not open");
-
-  state["/"] = ["ws"];
-  assert.deepEqual(await waiting, { armed: true, pending: [] });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.equal(count(stderr, TICK_STARTED), 1);
+  assert.doesNotMatch(stderr, /could not (confirm|start)/);
+  assert.doesNotMatch(stderr, /warning: .*share the existing directory/);
 });
 
-// The explicit timeout turns a wait that never ends (the bound removed) into a
-// failure instead of a hang.
-test("waitForDeferredArming gives up after the bound and names the paths still pending", { timeout: 5000 }, async (t: { after: (fn: () => void) => void }) => {
-  const stop = new AbortController();
-  // Ends the wait if this test already failed on its timeout (the bound
-  // removed), so the failed run does not keep polling and hang the process.
-  t.after(() => stop.abort());
-  const fake = { getWatched: () => ({ "/ws": ["MEMORY.md"] }) };
-  const targets = [
-    { target: "/ws/logs", anchor: "/ws" },
-    { target: "/ws/MEMORY.md", anchor: "/ws" }
-  ];
-  const started = Date.now();
-  const result = await waitForDeferredArming(fake, targets, { timeoutMs: 80, pollMs: 2, signal: stop.signal });
-  const elapsed = Date.now() - started;
-  assert.deepEqual(result, { armed: false, pending: ["/ws/logs"] });
-  assert.ok(elapsed >= 80 && elapsed < 2000, `expected to give up shortly after the 80ms bound, took ${elapsed}ms`);
-});
-
-test("waitForDeferredArming ends at once when its signal aborts, without waiting for the bound", async () => {
-  const stop = new AbortController();
-  const fake = { getWatched: () => ({ "/ws": ["MEMORY.md"] }) };
-  const waiting = waitForDeferredArming(fake, [{ target: "/ws/logs", anchor: "/ws" }], {
-    timeoutMs: 60000,
-    pollMs: 2,
-    signal: stop.signal
+// Shape (a). The two paths are missing under the same existing directory, so
+// chokidar 4.0.3 delivered only one of them, whichever deferred listener
+// registered first. Both writes need their own tick.
+test("watch delivers each of two missing syncPaths that share an existing directory", async () => {
+  const { exitCode, stderr } = await runWatch("watch-arming-shared", ["logs", "notes"], 2, async ({ workspaceRoot, child, stderr }) => {
+    await waitForWatcherReady(stderr);
+    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "logs", "a.md"), 1);
+    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "notes", "b.md"), 2);
   });
-  stop.abort();
-  assert.deepEqual(await waiting, { armed: false, pending: ["/ws/logs"] });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.equal(count(stderr, TICK_STARTED), 2);
 });
 
-test("waitForDeferredArming treats a watcher that cannot report its state as unarmed and still ends at the bound", { timeout: 5000 }, async (t: { after: (fn: () => void) => void }) => {
-  const stop = new AbortController();
-  t.after(() => stop.abort());
-  const fake = {
-    getWatched: () => {
-      throw new Error("closed");
-    }
-  };
-  const result = await waitForDeferredArming(fake, [{ target: "/ws/logs", anchor: "/ws" }], { timeoutMs: 30, pollMs: 2, signal: stop.signal });
-  assert.deepEqual(result, { armed: false, pending: ["/ws/logs"] });
+// The same shape with the second path written first, so the result does not
+// depend on which path comes first in the configuration.
+test("watch delivers two missing syncPaths in either order of appearance", async () => {
+  const { exitCode, stderr } = await runWatch("watch-arming-shared-reversed", ["logs", "notes"], 2, async ({ workspaceRoot, child, stderr }) => {
+    await waitForWatcherReady(stderr);
+    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "notes", "b.md"), 1);
+    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "logs", "a.md"), 2);
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.equal(count(stderr, TICK_STARTED), 2);
 });
 
-test("parseArmTimeoutMs takes a non-negative number and falls back to the default otherwise", () => {
-  assert.equal(parseArmTimeoutMs(undefined), DEFAULT_ARM_TIMEOUT_MS);
-  assert.equal(parseArmTimeoutMs(""), DEFAULT_ARM_TIMEOUT_MS);
-  assert.equal(parseArmTimeoutMs("250"), 250);
-  assert.equal(parseArmTimeoutMs("0"), 0);
-  assert.equal(parseArmTimeoutMs("-5"), DEFAULT_ARM_TIMEOUT_MS);
-  assert.equal(parseArmTimeoutMs("soon"), DEFAULT_ARM_TIMEOUT_MS);
+// Shape (b). `logs` is missing as well, so chokidar 4.0.3 re-added the target
+// for its leaf name under the workspace root and never matched it.
+test("watch delivers a nested missing syncPath whose parent directory is missing too", async () => {
+  const { exitCode, stderr } = await runWatch("watch-arming-nested", [path.join("logs", "daily")], 1, async ({ workspaceRoot, stderr }) => {
+    await waitForWatcherReady(stderr);
+    writeText(path.join(workspaceRoot, "logs", "daily", "a.md"), "daily\n");
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
-test("armingLimitWarnings warns for missing syncPaths that share an anchor, and for a missing path whose parent is missing too", () => {
-  assert.deepEqual(armingLimitWarnings([]), []);
-  assert.deepEqual(armingLimitWarnings([{ target: "/ws/logs", anchor: "/ws" }]), [], "one missing path under an existing directory");
+test("watch delivers a nested missing syncPath that is created one directory level at a time", async () => {
+  const { exitCode, stderr } = await runWatch("watch-arming-nested-steps", [path.join("logs", "daily")], 1, async ({ workspaceRoot, stderr }) => {
+    await waitForWatcherReady(stderr);
+    writeText(path.join(workspaceRoot, "logs", "unrelated.md"), "outside the syncPath\n");
+    // Several poll intervals pass with `logs` present and `logs/daily` absent.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    writeText(path.join(workspaceRoot, "logs", "daily", "a.md"), "daily\n");
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.equal(count(stderr, TICK_STARTED), 1);
+});
 
-  const shared = armingLimitWarnings([
-    { target: "/ws/logs", anchor: "/ws" },
-    { target: "/ws/notes", anchor: "/ws" },
-    { target: "/other/x", anchor: "/other" }
-  ]);
-  assert.equal(shared.length, 1);
-  assert.match(shared[0], /^2 missing syncPaths share the existing directory \/ws \(\/ws\/logs, \/ws\/notes\)/);
-  assert.ok(!shared[0].includes("\n"), "one line");
-
-  const nested = armingLimitWarnings([{ target: "/ws/logs/daily", anchor: "/ws" }]);
-  assert.equal(nested.length, 1);
-  assert.match(nested[0], /^the parent directory of \/ws\/logs\/daily is missing as well/);
-
-  // One path configured twice (also spelled differently) is one chokidar
-  // target, not two sharing an anchor.
-  assert.deepEqual(
-    armingLimitWarnings([
-      { target: "/ws/logs", anchor: "/ws" },
-      { target: "/ws/logs", anchor: "/ws" },
-      { target: "/ws/./logs/", anchor: "/ws/." }
-    ]),
-    [],
-    "one missing path configured more than once"
+// Shape (c). The path and a file in it are created in the window where
+// chokidar's own deferred step has not run yet (the preload delays it by
+// ARM_DELAY_MS after the first fs.watch). chokidar 4.0.3 then skipped the
+// directory's initial read and never reported the file. The file exists before
+// any watch on `logs` can have been opened, so only a read of the path after
+// its watch is open can deliver it.
+test("watch delivers a file that was created together with a missing syncPath before its watch could be opened", async () => {
+  const { exitCode, stderr } = await runWatch(
+    "watch-arming-created-early",
+    ["logs"],
+    1,
+    async ({ workspaceRoot, child, stderr }) => {
+      const firstWatch = `arm-probe: fs.watch ${path.join(workspaceRoot, "MEMORY.md")}\n`;
+      const startedWaitingAt = Date.now();
+      while (!stderr().includes(firstWatch)) {
+        assert.ok(Date.now() - startedWaitingAt < 20000, `watch never opened its first fs.watch. stderr: ${stderr()}`);
+        assert.ok(child.exitCode === null, `watch ended early. stderr: ${stderr()}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      writeText(path.join(workspaceRoot, "logs", "early.md"), "written before the watch\n");
+    },
+    delayedArmingEnv
   );
-
-  // An unnormalized anchor spelling is compared as the resolved directory.
-  assert.deepEqual(
-    armingLimitWarnings([{ target: "/ws/./logs", anchor: "/ws/." }]),
-    [],
-    "one missing path with an unnormalized anchor"
-  );
-  const respelled = armingLimitWarnings([
-    { target: "/ws/./logs", anchor: "/ws/." },
-    { target: "/ws/notes", anchor: "/ws" }
-  ]);
-  assert.equal(respelled.length, 1, "differently spelled siblings share one anchor");
-  assert.match(respelled[0], /^2 missing syncPaths share the existing directory \/ws /);
-
-  // Two nested paths under one anchor trigger both shapes.
-  assert.equal(
-    armingLimitWarnings([
-      { target: "/ws/a/b", anchor: "/ws" },
-      { target: "/ws/c/d", anchor: "/ws" }
-    ]).length,
-    2
-  );
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
-test("watch warns at startup when two missing syncPaths share an existing directory", async () => {
-  const { workspaceRoot, configPath } = setupWorkspace("watch-ready-arming-shared", ["logs", "notes"]);
-  const child = spawnWatch(watchArgs(configPath), { ...process.env, [ARM_TIMEOUT_ENV_VAR]: "1000" });
+test("watch says which syncPaths it is waiting for and announces each one that appears, before and after its ready line", async () => {
+  const { exitCode, stderr } = await runWatch("watch-arming-info", ["logs", "notes"], 1, async ({ workspaceRoot, stderr }) => {
+    await waitForWatcherReady(stderr);
+    writeText(path.join(workspaceRoot, "notes", "b.md"), "b\n");
+  });
+  assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  assert.match(stderr, /2 syncPath\(s\) do not exist yet and are checked every \d+ms: .*logs, .*notes/);
+  assert.ok(stderr.search(/syncPath\(s\) do not exist yet/) < stderr.search(READY_LINE), `the waiting line must precede the ready line. stderr: ${stderr}`);
+  assert.match(stderr, /syncPath .*notes appeared, watching it/);
+  assert.doesNotMatch(stderr, /syncPath .*logs appeared/);
+});
+
+// chokidar 4.0.3 emitted its own `ready` twice when two syncPaths were missing
+// at start; the main watcher is no longer handed missing paths, and the ready
+// line must stay a single line.
+test("watch prints its ready line once with two missing syncPaths", async () => {
+  const { workspaceRoot, configPath } = setupWorkspace("watch-arming-once", ["logs", "notes"]);
+  const child = spawnWatch(watchArgs(configPath, 1), process.env);
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
   });
   try {
     await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
-  } finally {
-    await stopWatchProcessGroup(child);
-  }
-  assert.match(stderr, SHARED_ANCHOR_WARNING);
-  assert.ok(stderr.includes(`${path.join(workspaceRoot, "logs")}, ${path.join(workspaceRoot, "notes")}`), `both paths named. stderr: ${stderr}`);
-  assert.ok(stderr.search(SHARED_ANCHOR_WARNING) < stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${stderr}`);
-  assert.doesNotMatch(stderr, NESTED_MISSING_WARNING);
-});
-
-test("watch warns at startup when a missing syncPath's parent directory is missing as well", async () => {
-  const { workspaceRoot, configPath } = setupWorkspace("watch-ready-arming-nested", [path.join("logs", "daily")]);
-  const child = spawnWatch(watchArgs(configPath), { ...process.env, [ARM_TIMEOUT_ENV_VAR]: "1000" });
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-  });
-  try {
-    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
-  } finally {
-    await stopWatchProcessGroup(child);
-  }
-  assert.match(stderr, NESTED_MISSING_WARNING);
-  assert.ok(stderr.includes(path.join(workspaceRoot, "logs", "daily")), `the nested path is named. stderr: ${stderr}`);
-  assert.ok(stderr.search(NESTED_MISSING_WARNING) < stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${stderr}`);
-  assert.doesNotMatch(stderr, SHARED_ANCHOR_WARNING);
-});
-
-// chokidar emits its own `ready` twice when two syncPaths are missing at start
-// (see src/commands/watch-arming.ts). A bound of 0 makes each handler run end
-// in the could-not-confirm warning at its first check, before the deferred step
-// can have opened anything, so a handler that runs per emit prints the warning
-// and the ready line twice, deterministically.
-test("watch prints its ready line and the could-not-confirm warning once, although chokidar emits ready twice", async () => {
-  const { configPath } = setupWorkspace("watch-ready-arming-once", ["logs", "notes"]);
-  const child = spawnWatch(watchArgs(configPath), { ...process.env, [ARM_TIMEOUT_ENV_VAR]: "0" });
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-  });
-  try {
-    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
-    // A second handler run follows the first within milliseconds; 1 s is far
+    // A second `ready` would follow the first within milliseconds; 1 s is far
     // beyond that.
     await new Promise((resolve) => setTimeout(resolve, 1000));
   } finally {
     await stopWatchProcessGroup(child);
   }
-  const readyLines = stderr.match(new RegExp(READY_LINE.source, "g")) ?? [];
-  assert.equal(readyLines.length, 1, `expected one ready line. stderr: ${stderr}`);
-  const warnings = stderr.match(/could not confirm the watch/g) ?? [];
-  assert.equal(warnings.length, 1, `expected one could-not-confirm warning. stderr: ${stderr}`);
+  assert.equal(count(stderr, new RegExp(READY_LINE.source, "g")), 1, `expected one ready line. stderr: ${stderr}`);
+  assert.ok(stderr.includes(workspaceRoot), "ready line names the workspace");
+});
+
+// A workspace whose every syncPath is missing: chokidar has nothing to scan
+// and never emits `ready`, so the line must come from the trackers.
+test("watch prints its ready line when every syncPath is missing, and delivers a write into one of them", async () => {
+  const root = createSandbox("watch-arming-all-missing");
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  writeProjectConfig(configPath, {
+    rootDir: workspaceRoot,
+    remoteUrl: path.join(root, "missing-remote.git"),
+    branch: "main",
+    repositorySubdir: "shared",
+    stateDir: ".agent-memory-sync/default",
+    reachabilityTimeoutMs: 500,
+    syncPaths: [{ source: "logs", destination: "logs", kind: "directory" }]
+  });
+  writeText(path.join(workspaceRoot, ".keep"), "");
+  const child = spawnWatch(watchArgs(configPath, 1), process.env);
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exited = new Promise<number>((resolve) => {
+    child.on("exit", (code: number | null) => resolve(code ?? -1));
+  });
+  try {
+    const exitCode = await withTickDeadline(
+      child,
+      async () => {
+        await waitForWatcherReady(() => stderr);
+        writeText(path.join(workspaceRoot, "logs", "a.md"), "a\n");
+        return exited;
+      },
+      INACTIVITY_TIMEOUT_MS,
+      () => stderr
+    );
+    assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+  assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
 // Runs src/main.ts in a single node process (`node --import tsx`) instead of
@@ -395,29 +321,21 @@ test("watch prints its ready line and the could-not-confirm warning once, althou
 // below instead of watch's own shutdown. `detached: true` keeps the process in
 // its own group so stopWatchProcessGroup can clean it up.
 function spawnWatchWithoutLauncher(args: string[], env: NodeJS.ProcessEnv) {
-  return spawn(process.execPath, ["--import", "tsx", "src/main.ts", ...args], {
+  const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts", ...args], {
     env,
     stdio: ["ignore", "ignore", "pipe"],
     detached: true
   });
+  trackWatchProcessGroup(child);
+  return child;
 }
 
-// Pins the shutdown wiring in watch.ts: the arming wait ends when watch shuts
-// down, and a shutdown that lands during the wait prints neither the ready line
-// nor the could-not-confirm warning afterwards. The deferred step is delayed
-// 8 s and the wait's bound is 4 s, both far above the time a prompt shutdown
-// needs, so a wait that outlives the shutdown either keeps the process alive
-// until its bound (an aborted signal not sent) or prints its result after the
-// shutdown message (a closed watcher not checked).
-test("a shutdown during the arming wait exits promptly and prints neither the ready line nor the could-not-confirm warning", { timeout: 30000 }, async () => {
-  const { workspaceRoot, configPath } = setupMissingLogsWorkspace("watch-ready-arming-shutdown");
-  const child = spawnWatchWithoutLauncher(
-    watchArgs(configPath),
-    delayedArmingEnv(workspaceRoot, {
-      AGENT_MEMORY_SYNC_TEST_ARM_DELAY_MS: "8000",
-      [ARM_TIMEOUT_ENV_VAR]: "4000"
-    })
-  );
+// The trackers poll on timers that would keep the process alive: a shutdown
+// must stop them. The missing path never appears, so a tracker that is not
+// closed on shutdown leaves the process running until the test gives up.
+test("a shutdown while syncPaths are still missing exits promptly with status 0", { timeout: 30000 }, async () => {
+  const { configPath } = setupWorkspace("watch-arming-shutdown", ["logs", path.join("deep", "er")]);
+  const child = spawnWatchWithoutLauncher(watchArgs(configPath, 1), process.env);
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
@@ -425,35 +343,18 @@ test("a shutdown during the arming wait exits promptly and prints neither the re
   const exited = new Promise<number>((resolve) => {
     child.on("exit", (code: number | null) => resolve(code ?? -1));
   });
-
   try {
-    // The first fs.watch is the one on MEMORY.md, opened at chokidar's start;
-    // from there the deferred parent-directory step is the delayed one.
-    const startedWaitingAt = Date.now();
-    while (!stderr.includes(`arm-probe: fs.watch ${path.join(workspaceRoot, "MEMORY.md")}\n`)) {
-      assert.ok(Date.now() - startedWaitingAt < 20000, `watch never opened its first fs.watch. stderr: ${stderr}`);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    // chokidar's own `ready` follows within milliseconds and starts the wait;
-    // 500 ms is far inside the 8 s delay.
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    assert.doesNotMatch(stderr, READY_LINE, `the ready line came out before the shutdown. stderr: ${stderr}`);
-
+    await waitForWatcherReady(() => stderr);
     const signalledAt = Date.now();
-    // Only the watch process itself: no launcher in between.
     process.kill(child.pid, "SIGTERM");
-    const exitCode = await exited;
+    const exitCode = await Promise.race([
+      exited,
+      new Promise<number>((resolve) => setTimeout(() => resolve(Number.NaN), 5000))
+    ]);
     const elapsed = Date.now() - signalledAt;
-
-    assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
-    // Well under the 4 s bound: a wait that is not aborted keeps the process
-    // up until the bound.
+    assert.equal(exitCode, 0, `watch did not exit with 0 within 5 s of SIGTERM (got ${exitCode}). stderr: ${stderr}`);
     assert.ok(elapsed < 2500, `expected a prompt exit after SIGTERM, took ${elapsed}ms. stderr: ${stderr}`);
-    const shutdownAt = stderr.indexOf("received SIGTERM");
-    assert.ok(shutdownAt >= 0, `no shutdown message. stderr: ${stderr}`);
-    const afterShutdown = stderr.slice(shutdownAt);
-    assert.doesNotMatch(afterShutdown, READY_LINE, "ready line printed after the shutdown");
-    assert.doesNotMatch(afterShutdown, /could not confirm the watch/, "warning printed after the shutdown");
+    assert.match(stderr, /received SIGTERM/);
   } finally {
     await stopWatchProcessGroup(child);
   }

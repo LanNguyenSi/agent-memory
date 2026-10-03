@@ -1,8 +1,11 @@
 // Test-only preload (node --require, via NODE_OPTIONS) for
-// tests/integration/watch-ready-arming.test.ts. It makes the natural gap
-// between chokidar's own `ready` event and the deferred parent-directory
-// watch of a sync path that is missing at start wide and deterministic,
-// instead of load dependent.
+// tests/integration/watch-ready-arming.test.ts. It widens the natural gap
+// between chokidar 4.0.3's own `ready` event and its deferred parent-directory
+// step for a sync path that is missing at start, so that a test creating such
+// a path inside the gap does not depend on CPU load. `watch` no longer hands
+// chokidar a missing path (src/commands/watch-arming.ts), so against the
+// current code the delay is inert; against code that does, the path created in
+// the gap is lost, which is what makes the test that uses this file fail there.
 //
 // Inert unless AGENT_MEMORY_SYNC_TEST_ARM_DELAY_DIR names a directory. When it
 // does:

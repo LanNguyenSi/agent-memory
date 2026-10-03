@@ -264,10 +264,20 @@ function spawnWatch(args: string[], env: NodeJS.ProcessEnv) {
     // and look exactly like an unexplained stall from the test's side.
     { env, stdio: ["ignore", "ignore", "pipe"], detached: true }
   );
+  trackWatchProcessGroup(child);
+  return child;
+}
+
+// Puts `child`, which must have been spawned with `detached: true` so that it
+// leads its own process group, into the set the last-resort cleanup (see
+// registerLastResortGroupKillHandlers) kills when the test-file process ends
+// without reaching stopWatchProcessGroup. spawnWatch does this itself; a test
+// that spawns `node src/main.ts` directly, without the tsx launcher, calls it.
+function trackWatchProcessGroup(child: ReturnType<typeof spawn>): void {
+  registerLastResortGroupKillHandlers();
   if (typeof child.pid === "number") {
     liveGroupPids.add(child.pid);
   }
-  return child;
 }
 
 // Every process group spawnWatch() has started and not yet torn down via
@@ -638,6 +648,7 @@ async function runWatchTick(
 
 module.exports = {
   spawnWatch,
+  trackWatchProcessGroup,
   waitForWatcherReady,
   withTickDeadline,
   runWatchTick,

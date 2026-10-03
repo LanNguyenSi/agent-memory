@@ -16,10 +16,10 @@ const { buildCommitMessage } = require("../memory-sync/snapshot");
 const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
 const {
-  armingLimitWarnings,
-  collectMissingTargets,
-  resolveArmTimeoutMs,
-  waitForDeferredArming
+  DEFAULT_MISSING_POLL_MS,
+  listFilesUnder,
+  partitionSyncPaths,
+  trackMissingPaths
 } = require("./watch-arming");
 
 type OutputFormat = "text" | "json" | "yaml";
@@ -47,6 +47,9 @@ interface WatchOptions {
 }
 
 const DEFAULT_DEBOUNCE_MS = 5000;
+// Longest wait for the chokidar watcher of a syncPath that appeared after start
+// to report `ready` before the path is read once more regardless.
+const APPEARED_READY_BOUND_MS = 5000;
 
 function registerWatchCommand(program: import("commander").Command): void {
   program
@@ -111,16 +114,17 @@ function registerWatchCommand(program: import("commander").Command): void {
       );
 
       // Taken before chokidar.watch(), so it matches what chokidar's own first
-      // stat() of each path sees. See ./watch-arming.ts.
-      const missingAtStart = collectMissingTargets(watchedPaths);
-      for (const limit of armingLimitWarnings(missingAtStart)) {
-        writeWarning(limit, outputOptions);
-      }
-
-      const watcher = chokidar.watch(watchedPaths, {
+      // stat() of each path sees. Only the paths that exist go to the main
+      // chokidar watcher; each missing one gets its own tracker below. See
+      // ./watch-arming.ts.
+      const { existing: existingAtStart, missing: missingAtStart } = partitionSyncPaths(watchedPaths);
+      const watcherOptions = {
         ignoreInitial: true,
         awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 }
-      });
+      };
+      // The main watcher plus one per syncPath that appeared after start.
+      const watchers = new Set<{ close: () => Promise<void> | void }>();
+      let missingTracker: { close: () => void } | null = null;
 
       const pendingChanges = new Set<string>();
       const pendingDeletes = new Set<string>();
@@ -128,7 +132,6 @@ function registerWatchCommand(program: import("commander").Command): void {
       let runsCompleted = 0;
       let shouldExit = false;
       let watcherClosed = false;
-      const armingAbort = new AbortController();
       let workChain: Promise<void> = Promise.resolve();
       let resolveDone!: () => void;
       const done = new Promise<void>((resolve) => {
@@ -140,8 +143,8 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         watcherClosed = true;
-        armingAbort.abort();
-        await watcher.close();
+        missingTracker?.close();
+        await Promise.all([...watchers].map((entry) => entry.close()));
         resolveDone();
       }
 
@@ -387,29 +390,71 @@ function registerWatchCommand(program: import("commander").Command): void {
           });
       }
 
-      watcher.on("add", (filePath: string) => {
-        pendingChanges.add(filePath);
-        scheduleFlush();
-      });
-      watcher.on("change", (filePath: string) => {
-        pendingChanges.add(filePath);
-        scheduleFlush();
-      });
-      watcher.on("unlink", (filePath: string) => {
-        pendingDeletes.add(filePath);
-        pendingChanges.delete(filePath);
-        scheduleFlush();
-      });
-      watcher.on("error", (error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        writeWarning(`watcher error: ${message}`, outputOptions);
-      });
+      function createWatcher(paths: string[]) {
+        const created = chokidar.watch(paths, watcherOptions);
+        watchers.add(created);
+        created.on("add", (filePath: string) => {
+          pendingChanges.add(filePath);
+          scheduleFlush();
+        });
+        created.on("change", (filePath: string) => {
+          pendingChanges.add(filePath);
+          scheduleFlush();
+        });
+        created.on("unlink", (filePath: string) => {
+          pendingDeletes.add(filePath);
+          pendingChanges.delete(filePath);
+          scheduleFlush();
+        });
+        created.on("error", (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          writeWarning(`watcher error: ${message}`, outputOptions);
+        });
+        return created;
+      }
+
+      // A syncPath that was missing at start now exists (./watch-arming.ts):
+      // it gets its own chokidar watcher, so it does not depend on any other
+      // path's listener, and once that watcher is ready (the OS watch on the
+      // path and on what is inside it is open) the path is read once more.
+      // What the path already held before the watch opened produces no event
+      // (ignoreInitial), so the re-read reports it as a change; a file seen by
+      // both the re-read and the watcher is one pending change.
+      async function armAppearedPath(target: string): Promise<void> {
+        if (watcherClosed || shouldExit) {
+          return;
+        }
+        writeInfo(`syncPath ${target} appeared, watching it`, outputOptions);
+        const appeared = createWatcher([target]);
+        await new Promise<void>((resolve) => {
+          // `ready` normally follows within milliseconds. The bound keeps a
+          // watcher that never reports it from skipping the re-read.
+          const bound = setTimeout(resolve, APPEARED_READY_BOUND_MS);
+          appeared.once("ready", () => {
+            clearTimeout(bound);
+            resolve();
+          });
+        });
+        if (watcherClosed || shouldExit) {
+          return;
+        }
+        const found = await listFilesUnder(target);
+        if (watcherClosed || shouldExit) {
+          return;
+        }
+        for (const file of found) {
+          pendingChanges.add(file);
+        }
+        if (found.length > 0) {
+          scheduleFlush();
+        }
+      }
 
       // Printed from chokidar's own 'ready' event (fired once its initial
-      // recursive scan of watchedPaths completes) rather than unconditionally
-      // right after chokidar.watch() returns. Two reasons: (1) it is
-      // semantically correct — the line claims "watching", which is only
-      // true once the initial scan has actually finished; (2) on an
+      // recursive scan of the syncPaths that exist at start completes) rather
+      // than unconditionally right after chokidar.watch() returns. Two reasons:
+      // (1) it is semantically correct — the line claims "watching", which is
+      // only true once the initial scan has actually finished; (2) on an
       // inotify-backed watcher (Linux) that scan is not instantaneous, and a
       // filesystem write issued before it completes can be silently missed —
       // chokidar has not finished wiring up inotify watch descriptors for
@@ -431,35 +476,43 @@ function registerWatchCommand(program: import("commander").Command): void {
       // cadence, which leaves comfortable margin above that threshold; see
       // that file's header comment for the full measurement notes.
       //
-      // chokidar's `ready` is also early for a syncPath that does not exist at
-      // start: it is counted ready at once, while the watch on its nearest
-      // existing ancestor is only opened by a later asynchronous step, and a
-      // write inside that gap is never delivered (agent-tasks 50a13ffe). So the
-      // line waits for that ancestor watch to show up in chokidar's own
-      // getWatched() state, bounded so an unarmable path cannot hang startup.
-      // Rationale and the state signal used: ./watch-arming.ts. chokidar can
-      // emit `ready` twice when a syncPath is missing (same file), so the
-      // handler runs once: one wait, one ready line, at most one warning.
-      watcher.once("ready", async () => {
-        if (missingAtStart.length > 0) {
-          const timeoutMs = resolveArmTimeoutMs();
-          const arming = await waitForDeferredArming(watcher, missingAtStart, { timeoutMs, signal: armingAbort.signal });
-          if (watcherClosed) {
-            return;
-          }
-          if (!arming.armed) {
-            writeWarning(
-              `could not confirm the watch on ${arming.pending.join(", ")} within ${timeoutMs}ms; ` +
-                "continuing without it, so a change to that path may be missed until watch is restarted",
-              outputOptions
-            );
-          }
+      // A syncPath that does not exist at start is never handed to chokidar,
+      // whose handling of it is early and lossy (agent-tasks 50a13ffe,
+      // d09a0d3a): its tracker is started before this line is printed, so
+      // "watching" holds for it as well, in the sense that its creation will
+      // be noticed and delivered. Rationale: ./watch-arming.ts.
+      let readyAnnounced = false;
+      function announceReady(): void {
+        if (readyAnnounced || watcherClosed) {
+          return;
         }
+        readyAnnounced = true;
         writeInfo(
           `watching ${watchedPaths.length} path(s) under ${runConfig.rootDir} (debounce ${debounceMs}ms)`,
           outputOptions
         );
-      });
+      }
+
+      if (existingAtStart.length > 0) {
+        createWatcher(existingAtStart).once("ready", announceReady);
+      }
+      if (missingAtStart.length > 0) {
+        writeInfo(
+          `${missingAtStart.length} syncPath(s) do not exist yet and are checked every ${DEFAULT_MISSING_POLL_MS}ms: ` +
+            missingAtStart.join(", "),
+          outputOptions
+        );
+        missingTracker = trackMissingPaths(missingAtStart, armAppearedPath, {
+          onError: (target: string, error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            writeWarning(`could not start watching ${target}: ${message}`, outputOptions);
+          }
+        });
+      }
+      if (existingAtStart.length === 0) {
+        // Nothing for chokidar to scan: the trackers are armed already.
+        announceReady();
+      }
 
       const sigintHandler = () => requestShutdown("received SIGINT, flushing pending changes before exit");
       const sigtermHandler = () => requestShutdown("received SIGTERM, flushing pending changes before exit");
