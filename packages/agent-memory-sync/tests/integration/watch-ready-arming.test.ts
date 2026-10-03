@@ -211,17 +211,15 @@ test("watch delivers a nested missing syncPath that is created one directory lev
   assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
-// The path appears empty, `watch` announces it, and only then does a file get
-// written: nothing is left for the re-read to find, so the file reaches the tick
-// through the watcher `watch` started for that path.
-test("watch delivers a file written into a missing syncPath after the path appeared and was announced", async () => {
+// The path appears empty and `watch` reports it armed, which is printed after
+// the one re-read of the path. A file written after that line is not found by
+// any re-read, so it reaches the tick only through the watcher `watch` started
+// for that path.
+test("watch delivers a file written into a missing syncPath after the path appeared and was armed", async () => {
   const { exitCode, stderr } = await runWatch("watch-arming-after-appeared", ["logs"], 1, async ({ workspaceRoot, child, stderr }) => {
     await waitForWatcherReady(stderr);
     fs.mkdirSync(path.join(workspaceRoot, "logs"));
-    await waitForCount(child, stderr, /syncPath .*logs appeared, watching it/g, 1);
-    // The announcement is printed when the path is found, before its watcher
-    // is ready; the ready event follows within milliseconds.
-    await new Promise((resolve) => setTimeout(resolve, 750));
+    await waitForCount(child, stderr, /syncPath .*logs is armed \(0 existing file\(s\) reported\)/g, 1);
     writeText(path.join(workspaceRoot, "logs", "late.md"), "late\n");
   });
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);

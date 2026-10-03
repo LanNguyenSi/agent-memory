@@ -90,9 +90,11 @@ and reports every file already inside it as a change, so a path that appears
 later, several paths missing under one directory, and a nested path whose
 parent directory is created later are all delivered. With `--verbose`, `watch`
 prints `N syncPath(s) do not exist yet and are checked every 250ms: <paths>`
-before the ready line and `syncPath <path> appeared, watching it` for each path
-that shows up. A path that is removed and created again after it appeared is not
-re-armed, the same as one that existed at start. See
+before the ready line, `syncPath <path> appeared, watching it` for each path
+that shows up, and `syncPath <path> is armed (N existing file(s) reported)` once
+its watcher is ready and the path has been read. A path that is removed and
+created again after it appeared is not re-armed, the same as one that existed at
+start. See
 [Sync behavior](sync-behavior.md) for what happens when a push fails, and
 [Service supervision](service-supervision.md) for running `watch` under
 systemd or launchd.

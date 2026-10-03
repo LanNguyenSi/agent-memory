@@ -448,6 +448,7 @@ function registerWatchCommand(program: import("commander").Command): void {
         if (found.length > 0) {
           scheduleFlush();
         }
+        writeInfo(`syncPath ${target} is armed (${found.length} existing file(s) reported)`, outputOptions);
       }
 
       // Printed from chokidar's own 'ready' event (fired once its initial
