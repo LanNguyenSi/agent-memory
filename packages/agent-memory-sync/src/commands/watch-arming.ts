@@ -1,100 +1,264 @@
-// Arming gate for `watch`'s "watching N path(s)" ready line (agent-tasks
-// 50a13ffe).
+// Per-target arming for the syncPaths `watch` finds missing at start
+// (agent-tasks 50a13ffe, d09a0d3a).
 //
-// chokidar 4.0.3 emits its own `ready` event once every path handed to
-// `chokidar.watch()` has been stat()ed, which is NOT the same as every path
-// having an OS watch behind it. A path that does not exist at start takes the
-// ENOENT branch of chokidar's `_addToNodeFs` (node_modules/chokidar/handler.js):
-// that branch counts the path as ready immediately and hands the real work
-// (watching the nearest existing ancestor directory for the target's name)
-// to a later, asynchronous `add(dirname(path), basename(path))` step. `ready`
-// therefore fires while that ancestor watch does not exist yet, and for a
-// re-added target chokidar skips the initial directory read
-// (`_handleDir`'s `if (!target)`), so a write landing inside that window is
-// never seen afterwards: the watch tick that write should have started never
-// starts. The tests that write straight after the ready line (a new file
-// under a `logs/` directory that is absent at start, or an edit of a sibling
-// path) hit exactly that window under CPU load, which shows up as the
-// "no progress signal" stall in tests/helpers/watch-process.ts.
+// Why chokidar is not handed a missing path. chokidar 4.0.3 takes the ENOENT
+// branch of `_addToNodeFs` (node_modules/chokidar/handler.js) for a path that
+// does not exist: it counts the path as ready at once and defers the real work
+// to a later `add(dirname(path), basename(path))` that watches the nearest
+// existing ancestor for the target's name. Measured in that code, on base and
+// head of the earlier ready-line gate alike, that deferral loses three shapes:
+//   (a) two or more missing syncPaths under one existing directory
+//       (`logs`, `notes`): their deferred steps share the ancestor's single
+//       fs.watch. `setFsWatchListener` adds each later target's listener to the
+//       existing instance and `fsWatchBroadcast` calls the listeners in
+//       registration order; the first listener's `_handleRead` takes the
+//       ancestor's `_throttle('readdir', directory, 1000)`, the later ones are
+//       throttled, and the closing re-read reuses the first caller's target,
+//       the only name `item === target` then matches. Only the first target
+//       is delivered.
+//   (b) a nested missing path (`logs/daily` with `logs` absent): the deferred
+//       step re-adds the ancestor with the leaf name (`_origAdd`), so the
+//       missing intermediate directory is never matched.
+//   (c) a target created between chokidar's ENOENT stat and the deferred step:
+//       `_handleDir` skips the initial read when a target is set, so what is
+//       already inside is never reported.
+// chokidar can also emit `ready` before the deferred ancestor watch exists, and
+// twice when a syncPath is missing, which made the "watching N path(s)" line an
+// unreliable signal.
 //
-// The gate below closes it. Chokidar publishes its own bookkeeping through
-// `getWatched()`: when the deferred step runs, `_handleDir` records the
-// ancestor's basename in its parent's entry and opens the ancestor's
-// fs.watch in the same synchronous run (verified against 4.0.3 by
-// tests/integration/watch-ready-arming.test.ts, which orders the fs.watch
-// call against the ready line). So "the nearest existing ancestor of the
-// missing path is listed under its own parent in getWatched()" is a
-// chokidar-state signal that the deferred watch exists, and it needs no
-// write into the operator's memory directories (a self-test file would be
-// invisible to the target-filtered ancestor watch and would have to be a
-// file in the synced tree). A path chokidar tracks itself (it appeared
-// between our stat and chokidar's) counts as armed too.
+// What `watch` does instead. Only syncPaths that exist at start go to the main
+// chokidar watcher, so its `ready` means exactly what the ready line claims.
+// Every missing syncPath gets its own tracker (`trackMissingPaths`): an
+// independent poll of that one path, so no target depends on another's
+// listener, and a nested path needs nothing special because the poll asks
+// whether the target itself exists, not whether its parent does. The tracker is
+// armed synchronously when it starts, before the ready line is printed. When a
+// path appears, `watch` gives it its own chokidar watcher, waits for that
+// watcher's `ready` (the OS watch on the path and everything inside it is open
+// by then) and then re-reads the path with `listFilesUnder`, reporting every
+// file found as a change. The re-read is what delivers a path that was created
+// together with its files before any watch could be opened (c), and it also
+// covers a write that lands in the first moments after an fs.watch is opened,
+// which Node on macOS can miss (see the measurement below). A file that shows up both
+// in the re-read and as a chokidar event is one pending change, because the
+// pending set is keyed by path.
 //
-// The wait is bounded: a path that never arms (an unreadable ancestor, a
-// chokidar change) must not hang startup, so after ARM_TIMEOUT_MS the caller
-// warns naming the pending paths and prints the ready line anyway.
+// Polling, not fs.watch on an ancestor, is deliberate: it needs no state of
+// chokidar's, behaves the same on every platform, and costs one stat per
+// missing path per interval. The latency it adds (at most one interval, 250 ms
+// by default) is far below the debounce window of the tick it feeds.
 //
-// Known limits (chokidar 4.0.3; agent-tasks 50a13ffe). The signal proves one
-// thing: the anchor's fs.watch exists. It is per anchor, not per target, and it
-// does not make the ready line a delivery guarantee for every missing path:
-//   (a) two or more missing syncPaths under one anchor (`logs`, `notes`): their
-//       deferred steps share the anchor's single fs.watch. In handler.js,
-//       `setFsWatchListener` adds each later target's listener to the existing
-//       instance and `fsWatchBroadcast` calls the listeners in registration
-//       order; the first listener's `_handleRead` takes the anchor's
-//       `_throttle('readdir', directory, 1000)`, the later ones are throttled,
-//       and the closing re-read reuses the first caller's target, the only
-//       name `item === target` then matches. So only the target whose deferred
-//       listener registered first is delivered, and which one that is comes
-//       down to the stat/realpath completion race of the deferred steps inside
-//       chokidar, with or without the wait below. The wait does not close this
-//       shape.
-//   (b) a nested missing path (`logs/daily` with `logs` absent): chokidar
-//       re-adds it under the nearest existing ancestor for the leaf name, so
-//       the missing intermediate directory is never matched.
-//   (c) a target created between chokidar's ENOENT stat and the deferred step
-//       is skipped, because `_handleDir` skips the anchor's initial read when a
-//       target is set.
-// (a) to (c) are chokidar's behaviour with or without this gate; closing them
-// needs a per-target gate or a chokidar-side change, which is out of scope here
-// (chokidar stays at 4.0.3). `armingLimitWarnings` below tells the operator at
-// startup when the configured paths have shape (a) or (b), since the ready line
-// then does not guarantee delivery for them.
+// The ready line also waits for an OS watch to be live (`confirmWatchLive`).
+// chokidar's own `ready` follows the stat of each existing path, and the
+// fs.watch of an existing file is opened just before it. Measured on macOS
+// with Node 26 (100 trials each, a scratch file or directory in the OS temp
+// directory): a write made synchronously right after `fs.watch(file)` returned
+// was missed 100 of 100 times, a write made after one `setImmediate` 0 of 100
+// times, and for `fs.watch(dir)` an immediate write was missed at most 2 of 100
+// times in any run. On macOS a file watch is kqueue-backed, so the
+// explanation that fits is that it is not live until the event loop has polled
+// once. Under CPU load the time until that poll is longer, which is how
+// a write right after the ready line was lost and the "no progress signal"
+// stall of tests/helpers/watch-process.ts arose. Waiting for an event on a
+// scratch watch guarantees at least that poll after the sync paths' watches
+// were opened. The probe writes only into a scratch directory in the OS temp
+// directory (nothing is written into the operator's directories), from after
+// chokidar's `ready`, until the event arrives. It is bounded, like the poll
+// above. Not verified: whether the watches of one process share a stream in
+// libuv that a later watch would show to be live. The argument above covers
+// kqueue file watches only: a directory watch also missed a write made after
+// one `setImmediate` in about 1 of 100 to 200 trials, so for a directory
+// syncPath a write right after the ready line can still be missed rarely,
+// unless that unverified shared-stream mechanism covers it.
 //
-// chokidar can also emit `ready` twice when a syncPath is missing at start:
-// every `_addToNodeFs` call reports readiness through the `_emitReady` closure
-// it captured when it started, while `add()`'s result handler counts a missing
-// path a second time through the current one, so the tally can reach its
-// target before a captured call that then emits `ready` again. watch.ts runs
-// its ready handler once.
+// Not covered: a syncPath that is removed and created again after it appeared
+// is not re-armed, the same as a syncPath that existed at start. The one
+// exception is a path that is gone again at the moment `watch` is about to
+// open its watcher: that is checked and the path goes back to its tracker.
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
-// Default bound on the wait, in milliseconds. Arming normally completes in a
-// few milliseconds (two async stat/realpath calls); 5000 leaves room for a
-// heavily loaded machine while keeping a stuck path from stalling startup for
-// long. Overridable with AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS.
+// How often a missing syncPath is checked for existence, in milliseconds.
+const DEFAULT_MISSING_POLL_MS = 250;
+// Default bound on the wait for the OS watch to be live, in milliseconds. The
+// event normally arrives within a few milliseconds; 5000 leaves room for a
+// heavily loaded machine while keeping a watch that never reports from stalling
+// startup. Overridable with AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS.
 const DEFAULT_ARM_TIMEOUT_MS = 5000;
 const ARM_TIMEOUT_ENV_VAR = "AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS";
-const ARM_POLL_INTERVAL_MS = 5;
+const ARM_WRITE_INTERVAL_MS = 20;
+const ARM_PROBE_DIR_PREFIX = "agent-memory-sync-arm-";
 
-interface ArmingTarget {
-  // The sync path that does not exist yet.
-  target: string;
-  // The nearest ancestor of `target` that exists; chokidar ends up watching
-  // this directory for the target's name.
-  anchor: string;
+interface PartitionedSyncPaths {
+  // Paths that exist right now, in the order given.
+  existing: string[];
+  // Paths that do not, deduplicated by resolved path, in the order given.
+  missing: string[];
 }
 
-interface WatchedState {
-  getWatched(): Record<string, string[]>;
+interface TrackOptions {
+  pollMs?: number;
+  // Resolves when `target` exists (any file type), rejects when it does not.
+  // Injectable for tests; defaults to fs.promises.stat.
+  stat?: (target: string) => Promise<unknown>;
+  // Called when a poll or the appearance handler throws.
+  onError?: (target: string, error: unknown) => void;
 }
 
-interface ArmingResult {
-  armed: boolean;
-  // Targets still not confirmed armed when the wait ended (empty when armed).
-  pending: string[];
+interface MissingPathTracker {
+  // Stops every poll. Safe to call more than once.
+  close(): void;
+  // The targets that have not appeared yet.
+  pending(): string[];
+}
+
+// Splits the configured sync paths by whether they exist right now. Call it
+// before chokidar.watch(): a path created after this point is either picked up
+// by chokidar's own first stat (when it is in `existing`) or by the first poll
+// of its tracker (when it is in `missing`), so no moment of creation falls
+// between the two. A path configured twice is one target.
+function partitionSyncPaths(
+  watchedPaths: string[],
+  exists: (candidate: string) => boolean = fs.existsSync
+): PartitionedSyncPaths {
+  const existing: string[] = [];
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of watchedPaths) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    if (exists(candidate)) {
+      existing.push(candidate);
+    } else {
+      missing.push(candidate);
+    }
+  }
+  return { existing, missing };
+}
+
+function resolveStat(options: TrackOptions): (target: string) => Promise<unknown> {
+  return options.stat ?? ((target: string) => fs.promises.stat(target));
+}
+
+// One independent poll per target. `onAppeared(target)` runs once, when the
+// target first exists; its promise is awaited to report a rejection through
+// `onError` and to read its result: `false` means the target could not be used
+// after all (it vanished again), and polling for it starts over. The first check starts before this function returns, the
+// next one `pollMs` after the previous check finished, so checks of one target
+// never overlap.
+function trackMissingPaths(
+  targets: string[],
+  onAppeared: (target: string) => void | boolean | Promise<void | boolean>,
+  options: TrackOptions = {}
+): MissingPathTracker {
+  const pollMs = options.pollMs ?? DEFAULT_MISSING_POLL_MS;
+  const stat = resolveStat(options);
+  const waiting = new Set<string>(targets);
+  const timers = new Set<NodeJS.Timeout>();
+  let closed = false;
+
+  const check = async (target: string): Promise<void> => {
+    let present = false;
+    try {
+      await stat(target);
+      present = true;
+    } catch {
+      // Not there yet (ENOENT, or a parent that is a file): keep waiting.
+    }
+    if (closed) {
+      return;
+    }
+    if (!present) {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        void check(target);
+      }, pollMs);
+      timers.add(timer);
+      return;
+    }
+    waiting.delete(target);
+    let outcome: void | boolean;
+    try {
+      outcome = await onAppeared(target);
+    } catch (error) {
+      options.onError?.(target, error);
+      return;
+    }
+    if (outcome === false && !closed) {
+      // The handler could not use the path (it is gone again): wait for it
+      // anew, as if it had not appeared.
+      waiting.add(target);
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        void check(target);
+      }, pollMs);
+      timers.add(timer);
+    }
+  };
+
+  for (const target of targets) {
+    void check(target);
+  }
+
+  return {
+    close() {
+      closed = true;
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+      timers.clear();
+    },
+    pending() {
+      return [...waiting];
+    }
+  };
+}
+
+// Every regular file under `target` (the target itself when it is a file), as
+// absolute paths. Symlinks to files count, symlinked directories are not
+// followed, and an entry that vanishes while it is read is skipped.
+async function listFilesUnder(target: string): Promise<string[]> {
+  let stats;
+  try {
+    stats = await fs.promises.stat(target);
+  } catch {
+    return [];
+  }
+  if (!stats.isDirectory()) {
+    return stats.isFile() ? [target] : [];
+  }
+  const files: string[] = [];
+  const walk = async (directory: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        files.push(full);
+      } else if (entry.isSymbolicLink()) {
+        try {
+          if ((await fs.promises.stat(full)).isFile()) {
+            files.push(full);
+          }
+        } catch {
+          // Dangling link: nothing to report.
+        }
+      }
+    }
+  };
+  await walk(target);
+  return files;
 }
 
 function parseArmTimeoutMs(raw: string | undefined): number {
@@ -112,130 +276,86 @@ function resolveArmTimeoutMs(): number {
   return parseArmTimeoutMs(process.env[ARM_TIMEOUT_ENV_VAR]);
 }
 
-// The sync paths that do not exist right now, each with its nearest existing
-// ancestor. Call it before chokidar.watch() so it reflects what chokidar's own
-// first stat() will see.
-function collectMissingTargets(
-  watchedPaths: string[],
-  exists: (candidate: string) => boolean = fs.existsSync
-): ArmingTarget[] {
-  const targets: ArmingTarget[] = [];
-  for (const target of watchedPaths) {
-    if (exists(target)) {
-      continue;
-    }
-    let anchor = path.dirname(target);
-    while (!exists(anchor) && path.dirname(anchor) !== anchor) {
-      anchor = path.dirname(anchor);
-    }
-    targets.push({ target, anchor });
-  }
-  return targets;
+interface ConfirmOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  // Directory the scratch directory is created in; the OS temp directory by
+  // default.
+  scratchRoot?: string;
+  // Called with the error when the probe itself cannot be set up or written
+  // (scratch directory, watch, write), as opposed to simply timing out.
+  onError?: (error: unknown) => void;
 }
 
-// One-line startup warnings for the shapes in the known-limits comment above
-// that the operator's own configuration can be checked for: two or more missing
-// syncPaths sharing one anchor (a), and a missing path whose parent is also
-// missing (b). Empty when neither applies, in particular for a single missing
-// path directly under an existing directory, the shape the gate does cover. A
-// path configured twice is one chokidar target, so targets are deduplicated by
-// resolved path first.
-function armingLimitWarnings(targets: ArmingTarget[]): string[] {
-  const warnings: string[] = [];
-  const unique = new Map<string, ArmingTarget>();
-  for (const entry of targets) {
-    const resolved = path.resolve(entry.target);
-    if (!unique.has(resolved)) {
-      unique.set(resolved, { target: resolved, anchor: path.resolve(entry.anchor) });
-    }
-  }
-  const byAnchor = new Map<string, string[]>();
-  for (const { target, anchor } of unique.values()) {
-    byAnchor.set(anchor, [...(byAnchor.get(anchor) ?? []), target]);
-  }
-  for (const [anchor, sharing] of byAnchor) {
-    if (sharing.length >= 2) {
-      warnings.push(
-        `${sharing.length} missing syncPaths share the existing directory ${anchor} (${sharing.join(", ")}); ` +
-          "the ready line does not guarantee that a change to them right after it is seen, only one of them may be delivered until watch is restarted"
-      );
-    }
-  }
-  const nested = [...unique.values()].filter(({ target, anchor }) => path.dirname(target) !== anchor).map(({ target }) => target);
-  if (nested.length > 0) {
-    warnings.push(
-      `the parent directory of ${nested.join(", ")} is missing as well; ` +
-        "the ready line does not guarantee that a change there is seen until watch is restarted after the directories exist"
-    );
-  }
-  return warnings;
-}
-
-function listedUnder(watched: Record<string, string[]>, child: string): boolean {
-  const entry = watched[path.dirname(child)];
-  return Array.isArray(entry) && entry.includes(path.basename(child));
-}
-
-function isTargetArmed(watched: Record<string, string[]>, { target, anchor }: ArmingTarget): boolean {
-  if (listedUnder(watched, target)) {
-    return true;
-  }
-  if (path.dirname(anchor) === anchor) {
-    // Filesystem root: it has no parent entry to be listed under.
-    return Object.prototype.hasOwnProperty.call(watched, anchor);
-  }
-  return listedUnder(watched, anchor);
-}
-
-function pendingTargets(watcher: WatchedState, targets: ArmingTarget[]): ArmingTarget[] {
-  const watched = watcher.getWatched();
-  return targets.filter((entry) => !isTargetArmed(watched, entry));
-}
-
-// Resolves once every target reads as armed in `watcher.getWatched()`, or with
-// the still-pending targets when `timeoutMs` elapses first or `signal` aborts
-// (watch shutting down). Never rejects.
-function waitForDeferredArming(
-  watcher: WatchedState,
-  targets: ArmingTarget[],
-  options: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}
-): Promise<ArmingResult> {
+// Resolves true once an fs.watch opened now has delivered an event for a write
+// made after it was opened, false when `timeoutMs` elapses first, `signal`
+// aborts, or the scratch directory cannot be used. Writes into a scratch
+// directory of its own, never into a sync path, and removes it before it
+// resolves. Never rejects.
+function confirmWatchLive(options: ConfirmOptions = {}): Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? resolveArmTimeoutMs();
-  const pollMs = options.pollMs ?? ARM_POLL_INTERVAL_MS;
   const start = Date.now();
-
+  let scratch: string;
+  let watcher: { close(): void; on(event: string, listener: () => void): unknown };
+  let live = false;
+  try {
+    scratch = fs.mkdtempSync(path.join(options.scratchRoot ?? os.tmpdir(), ARM_PROBE_DIR_PREFIX));
+    watcher = fs.watch(scratch, () => {
+      live = true;
+    });
+    watcher.on("error", () => undefined);
+  } catch (error) {
+    options.onError?.(error);
+    return Promise.resolve(false);
+  }
+  const cleanup = () => {
+    try {
+      watcher.close();
+    } catch {
+      // Already closed.
+    }
+    try {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    } catch {
+      // Best effort: it is an empty directory in the temp directory.
+    }
+  };
   return new Promise((resolve) => {
-    const check = () => {
-      let pending: ArmingTarget[];
-      try {
-        pending = pendingTargets(watcher, targets);
-      } catch {
-        // A watcher that cannot report its state is treated as not armed;
-        // the bound below still ends the wait.
-        pending = targets;
-      }
-      if (pending.length === 0) {
-        resolve({ armed: true, pending: [] });
+    let writes = 0;
+    const step = () => {
+      if (live) {
+        cleanup();
+        resolve(true);
         return;
       }
       if (options.signal?.aborted || Date.now() - start >= timeoutMs) {
-        resolve({ armed: false, pending: pending.map((entry) => entry.target) });
+        cleanup();
+        resolve(false);
         return;
       }
-      setTimeout(check, pollMs);
+      try {
+        fs.writeFileSync(path.join(scratch, "probe"), String(writes++));
+      } catch (error) {
+        cleanup();
+        options.onError?.(error);
+        resolve(false);
+        return;
+      }
+      setTimeout(step, ARM_WRITE_INTERVAL_MS);
     };
-    check();
+    step();
   });
 }
 
 module.exports = {
-  armingLimitWarnings,
-  ARM_POLL_INTERVAL_MS,
+  ARM_PROBE_DIR_PREFIX,
   ARM_TIMEOUT_ENV_VAR,
   DEFAULT_ARM_TIMEOUT_MS,
-  collectMissingTargets,
-  isTargetArmed,
+  DEFAULT_MISSING_POLL_MS,
+  confirmWatchLive,
   parseArmTimeoutMs,
   resolveArmTimeoutMs,
-  waitForDeferredArming
+  listFilesUnder,
+  partitionSyncPaths,
+  trackMissingPaths
 };
