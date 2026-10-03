@@ -6,7 +6,15 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createSandbox, writeText } = require("../helpers/cli.ts");
-const { listFilesUnder, partitionSyncPaths, trackMissingPaths } = require("../../src/commands/watch-arming.ts");
+const {
+  ARM_PROBE_DIR_PREFIX,
+  DEFAULT_ARM_TIMEOUT_MS,
+  confirmWatchLive,
+  listFilesUnder,
+  parseArmTimeoutMs,
+  partitionSyncPaths,
+  trackMissingPaths
+} = require("../../src/commands/watch-arming.ts");
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -185,4 +193,45 @@ test("listFilesUnder follows a symlink to a file, skips a dangling one and does 
     [...(await listFilesUnder(path.join(root, "logs")))].sort(),
     [path.join(root, "logs", "link.md"), path.join(root, "logs", "real.md")].sort()
   );
+});
+
+function leftoverProbeDirs(scratchRoot: string): string[] {
+  return fs.readdirSync(scratchRoot).filter((name: string) => name.startsWith(ARM_PROBE_DIR_PREFIX));
+}
+
+test("confirmWatchLive resolves true once a watch opened now delivers an event, and leaves no scratch directory behind", async () => {
+  const scratchRoot = createSandbox("watch-arming-live");
+  assert.equal(await confirmWatchLive({ timeoutMs: 20000, scratchRoot }), true);
+  assert.deepEqual(leftoverProbeDirs(scratchRoot), []);
+});
+
+test("confirmWatchLive gives up at its bound with false, without waiting for an event, and cleans up", async () => {
+  const scratchRoot = createSandbox("watch-arming-live-bound");
+  const startedAt = Date.now();
+  // A zero bound ends at the first check, before any event can have arrived.
+  assert.equal(await confirmWatchLive({ timeoutMs: 0, scratchRoot }), false);
+  assert.ok(Date.now() - startedAt < 1000);
+  assert.deepEqual(leftoverProbeDirs(scratchRoot), []);
+});
+
+test("confirmWatchLive ends at once when its signal is already aborted", async () => {
+  const scratchRoot = createSandbox("watch-arming-live-abort");
+  const stop = new AbortController();
+  stop.abort();
+  assert.equal(await confirmWatchLive({ timeoutMs: 60000, signal: stop.signal, scratchRoot }), false);
+  assert.deepEqual(leftoverProbeDirs(scratchRoot), []);
+});
+
+test("confirmWatchLive resolves false, and does not throw, when the scratch directory cannot be created", async () => {
+  const scratchRoot = path.join(createSandbox("watch-arming-live-missing"), "does-not-exist");
+  assert.equal(await confirmWatchLive({ timeoutMs: 1000, scratchRoot }), false);
+});
+
+test("parseArmTimeoutMs takes a non-negative number and falls back to the default otherwise", () => {
+  assert.equal(parseArmTimeoutMs(undefined), DEFAULT_ARM_TIMEOUT_MS);
+  assert.equal(parseArmTimeoutMs(""), DEFAULT_ARM_TIMEOUT_MS);
+  assert.equal(parseArmTimeoutMs("250"), 250);
+  assert.equal(parseArmTimeoutMs("0"), 0);
+  assert.equal(parseArmTimeoutMs("-5"), DEFAULT_ARM_TIMEOUT_MS);
+  assert.equal(parseArmTimeoutMs("soon"), DEFAULT_ARM_TIMEOUT_MS);
 });

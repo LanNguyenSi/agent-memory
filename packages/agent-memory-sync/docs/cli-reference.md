@@ -82,8 +82,14 @@ bulleted body listing each path. Deletions become `remove <path>`. With
 `--verbose`, each tick prints `watch tick pushing snapshot` to stderr the
 instant it starts the actual git work, ahead of the tick's own result line.
 `SIGINT` / `SIGTERM` flush any pending debounce before exiting. With
-`--verbose`, `watching N path(s) under ...` marks the watcher as armed. A
-syncPath that does not exist at start is watched too: `watch` checks each such
+`--verbose`, `watching N path(s) under ...` marks the watcher as armed: it is
+printed once chokidar has scanned the syncPaths that exist and a watch on a
+scratch directory in the OS temp directory has delivered an event, at most
+`AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS` milliseconds (default 5000; an invalid
+or negative value falls back to the default) after chokidar's scan, otherwise
+`watch` warns `could not confirm within <N>ms that the operating system file
+watch is live` and prints the line anyway. Nothing is written into a syncPath
+for this. A syncPath that does not exist at start is watched too: `watch` checks each such
 path on its own every 250 ms (a path under a directory that is missing as well
 is checked the same way), and as soon as one exists it starts a watcher for it
 and reports every file already inside it as a change, so a path that appears

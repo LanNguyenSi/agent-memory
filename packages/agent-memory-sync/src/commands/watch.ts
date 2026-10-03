@@ -17,8 +17,10 @@ const { performPush } = require("../memory-sync/push");
 const { writeInfo, writeWarning } = require("../output");
 const {
   DEFAULT_MISSING_POLL_MS,
+  confirmWatchLive,
   listFilesUnder,
   partitionSyncPaths,
+  resolveArmTimeoutMs,
   trackMissingPaths
 } = require("./watch-arming");
 
@@ -132,6 +134,7 @@ function registerWatchCommand(program: import("commander").Command): void {
       let runsCompleted = 0;
       let shouldExit = false;
       let watcherClosed = false;
+      const armingAbort = new AbortController();
       let workChain: Promise<void> = Promise.resolve();
       let resolveDone!: () => void;
       const done = new Promise<void>((resolve) => {
@@ -143,6 +146,7 @@ function registerWatchCommand(program: import("commander").Command): void {
           return;
         }
         watcherClosed = true;
+        armingAbort.abort();
         missingTracker?.close();
         await Promise.all([...watchers].map((entry) => entry.close()));
         resolveDone();
@@ -477,6 +481,11 @@ function registerWatchCommand(program: import("commander").Command): void {
       // cadence, which leaves comfortable margin above that threshold; see
       // that file's header comment for the full measurement notes.
       //
+      // The line also waits for an OS watch opened after chokidar's `ready` to
+      // deliver an event (confirmWatchLive, ./watch-arming.ts), the structural
+      // answer to the macOS gap described above; it is bounded, and a timeout
+      // is a warning, not a failure.
+      //
       // A syncPath that does not exist at start is never handed to chokidar,
       // whose handling of it is early and lossy (agent-tasks 50a13ffe,
       // d09a0d3a): its tracker is started before this line is printed, so
@@ -495,7 +504,18 @@ function registerWatchCommand(program: import("commander").Command): void {
       }
 
       if (existingAtStart.length > 0) {
-        createWatcher(existingAtStart).once("ready", announceReady);
+        createWatcher(existingAtStart).once("ready", async () => {
+          const timeoutMs = resolveArmTimeoutMs();
+          const live = await confirmWatchLive({ timeoutMs, signal: armingAbort.signal });
+          if (!live && !watcherClosed) {
+            writeWarning(
+              `could not confirm within ${timeoutMs}ms that the operating system file watch is live; ` +
+                "continuing, so a change made right after start may be missed until watch is restarted",
+              outputOptions
+            );
+          }
+          announceReady();
+        });
       }
       if (missingAtStart.length > 0) {
         writeInfo(

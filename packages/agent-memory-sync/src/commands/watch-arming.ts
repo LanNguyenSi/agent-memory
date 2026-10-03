@@ -48,14 +48,39 @@
 // missing path per interval. The latency it adds (at most one interval, 250 ms
 // by default) is far below the debounce window of the tick it feeds.
 //
+// The ready line also waits for the OS watch to be live (`confirmWatchLive`).
+// chokidar's own `ready` follows the stat of each existing path, and the
+// fs.watch of an existing file is opened just before it; on macOS a freshly
+// opened fs.watch (libuv's FSEvents stream) can miss a write for a while after
+// it returned (nodejs/node#52601), and under CPU load that while is long
+// enough for a write right after the ready line to be lost, which is the
+// "no progress signal" stall of tests/helpers/watch-process.ts. Before this
+// change the gate on a missing path happened to add a few milliseconds there,
+// and `watch` with a missing path lost such a write far less often than one
+// without. The probe watches a scratch directory in the OS temp directory
+// (nothing is written into the operator's directories) from after chokidar's
+// `ready` and writes into it until the event arrives: libuv serves every
+// fs.watch of a process from one stream that it recreates when a path is added,
+// so an event for the later scratch watch shows that the stream that includes
+// the sync paths is live. It is bounded, like the poll above.
+//
 // Not covered: a syncPath that is removed and created again after it appeared
 // is not re-armed, the same as a syncPath that existed at start.
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 // How often a missing syncPath is checked for existence, in milliseconds.
 const DEFAULT_MISSING_POLL_MS = 250;
+// Default bound on the wait for the OS watch to be live, in milliseconds. The
+// event normally arrives within a few milliseconds; 5000 leaves room for a
+// heavily loaded machine while keeping a watch that never reports from stalling
+// startup. Overridable with AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS.
+const DEFAULT_ARM_TIMEOUT_MS = 5000;
+const ARM_TIMEOUT_ENV_VAR = "AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS";
+const ARM_WRITE_INTERVAL_MS = 20;
+const ARM_PROBE_DIR_PREFIX = "agent-memory-sync-arm-";
 
 interface PartitionedSyncPaths {
   // Paths that exist right now, in the order given.
@@ -214,8 +239,95 @@ async function listFilesUnder(target: string): Promise<string[]> {
   return files;
 }
 
+function parseArmTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined || raw === "") {
+    return DEFAULT_ARM_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_ARM_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+function resolveArmTimeoutMs(): number {
+  return parseArmTimeoutMs(process.env[ARM_TIMEOUT_ENV_VAR]);
+}
+
+interface ConfirmOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  // Directory the scratch directory is created in; the OS temp directory by
+  // default.
+  scratchRoot?: string;
+}
+
+// Resolves true once an fs.watch opened now has delivered an event for a write
+// made after it was opened, false when `timeoutMs` elapses first, `signal`
+// aborts, or the scratch directory cannot be used. Writes into a scratch
+// directory of its own, never into a sync path, and removes it before it
+// resolves. Never rejects.
+function confirmWatchLive(options: ConfirmOptions = {}): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? resolveArmTimeoutMs();
+  const start = Date.now();
+  let scratch: string;
+  let watcher: { close(): void; on(event: string, listener: () => void): unknown };
+  let live = false;
+  try {
+    scratch = fs.mkdtempSync(path.join(options.scratchRoot ?? os.tmpdir(), ARM_PROBE_DIR_PREFIX));
+    watcher = fs.watch(scratch, () => {
+      live = true;
+    });
+    watcher.on("error", () => undefined);
+  } catch {
+    return Promise.resolve(false);
+  }
+  const cleanup = () => {
+    try {
+      watcher.close();
+    } catch {
+      // Already closed.
+    }
+    try {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    } catch {
+      // Best effort: it is an empty directory in the temp directory.
+    }
+  };
+  return new Promise((resolve) => {
+    let writes = 0;
+    const step = () => {
+      if (live) {
+        cleanup();
+        resolve(true);
+        return;
+      }
+      if (options.signal?.aborted || Date.now() - start >= timeoutMs) {
+        cleanup();
+        resolve(false);
+        return;
+      }
+      try {
+        fs.writeFileSync(path.join(scratch, "probe"), String(writes++));
+      } catch {
+        cleanup();
+        resolve(false);
+        return;
+      }
+      setTimeout(step, ARM_WRITE_INTERVAL_MS);
+    };
+    step();
+  });
+}
+
 module.exports = {
+  ARM_PROBE_DIR_PREFIX,
+  ARM_TIMEOUT_ENV_VAR,
+  DEFAULT_ARM_TIMEOUT_MS,
   DEFAULT_MISSING_POLL_MS,
+  confirmWatchLive,
+  parseArmTimeoutMs,
+  resolveArmTimeoutMs,
   listFilesUnder,
   partitionSyncPaths,
   trackMissingPaths

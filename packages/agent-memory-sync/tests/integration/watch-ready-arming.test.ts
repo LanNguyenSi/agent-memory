@@ -329,6 +329,50 @@ test("watch prints its ready line when every syncPath is missing, and delivers a
   assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
+// Pins the order the ready line is printed in: the OS watch is confirmed live
+// by a scratch watch opened after chokidar's `ready`, and only then does the
+// ready line follow. The preload logs every fs.watch call on the same pipe as
+// the ready line.
+test("watch prints its ready line only after the scratch watch that confirms the OS watch is live", async () => {
+  const { configPath, workspaceRoot } = setupWorkspace("watch-arming-live-order", ["logs"]);
+  const child = spawnWatch(watchArgs(configPath, 1), delayedArmingEnv(workspaceRoot));
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  try {
+    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+  const memoryWatchAt = stderr.indexOf(`arm-probe: fs.watch ${path.join(workspaceRoot, "MEMORY.md")}\n`);
+  const scratchWatchAt = stderr.search(/arm-probe: fs\.watch \S*agent-memory-sync-arm-\S*\n/);
+  const readyAt = stderr.search(READY_LINE);
+  assert.ok(memoryWatchAt >= 0, `no fs.watch on MEMORY.md. stderr: ${stderr}`);
+  assert.ok(scratchWatchAt > memoryWatchAt, `the scratch watch must come after the watch on MEMORY.md. stderr: ${stderr}`);
+  assert.ok(readyAt > scratchWatchAt, `the ready line must come after the scratch watch. stderr: ${stderr}`);
+  assert.doesNotMatch(stderr, /could not confirm within/);
+});
+
+// A bound of 0 ends the confirmation at its first check, before any event can
+// arrive, so the warning and the ready line are deterministic.
+test("watch warns, and still prints its ready line, when the OS watch is not confirmed within the bound", async () => {
+  const { configPath } = setupWorkspace("watch-arming-live-bound", ["logs"]);
+  const child = spawnWatch(watchArgs(configPath, 1), { ...process.env, AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS: "0" });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  try {
+    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+  } finally {
+    await stopWatchProcessGroup(child);
+  }
+  assert.match(stderr, /warning: could not confirm within 0ms that the operating system file watch is live/);
+  assert.ok(stderr.search(/could not confirm within/) < stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${stderr}`);
+  assert.equal(count(stderr, new RegExp(READY_LINE.source, "g")), 1);
+});
+
 // Runs src/main.ts in a single node process (`node --import tsx`) instead of
 // through the tsx CLI launcher spawnWatch uses. That launcher relays SIGTERM to
 // its child and, when the child does not acknowledge the signal within its
