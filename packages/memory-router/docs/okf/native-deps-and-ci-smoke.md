@@ -3,7 +3,7 @@ type: module
 title: Native-dependency smoke check
 description: Pointer doc. Why the CI matrix runs a dedicated native-addon load before typecheck/build, which matrix leg it exercises, and how its probe relates to the calls index-store.ts makes at runtime.
 tags: [native-deps, ci-smoke, better-sqlite3, sqlite-vec]
-timestamp: 2026-09-30T07:24:20Z
+timestamp: 2026-10-03T13:13:22Z
 sources:
   - .github/workflows/ci.yml
   - packages/memory-router/package.json
@@ -25,7 +25,7 @@ and what it does and does not cover.
 `.github/workflows/ci.yml:24-27`. `memory-router` declares `better-sqlite3`
 (sqlite) and `sqlite-vec` (its loadable extension) as dependencies
 (`packages/memory-router/package.json`). The "Native-dep smoke" step in
-`.github/workflows/ci.yml:47-51` runs right after `npm ci` and before
+`.github/workflows/ci.yml:47-53` runs right after `npm ci` and before
 Typecheck/Build/Lint/Test, behind a shell `if` on `matrix.package` being
 `memory-router` (a no-op on the other legs): a native addon's ABI
 mismatch against the runner's Node version fails at `require()` time, not
@@ -36,7 +36,7 @@ run that follows.
 ## What the probe checks
 
 The step's command,
-`` `node -e "const s = require('sqlite-vec'); const D = require('better-sqlite3'); const db = new D(':memory:'); s.load(db); console.log('native deps OK');"` `` (`.github/workflows/ci.yml:50`),
+`` `node -e "const s = require('sqlite-vec'); const D = require('better-sqlite3'); const db = new D(':memory:'); s.load(db); console.log('native deps OK');"` `` (`.github/workflows/ci.yml:52`),
 makes the same kinds of calls
 `packages/memory-router/src/embed/index-store.ts` depends on: it requires
 both modules (index-store.ts does so at module scope,
