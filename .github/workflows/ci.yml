@@ -45,8 +45,10 @@ jobs:
       # sqlite-vec; a missing binding would otherwise show up as an opaque
       # test failure later. Cheap no-op for pure-JS packages.
       - name: Native-dep smoke
+        env:
+          PACKAGE: ${{ matrix.package }}
         run: |
-          if [ "${{ matrix.package }}" = "memory-router" ]; then
+          if [ "$PACKAGE" = "memory-router" ]; then
             node -e "const s = require('sqlite-vec'); const D = require('better-sqlite3'); const db = new D(':memory:'); s.load(db); console.log('native deps OK');"
           fi
 
