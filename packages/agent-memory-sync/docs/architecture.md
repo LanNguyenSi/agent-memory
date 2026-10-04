@@ -119,7 +119,7 @@ not keep a second copy that could drift out of sync with the `CliError` subclass
 
 Error messages follow the pattern: `error: <what went wrong>. <how to fix it>.`
 
-Good: `error: config file not found at ~/.config/agent-memory-sync/config.json. Run 'agent-memory-sync config init' to create it.`
+Good: `error: config file not found at ~/.config/agent-memory-sync/config.json. Run 'agent-memory-sync config set <key> <value>' to create it.`
 Bad: `FileNotFoundError: [Errno 2] No such file or directory`
 
 ### 5. Logging and Verbosity
@@ -127,8 +127,8 @@ Bad: `FileNotFoundError: [Errno 2] No such file or directory`
 Diagnostic output is gated by a verbosity level:
 
 - **Default**: warnings and errors only
-- **`--verbose`**: informational messages, command timing
-- **`--debug`**: debug-level traces (when applicable)
+- **`--verbose` / `-v`**: informational messages, command timing
+- **`--quiet` / `-q`**: suppress non-error diagnostics
 
 Structured log lines go to stderr and never to stdout.
 

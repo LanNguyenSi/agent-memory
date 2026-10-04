@@ -11,7 +11,7 @@ const program = new Command();
 program
   .name("agent-memory-sync")
   .description(
-    "A CLI tool that syncs agent memory files across multiple OpenClaw instances via a central Git repository."
+    "A CLI tool that syncs agent memory files across multiple agent workspaces via a central Git repository."
   )
   .version("0.1.0");
 

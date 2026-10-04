@@ -56,7 +56,7 @@ error: config key 'output_format' has invalid value 'xml'. Allowed values: text,
 error: could not read file at path '/tmp/data.csv': no such file or directory.
 ```
 
-Never expose raw exception traces to the user by default. Use `--debug` to show stack traces.
+Never expose raw exception traces to the user.
 
 ### Color Output
 
@@ -241,28 +241,6 @@ What are the trade-offs? What becomes easier or harder?
 - **`--help` text**: updated whenever flags or commands change; treat it as part of the public API
 - **architecture.md**: updated when subsystem structure or data flow changes
 - **ADRs**: written before merging significant decisions, not after
-- **`.ai/AGENTS.md`**: updated when adding new commands or changing patterns
-
-## AI Collaboration Guidelines
-
-This project is configured for AI-assisted development. Read `.ai/AGENTS.md` before working on the codebase.
-
-### For AI Agents
-
-- Read `.ai/AGENTS.md` before starting any task
-- Follow the command module pattern exactly - do not invent new file layouts
-- Use the exit code table from architecture.md for all error paths
-- Write `--help` text for every new flag and command
-- Match the test naming convention
-- Do not add dependencies without creating an ADR
-
-### For Developers Working with AI
-
-- Point the agent to the specific command file and test file to modify
-- Provide the expected `--help` output as part of the specification
-- Review exit code handling and stderr vs stdout routing carefully
-- Run the full test suite after AI-generated changes
-- Update `.ai/AGENTS.md` if new patterns are introduced
 
 ## Communication
 
