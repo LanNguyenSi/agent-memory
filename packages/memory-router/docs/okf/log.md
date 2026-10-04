@@ -1,5 +1,13 @@
 # Bundle log
 
+- 2026-10-04T12:55:59Z, release cut 0.7.3 bumped `package.json` and the `PACKAGE_VERSION`
+  constant in `src/hooks/user-prompt-submit.ts` (one-line change, no line
+  shift). Re-verified `gate-composition-and-dedup.md` (`ctx` built without
+  `tool` at `user-prompt-submit.ts:40`), `score-blend-resolver.md`
+  (`resolveBlended` call at `user-prompt-submit.ts:54`) and
+  `native-deps-and-ci-smoke.md` (`better-sqlite3` and `sqlite-vec` are
+  declared dependencies in `package.json`); claims unchanged; re-stamped.
+
 - 2026-10-03T13:13:22Z, merged master into the staleness-template branch: master's
   `ci.yml` now passes `matrix.package` to the native-dep smoke step through
   `env: PACKAGE`, two lines longer. Re-pointed `native-deps-and-ci-smoke.md`
