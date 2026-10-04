@@ -56,7 +56,7 @@ error: config key 'output_format' has invalid value 'xml'. Allowed values: text,
 error: could not read file at path '/tmp/data.csv': no such file or directory.
 ```
 
-Never expose raw exception traces to the user by default. Use `--debug` to show stack traces.
+Never expose raw exception traces to the user.
 
 ### Color Output
 
