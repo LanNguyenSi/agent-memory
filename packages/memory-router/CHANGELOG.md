@@ -6,6 +6,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-04
+
 ### Fixed
 
 - `lint --conflicts --semantic` now preserves the `upgrade memory-router` advice in a newer-schema index error instead of appending a rebuild hint. A raw open error still gets one rebuild hint when its index path contains `rebuild`; the existing inconsistent-width hint and fresh-embedding fallback remain unchanged.
