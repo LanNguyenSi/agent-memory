@@ -26,6 +26,20 @@ class GitClient {
     mkdirSync(repoDir, { recursive: true });
 
     this.run(["init"], repoDir);
+    // This clone is disposable and the caller removes it with a recursive rm
+    // as soon as it is done (StateStore.clearTemp). git's own housekeeping
+    // must therefore never run in it: `git fetch` and `git commit` end by
+    // spawning `git maintenance run --auto --detach`, a daemonised process
+    // that outlives the git command, and when it decides to run gc it
+    // repacks and prunes inside .git/objects while the rm walks that
+    // directory, which fails with ENOTEMPTY (agent-tasks 14d04351). It also
+    // takes .git/objects/maintenance.lock on every such run. Set in the
+    // repository's own config, not through `-c` or the environment: the
+    // config survives into every later command and into the detached child,
+    // and no argv change reaches a custom gitBinary wrapper. gc.auto covers
+    // git versions that predate maintenance.auto.
+    this.run(["config", "gc.auto", "0"], repoDir);
+    this.run(["config", "maintenance.auto", "false"], repoDir);
     this.run(["config", "user.name", "agent-memory-sync"], repoDir);
     this.run(["config", "user.email", "agent-memory-sync@local.invalid"], repoDir);
     this.run(["remote", "add", "origin", remoteUrl], repoDir);
