@@ -94,7 +94,15 @@ function seedRemote(root: string): string {
 // Runs `body` with a global git config that makes gc fire on a single loose
 // object in objects/17 and keeps fetched objects loose (so gc has hundreds to
 // repack and prune), then restores the process environment.
-function withEagerAutoGc<T>(root: string, body: () => T): T {
+// Runs `body` with the eager gc config as the global git config. Returns false
+// (after marking the test skipped) without running `body` when git does not
+// honour GIT_CONFIG_GLOBAL (git < 2.32): the race would then not be exercised
+// and the test would pass vacuously.
+function withEagerAutoGc(
+  t: { skip: (message?: string) => void },
+  root: string,
+  body: () => void,
+): boolean {
   const configPath = path.join(root, "eager-gc.gitconfig");
   writeFileSync(
     configPath,
@@ -108,7 +116,22 @@ function withEagerAutoGc<T>(root: string, body: () => T): T {
   process.env.GIT_CONFIG_GLOBAL = configPath;
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   try {
-    return body();
+    let gcAuto = "";
+    try {
+      gcAuto = execFileSync("git", ["config", "--global", "--get", "gc.auto"], {
+        encoding: "utf8",
+      }).trim();
+    } catch {
+      gcAuto = "";
+    }
+    if (gcAuto !== "1") {
+      t.skip(
+        `eager gc config not in effect (global gc.auto=${gcAuto || "unset"}); this test needs git >= 2.32 for GIT_CONFIG_GLOBAL`,
+      );
+      return false;
+    }
+    body();
+    return true;
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) {
@@ -141,14 +164,14 @@ test("GitClient.prepareWorkingCopy: the temp clone turns git's auto-maintenance 
   );
 });
 
-test("GitClient.prepareWorkingCopy: a temp clone can be removed right away even when the machine's git config makes gc eager", () => {
+test("GitClient.prepareWorkingCopy: a temp clone can be removed right away even when the machine's git config makes gc eager", (t: { skip: (message?: string) => void }) => {
   const root = sandbox("race");
   const remoteDir = seedRemote(root);
   const client = new GitClient("git");
   const iterations = 15;
 
   const failures: string[] = [];
-  withEagerAutoGc(root, () => {
+  const ran = withEagerAutoGc(t, root, () => {
     for (let index = 0; index < iterations; index += 1) {
       const repoDir = client.createTempRepoDir(root, `pull-${index}`);
       client.prepareWorkingCopy(remoteDir, "main", repoDir);
@@ -162,6 +185,7 @@ test("GitClient.prepareWorkingCopy: a temp clone can be removed right away even 
       }
     }
   });
+  if (!ran) return;
 
   assert.deepEqual(
     failures,
