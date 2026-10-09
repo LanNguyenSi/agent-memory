@@ -35,8 +35,12 @@ This document wires together the pieces already documented individually
   `src/memory-sync/config.ts` / `src/memory-sync/git-client.ts`.
 - Conflict strategy is `inline-markers` everywhere — concurrent edits that
   aren't a clean append merge land as `<<<<<<< local` / `>>>>>>> remote`
-  markers in the file for a human to resolve, rather than silently picking a
-  winner.
+  markers in the local file for a human to resolve, rather than silently
+  picking a winner. The markers stay on the machine that has them: a push
+  holds such a path back (the hub keeps its content, the path shows up in
+  `conflicts=N` and a note, exit `0`) and a hub file that carries markers is
+  never merged into. See the README's "What a push publishes, and
+  conflicts" for the recovery procedure.
 - **Reachability precheck coverage.** `watch`'s push now goes through the
   same base-snapshot-aware `performPush` (`src/memory-sync/push.ts`) that
   `run`'s `pull`/`push`/`sync` use, so a `watch` tick gets the same fast
@@ -95,8 +99,10 @@ This document wires together the pieces already documented individually
   local files and its own last-known base snapshot, so a remote file this
   machine has never pulled — e.g. a peer's file — is left untouched rather
   than deleted, and a file changed both locally and on the remote is merged
-  (or conflict-marked, per `conflictStrategy`) rather than blindly
-  overwritten with the local version. What `watch` still does not do is
+  (or, when the merge can only produce conflict markers, held back and
+  reported in `conflicts=N` without touching the hub, per
+  `conflictStrategy`) rather than blindly overwritten with the local
+  version. What `watch` still does not do is
   pull: if the mini (or another machine) pushes changes while this machine
   was offline or simply not editing anything, those changes only reach this
   machine's local files on the next successful `pull`/`sync` — `watch`'s
@@ -608,13 +614,15 @@ mechanism that makes push only ever offer this machine's own
 machine's file — this makes *content* conflicts on this path structurally
 impossible (`inline-markers` conflict resolution is never invoked here in
 practice, unlike the `memory` tree where concurrent edits are expected).
-In practice stale inline markers did once reach a peer's file on this path
-regardless, an incident whose class is recorded in `CHANGELOG.md`'s
-`[Unreleased]` entry, with the dated base/local/remote triple in the run
-files under `.ai/runs/2026-09-11-sync-peer-file-conflict`. Since that fix,
-`pull` mirrors a peer's file here from the remote unconditionally instead
-of 3-way merging it, which is what keeps a peer's stale local markers from
-ever winning again.
+In practice stale inline markers could once reach a peer's file on this path
+regardless; the incident class is recorded in `CHANGELOG.md`. Since then,
+`pull` mirrors a peer's file here from the remote instead of 3-way merging
+it, which keeps a peer's stale local markers from winning. This is a
+special case of the general markered-remote rule: a push never publishes
+conflict markers, and a hub file that carries markers is never merged into
+on either side. For an ownerScoped peer file `pull` still takes the remote
+copy (mirror) and flags the markers in a note rather than leaving the local
+file untouched.
 Only `<profile>.json` belongs in `~/.harness/machine-state`, and never any
 secret: the whole directory is synced into a shared, committed remote, so
 every file dropped there ends up in git history on every peer. The consumer

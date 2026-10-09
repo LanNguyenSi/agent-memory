@@ -27,6 +27,13 @@ prepared (e.g. a required `syncPaths` entry missing), and any other
 git-level failure while that working copy is being prepared or committed
 (a full disk, a corrupted git config, a broken commit hook, ...).
 
+Exit semantics are unchanged by conflict handling: a conflict exits `0`
+(it is visible only through `conflicts=N` and the notes), and the
+mass-delete guard (exit `5`) keeps the watcher ticking. A watch tick whose
+only outcome is held-back conflicts logs them
+(`watch tick produced no remote changes; N conflict(s) held back: <paths>`)
+instead of staying silent.
+
 `watch` still never pulls; it is edge-triggered on local changes only, so
 a machine that was offline while changes landed elsewhere will not pick
 them up until its own next local edit. For that reason, a periodic `run
