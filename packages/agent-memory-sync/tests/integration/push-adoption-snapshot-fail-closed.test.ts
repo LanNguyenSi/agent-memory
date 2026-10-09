@@ -67,7 +67,7 @@ test("an accepted deletion whose snapshot is gone exits 12, names the cause and 
   const result = runPush(s, ["--accept-mass-delete"], {
     env: {
       ...process.env,
-      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --require ${preload}`.trim(),
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --require "${preload}"`.trim(),
       AGENT_MEMORY_SYNC_TEST_DROP_SNAPSHOT: "1"
     },
     expectFailure: true

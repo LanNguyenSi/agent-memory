@@ -3,7 +3,7 @@
 // files only while the pre-apply snapshot that holds their copy exists.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 
@@ -202,18 +202,43 @@ test("an adoption deletes nothing in any destination when only a later destinati
   assert.equal(ctx.baseReplaced(), 0, "the base snapshot was not moved");
 });
 
-test("an adoption deletes nothing when a lost path on disk is not in the snapshot", () => {
-  // T1 is on disk but was not among the files collected before the fetch, so
-  // the snapshot never copied it; removing it would leave it nowhere.
-  const ctx = setup("uncollected", { uncollected: [1] });
+// The hub dropped T0..T4, so the lost paths are T0 (first), T1 and T4 (last).
+// A file that came back and was left out of the snapshot must stop the
+// adoption wherever it sits in the list of paths to remove.
+for (const missing of [0, 1, 4]) {
+  test(`an adoption deletes nothing when lost path T${missing} on disk is not in the snapshot`, () => {
+    // The file is on disk but was not among the files collected before the
+    // fetch, so the snapshot never copied it; removing it would leave it
+    // nowhere.
+    const ctx = setup(`uncollected-${missing}`, { uncollected: [missing] });
+    const accept = loadAcceptWith(null);
+
+    assert.throws(
+      () => ctx.run(accept),
+      (error: Error & { exitCode?: number }) =>
+        new RegExp(`does not list notes/T${missing}\\.md`).test(error.message) &&
+        /No local file was removed/.test(error.message) &&
+        error.exitCode === 12
+    );
+
+    for (let index = 0; index < 10; index += 1) {
+      assert.equal(existsSync(ctx.localFile(index)), true, `T${index}.md is still on disk`);
+    }
+    assert.equal(ctx.baseReplaced(), 0, "the base snapshot was not moved");
+  });
+}
+
+test("an adoption stops on a lost path that is a symlink the sync does not collect", () => {
+  const ctx = setup("symlink", { uncollected: [1] });
+  const target = path.join(path.dirname(ctx.localFile(1)), "elsewhere.txt");
+  writeFileSync(target, "target\n", "utf8");
+  rmSync(ctx.localFile(1));
+  symlinkSync(target, ctx.localFile(1));
   const accept = loadAcceptWith(null);
 
   assert.throws(
     () => ctx.run(accept),
-    (error: Error & { exitCode?: number }) =>
-      /does not list notes\/T1\.md/.test(error.message) &&
-      /No local file was removed/.test(error.message) &&
-      error.exitCode === 12
+    (error: Error & { exitCode?: number }) => /does not list notes\/T1\.md/.test(error.message) && error.exitCode === 12
   );
 
   for (let index = 0; index < 10; index += 1) {
@@ -221,3 +246,35 @@ test("an adoption deletes nothing when a lost path on disk is not in the snapsho
   }
   assert.equal(ctx.baseReplaced(), 0, "the base snapshot was not moved");
 });
+
+// A destination that is a path prefix of another, or only a string prefix of
+// it, must not claim the other's files: each destination's snapshot holds
+// exactly its own share, and every lost file of every destination is removed.
+for (const destinations of [
+  ["notes", "notes/sub"],
+  ["notes", "notes2"]
+]) {
+  test(`an adoption with destinations ${destinations.join(" and ")} deletes the lost files of both`, () => {
+    const ctx = setup(`prefix-${destinations[1].replace("/", "-")}`, { destinations });
+    const accept = loadAcceptWith(null);
+
+    const result = ctx.run(accept);
+
+    assert.ok(result);
+    assert.equal(result.deletedPaths.length, 10);
+    assert.equal(result.snapshots.length, 2);
+    for (const [destinationIndex, destination] of destinations.entries()) {
+      for (let index = 0; index < 10; index += 1) {
+        assert.equal(
+          existsSync(ctx.localFile(index, destinationIndex)),
+          index >= 5,
+          `${destination}/T${index}.md ${index >= 5 ? "is kept" : "is removed"}`
+        );
+      }
+      const snapshotted = result.snapshots.some((id: string) =>
+        existsSync(path.join(ctx.stateDir, "snapshots", destination, id, "files", destination, "T0.md"))
+      );
+      assert.equal(snapshotted, true, `${destination}/T0.md is in a snapshot`);
+    }
+  });
+}
