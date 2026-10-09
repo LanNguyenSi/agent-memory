@@ -120,10 +120,22 @@ is about to change.
   path the pull would overwrite or remove, and that exists on disk at that
   moment, must be listed and stored in the snapshot of its destination. That
   includes a file that appeared after the pull collected its local files,
-  which the snapshot cannot hold. When a snapshot of any destination fails
-  that check, the pull exits `12` (see the [exit-code table](../README.md#exit-codes)),
-  nothing is written or removed in any destination and the base snapshot
-  does not move; running the pull again takes a fresh snapshot.
+  which the snapshot cannot hold. Before any snapshot is written, the pull
+  also checks that every path it would create, overwrite or remove and that
+  exists on disk (a dangling symlink counts) is one of the regular files it
+  collected. A symlink, a directory, or a name that differs from the hub path
+  only by case or Unicode normalization is not collected, so no snapshot
+  could ever hold it; the pull stops with `12` and the message `<path> exists
+on disk but is not a regular file the sync collects`, naming the path, and
+  that stop writes no snapshot, so repeating it does not rotate the earlier
+  generations away. When the read-back of a snapshot of any destination
+  fails instead (the message names the destination and ends `does not list
+<path>`, `no pre-apply snapshot was taken that holds <path>`, or says the
+  generation is gone), the pull also exits `12` (see the
+  [exit-code table](../README.md#exit-codes)). In both cases nothing is
+  written or removed in any destination and the base snapshot does not move.
+  Running the pull again takes a fresh snapshot; if it stops again at the
+  same path, move that path aside.
 - **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
   thresholds refuse. It does not override an untrustworthy working copy.
 - **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the

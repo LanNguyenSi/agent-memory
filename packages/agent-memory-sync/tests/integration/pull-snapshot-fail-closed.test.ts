@@ -68,6 +68,10 @@ function setup(name: string, destinations: string[]) {
     workspace,
     configPath,
     stateDir,
+    snapshotIds: (destination: string): string[] => {
+      const dir = path.join(stateDir, "snapshots", destination);
+      return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+    },
     base: (): Record<string, string | null> => new StateStore(stateDir, "default").readBaseSnapshots(),
     // A peer deletes n0.md and edits n1.md in every destination, and adds a new n9.md.
     peerChanges: (peerName: string) => {
@@ -116,6 +120,8 @@ test("pull: a snapshot that does not hold a path the plan removes stops with exi
   assert.equal(result.status, 12, result.stderr);
   assert.match(result.stderr, /pull stopped: the pre-apply snapshot for 'notes' is not intact/);
   assert.match(result.stderr, /does not list notes\/n0\.md/);
+  assert.match(result.stderr, /If it stops again at the same path, that path is on disk but is not a regular file/);
+  assert.match(result.stderr, /move it aside and run the pull again/);
   assert.match(result.stderr, /No local file was written or removed and the base snapshot was not moved/);
   assertUntouched(ctx, ["notes"]);
   assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
@@ -159,17 +165,19 @@ test("pull: a path created after the local files were collected is never overwri
   const { ctx, baseBefore, result } = createdAfterCollection("pull-fc-created", true);
 
   assert.equal(result.status, 12, result.stderr);
-  assert.match(result.stderr, /does not list notes\/n8\.md/);
+  assert.match(result.stderr, /pull stopped: notes\/n8\.md exists on disk but is not a regular file the sync collects/);
+  assert.match(result.stderr, /move notes\/n8\.md aside and run the pull again/);
   assert.equal(readText(path.join(ctx.workspace, "notes", "n8.md")), "typed locally\n");
   assert.equal(readText(path.join(ctx.workspace, "notes", "n0.md")), "notes 0\n");
   assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
+  assert.deepEqual(ctx.snapshotIds("notes"), [], "no snapshot was written for a stop that happens before it");
 });
 
 test("pull: a path created after collection in a destination the plan only adds to is not overwritten either", () => {
   const { ctx, baseBefore, result } = createdAfterCollection("pull-fc-created-only", false);
 
   assert.equal(result.status, 12, result.stderr);
-  assert.match(result.stderr, /no pre-apply snapshot was taken that holds notes\/n8\.md/);
+  assert.match(result.stderr, /pull stopped: notes\/n8\.md exists on disk but is not a regular file the sync collects/);
   assert.equal(readText(path.join(ctx.workspace, "notes", "n8.md")), "typed locally\n");
   assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
 });
@@ -215,4 +223,101 @@ test("pull: the same changes apply when no snapshot is damaged", () => {
     assert.equal(readText(path.join(ctx.workspace, destination, "n1.md")), `${destination} edited by peer\n`);
     assert.equal(readText(path.join(ctx.workspace, destination, "n9.md")), `${destination} new\n`);
   }
+});
+
+// A local entry the sync never collects (a symlink, a directory, a case or
+// Unicode-normalization alias) at a path the hub creates is a persistent
+// stop: it repeats on every run. It must stop before any snapshot is written,
+// or each retry would write one more generation and rotate an older one away.
+function symlinkOrSkip(t: { skip: (reason: string) => void }, target: string, linkPath: string): boolean {
+  try {
+    fs.symlinkSync(target, linkPath);
+    return true;
+  } catch {
+    t.skip("symlinks are not available on this platform");
+    return false;
+  }
+}
+
+function peerAddsAndEdits(ctx: ReturnType<typeof setup>, peerName: string) {
+  const checkout = cloneRemote(ctx.remoteDir, ctx.root, peerName);
+  writeText(path.join(checkout, "shared", "notes", "n7.md"), "from the hub\n");
+  writeText(path.join(checkout, "shared", "notes", "n1.md"), `edited by ${peerName}\n`);
+  git(["add", "-A"], checkout);
+  git(["commit", "-m", `${peerName} changes`], checkout);
+  git(["push", "origin", "HEAD:main"], checkout);
+}
+
+test("pull: a symlink at a hub-created path stops with exit 12 and leaves the link and its target alone", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const ctx = setup("pull-fc-symlink", ["notes"]);
+  peerAddsAndEdits(ctx, "peer");
+  const targetPath = path.join(ctx.root, "outside-target.md");
+  writeText(targetPath, "precious\n");
+  const linkPath = path.join(ctx.workspace, "notes", "n7.md");
+  if (!symlinkOrSkip(t, targetPath, linkPath)) {
+    return;
+  }
+  const baseBefore = ctx.base();
+
+  const result = ctx.pull([]);
+
+  assert.equal(result.status, 12, result.stderr);
+  assert.match(result.stderr, /pull stopped: notes\/n7\.md exists on disk but is not a regular file the sync collects/);
+  assert.match(result.stderr, /move notes\/n7\.md aside and run the pull again/);
+  assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true, "the symlink is still a symlink");
+  assert.equal(readText(targetPath), "precious\n", "the symlink target is unchanged");
+  assert.equal(readText(path.join(ctx.workspace, "notes", "n1.md")), "notes 1\n", "no other path was applied");
+  assert.deepEqual(ctx.snapshotIds("notes"), [], "no snapshot was written");
+  assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
+});
+
+test("pull: a dangling symlink at a hub-created path is not written through", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const ctx = setup("pull-fc-dangling", ["notes"]);
+  peerAddsAndEdits(ctx, "peer");
+  const targetPath = path.join(ctx.root, "not-there-yet.md");
+  const linkPath = path.join(ctx.workspace, "notes", "n7.md");
+  if (!symlinkOrSkip(t, targetPath, linkPath)) {
+    return;
+  }
+
+  const result = ctx.pull([]);
+
+  assert.equal(result.status, 12, result.stderr);
+  assert.match(result.stderr, /notes\/n7\.md exists on disk but is not a regular file the sync collects/);
+  assert.equal(fs.existsSync(targetPath), false, "nothing was written through the dangling link");
+});
+
+test("pull: a persistent stop does not rotate the earlier snapshot generations away", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const ctx = setup("pull-fc-rotation", ["notes"]);
+  ctx.peerChanges("peer-first");
+  const seeded = ctx.pull([]);
+  assert.equal(seeded.status, 0, seeded.stderr);
+  const seededIds = ctx.snapshotIds("notes");
+  assert.equal(seededIds.length, 1, "the first pull wrote one generation");
+  const seededFile = path.join(ctx.stateDir, "snapshots", "notes", seededIds[0]);
+
+  peerAddsAndEdits(ctx, "peer-second");
+  const targetPath = path.join(ctx.root, "outside-target.md");
+  writeText(targetPath, "precious\n");
+  if (!symlinkOrSkip(t, targetPath, path.join(ctx.workspace, "notes", "n7.md"))) {
+    return;
+  }
+  const baseBefore = ctx.base();
+
+  // snapshotGenerations defaults to 3: one more stuck run than that would
+  // have rotated the seeded generation away.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result = ctx.pull([]);
+    assert.equal(result.status, 12, `attempt ${attempt}: ${result.stderr}`);
+  }
+
+  assert.equal(fs.existsSync(seededFile), true, "the seeded generation still exists");
+  assert.deepEqual(ctx.snapshotIds("notes"), seededIds, "no generation was written or rotated away");
+  assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
 });

@@ -3,10 +3,10 @@
 // src/memory-sync/pull.ts).
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { mkdirSync, rmSync, symlinkSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
-const { findPullSnapshotProblem } = require("../../src/memory-sync/pull");
+const { findPullSnapshotProblem, findUncollectedPlanPath } = require("../../src/memory-sync/pull");
 const { writePreApplySnapshot } = require("../../src/memory-sync/pre-apply-snapshot");
 
 interface Entry {
@@ -47,7 +47,7 @@ function setup(name: string, destinations: string[] = ["notes"]) {
       snapshots,
       resolvedSyncPathEntries: destinations.map((destination) => ({ destination }))
     });
-  return { stateDir, write, entry, snapshot, check };
+  return { stateDir, workspace, write, entry, snapshot, check };
 }
 
 test("a plan whose existing paths are all in the snapshot has no problem", () => {
@@ -144,4 +144,58 @@ test("the second destination's damaged snapshot is found although the first is i
 
   assert.ok(problem);
   assert.equal(problem.destination, "beta");
+});
+
+// findUncollectedPlanPath: the check that runs before any snapshot is written.
+
+test("every existing plan path being collected, or absent, leaves nothing uncollected", () => {
+  const ctx = setup("uncollected-none");
+  const a = ctx.write("notes/a.md", "a\n");
+
+  assert.equal(
+    findUncollectedPlanPath([ctx.entry("notes/a.md", "x\n", true), ctx.entry("notes/new.md", "new\n", false)], [a]),
+    null
+  );
+});
+
+test("an existing plan path that was not collected is named, whatever the plan does with it", () => {
+  const ctx = setup("uncollected-file");
+  const a = ctx.write("notes/a.md", "a\n");
+  ctx.write("notes/late.md", "typed after the collection\n");
+
+  for (const content of ["hub\n", null]) {
+    assert.equal(
+      findUncollectedPlanPath([ctx.entry("notes/a.md", "x\n", true), ctx.entry("notes/late.md", content, false)], [a]),
+      "notes/late.md"
+    );
+  }
+});
+
+test("a directory, a symlink and a dangling symlink at a plan path are uncollected", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const ctx = setup("uncollected-kinds");
+  mkdirSync(path.join(ctx.workspace, "notes", "dir.md"), { recursive: true });
+  assert.equal(findUncollectedPlanPath([ctx.entry("notes/dir.md", "hub\n", false)], []), "notes/dir.md");
+
+  const real = ctx.write("outside/real.md", "real\n");
+  try {
+    symlinkSync(real.absolutePath, path.join(ctx.workspace, "notes", "link.md"));
+    symlinkSync(path.join(ctx.workspace, "outside", "absent.md"), path.join(ctx.workspace, "notes", "dangling.md"));
+  } catch {
+    t.skip("symlinks are not available on this platform");
+    return;
+  }
+  assert.equal(findUncollectedPlanPath([ctx.entry("notes/link.md", "hub\n", false)], []), "notes/link.md");
+  assert.equal(findUncollectedPlanPath([ctx.entry("notes/dangling.md", "hub\n", false)], []), "notes/dangling.md");
+});
+
+test("a plan path that reaches a collected file under another spelling is uncollected", () => {
+  const ctx = setup("uncollected-alias");
+  const a = ctx.write("notes/a.md", "a\n");
+  // The hub spells the path 'notes/A.md'; the file on disk the plan reaches is the
+  // one collected as 'notes/a.md', as on a case-insensitive filesystem.
+  const aliased = { ...ctx.entry("notes/A.md", "hub\n", false), localAbsolutePath: a.absolutePath };
+
+  assert.equal(findUncollectedPlanPath([aliased], [a]), "notes/A.md");
 });
