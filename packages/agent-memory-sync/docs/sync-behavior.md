@@ -115,7 +115,15 @@ is about to change.
   a destination, the destination's current tree is copied to
   `<stateDir>/snapshots/<destination>/<timestamp>/`. The copy this run takes plus the newest
   `snapshotGenerations`-1 earlier ones are kept (default 3 in all). A run with nothing to
-  apply writes nothing. `restore --from-snapshot` reads them back.
+  apply writes nothing. `restore --from-snapshot` reads them back. The
+  snapshots are read back before the first file is written or removed: every
+  path the pull would overwrite or remove, and that exists on disk at that
+  moment, must be listed and stored in the snapshot of its destination. That
+  includes a file that appeared after the pull collected its local files,
+  which the snapshot cannot hold. When a snapshot of any destination fails
+  that check, the pull exits `12` (see the [exit-code table](../README.md#exit-codes)),
+  nothing is written or removed in any destination and the base snapshot
+  does not move; running the pull again takes a fresh snapshot.
 - **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
   thresholds refuse. It does not override an untrustworthy working copy.
 - **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the
