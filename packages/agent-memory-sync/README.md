@@ -94,6 +94,63 @@ See [docs/service-supervision.md](docs/service-supervision.md) for how a
 systemd or launchd supervisor should account for these exit codes when
 running `watch` continuously.
 
+### What a push publishes, and conflicts
+
+A push publishes only the changes this machine made relative to its base
+snapshot (its record of what the hub looked like at the last sync). After a
+push the base advances per path, and only where the local copy converged with
+the hub: to the hub content where the local file equals it, to no entry where
+the path is absent on both sides, and otherwise the previous entry is kept. A
+file this machine has not pulled yet is therefore never mistaken for a local
+deletion, and a stale local copy is never republished over a peer's newer
+version.
+
+Conflicts stay on the machine that has them:
+
+- A path whose local content carries conflict markers, or whose three-way
+  merge against the hub could only produce markers, is held back. The hub is
+  left unchanged for that path, it is counted in `conflicts=N` and named in a
+  note, and its base entry is not touched. It is held back again on every
+  later push until the local file is resolved (or `pull`/`sync` merges it
+  cleanly). A configured `local-wins` or `remote-wins` strategy that resolves
+  to marker-free content still publishes.
+- A hub file that itself carries conflict markers is never merged into, on
+  either side: `pull` leaves the local file byte-identical, `push` skips the
+  path whatever the local copy or the strategy says, and the path is reported
+  the same way. A local copy that is already equal to the markered hub copy
+  is not counted as a conflict; a stale-marker note names it and says to
+  repair the hub copy. Under `local-wins` a clean local edit does not repair
+  a markered hub copy implicitly; the hub copy has to be repaired at the hub.
+  (An `ownerScoped` peer file keeps its mirror-and-flag rule as a special
+  case of this rule.)
+- A conflict exits `0`. It is visible only through `conflicts=N` and the
+  notes, so check those after a `sync`. A `watch` tick that holds paths back
+  logs how many and which. The note names the next step per case: pull or
+  sync first (merge conflict), resolve the markers (markered local file),
+  repair the hub copy (markered hub copy), or copy back the one snapshotted
+  file named in the note (a local copy removed by an accepted mass deletion;
+  the whole-destination restore fallback also brings back every other
+  accepted deletion).
+- The mass-delete guard (exit `5`) measures net deletions against the hub
+  content at the start of the run, so a file created and deleted again while
+  the remote was unreachable does not count. A remote that cannot be reached
+  queues the push and exits `0`; exit `4` is a git or remote failure that is
+  not queued.
+
+#### Recovering a hub that already holds a markered or regressed file
+
+1. Stop the periodic `sync` job and the `watch` job on every machine.
+2. Commit the clean file straight into the hub, from a worktree on the bare
+   repository or from any clone.
+3. Overwrite every machine's local copy of the file with the same bytes.
+4. Run one controlled `agent-memory-sync run --mode sync` per machine and
+   check that the result reports `conflicts=0` and that no note names the
+   file (stale markers, not published, not pulled). A machine whose state
+   directory still holds queued snapshots replays them on this run; the
+   `replayed N queued snapshot(s)` note is the signal to look at the result
+   closely.
+5. Restart the periodic and watch jobs.
+
 ### systemd unit
 
 ```ini

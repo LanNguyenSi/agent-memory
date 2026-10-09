@@ -216,7 +216,15 @@ function registerWatchCommand(program: import("commander").Command): void {
         // The count is in the result line for the same reason.
         const deletedCount = (result.deletedFiles || []).length;
         if (result.appliedFiles.length === 0 && deletedCount === 0) {
-          writeInfo("watch tick produced no remote changes", outputOptions);
+          // A tick that held conflicted paths back published nothing, and
+          // saying only "no remote changes" would hide that they are waiting.
+          writeInfo(
+            result.conflictFiles.length > 0
+              ? `watch tick produced no remote changes; ${result.conflictFiles.length} conflict(s) held back: ` +
+                  result.conflictFiles.join(", ")
+              : "watch tick produced no remote changes",
+            outputOptions
+          );
           return;
         }
 

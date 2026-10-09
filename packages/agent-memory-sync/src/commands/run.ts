@@ -10,8 +10,8 @@ const {
   formatErrorMessage
 } = require("../errors");
 const { acquireStateDirLock } = require("../memory-sync/lock");
-const { performPull } = require("../memory-sync/pull");
-const { performPush } = require("../memory-sync/push");
+const { hubMarkersPullNote, performPull } = require("../memory-sync/pull");
+const { hubMarkersPushNote, performPush } = require("../memory-sync/push");
 const { summarizeOperation } = require("../memory-sync/preview");
 const { nextScheduleTick, validateCronExpression } = require("../memory-sync/scheduler");
 const { writeDryRun, writeInfo, writeResult, writeWarning } = require("../output");
@@ -278,6 +278,17 @@ async function executeMode(
     const pullResult = await performPull(runConfig, options);
     const pushResult = await performPush(runConfig, options);
 
+    // A path whose hub copy carries conflict markers is skipped by both
+    // halves; the pull side already said why, so the push side's note for
+    // the same path would only repeat it. The conflict list keeps both.
+    const pullNotes: string[] = pullResult.notes || [];
+    const pullRefusedNotes = new Set(
+      (pullResult.conflictFiles as string[])
+        .filter((conflictPath) => pullNotes.includes(hubMarkersPullNote(conflictPath)))
+        .map((conflictPath) => hubMarkersPushNote(conflictPath))
+    );
+    const pushNotes: string[] = (pushResult.notes || []).filter((note: string) => !pullRefusedNotes.has(note));
+
     return {
       kind: "sync",
       status: summarizeSyncStatus(pullResult.status, pushResult.status),
@@ -291,7 +302,7 @@ async function executeMode(
       skippedFiles: unique([...(pullResult.skippedFiles || []), ...(pushResult.skippedFiles || [])]),
       protectedFiles: unique([...(pullResult.protectedFiles || []), ...(pushResult.protectedFiles || [])]),
       queuedSnapshotId: pushResult.queuedSnapshotId || null,
-      notes: unique([...(pullResult.notes || []), ...(pushResult.notes || [])])
+      notes: unique([...pullNotes, ...pushNotes])
     };
   } catch (error: unknown) {
     // Root cause of the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run

@@ -43,13 +43,26 @@ each refusal reports on exit.
   clock problem than a genuinely stuck remote), and a diagnostic note is
   emitted on that otherwise-silent "queued" outcome instead.
 - Append-only concurrent edits are merged automatically; other conflicts
-  default to inline conflict markers.
+  default to inline conflict markers in the local file only. A push never
+  publishes markers: a path whose local content carries markers, or whose
+  merge against the hub could only produce them, is held back (the hub keeps
+  its content, the base entry stays, the path is counted in `conflicts=N` and
+  named in a note), and it is held back again until the local file is
+  resolved. A hub file that itself carries markers is never merged into, on
+  either side: `pull` leaves the local file byte-identical and `push` skips
+  the path, whatever the strategy says; both report it and keep its base
+  entry. A conflict exits `0`. See the README's "What a push publishes, and
+  conflicts" for the recovery procedure.
 - For an `ownerScoped` directory destination (see
   [docs/machine-setup.md](machine-setup.md) section e), `pull` mirrors
   every file other than this machine's own `<profile>.json` from the
-  remote unconditionally instead of 3-way merging it. A local file left
-  with stale conflict markers by a run is named once per file in that
-  run's `notes`.
+  remote unconditionally instead of 3-way merging it. If the remote copy
+  itself carries conflict markers, the mirror still takes it and reports the
+  path in `conflictFiles`; later runs name it in a stale-marker note. This is
+  the special case of the general markered-remote rule above, which leaves a
+  non-peer local file untouched. A
+  local file left with stale conflict markers by a run is named once per
+  file in that run's `notes`.
 - A `pull` result's JSON/YAML carries a `skippedFiles` array listing
   remote paths that run saw changed but did not write locally, because no
   configured `syncPaths` entry maps them back to a local destination. See
@@ -139,12 +152,23 @@ configured machine's `push`), `pull` (used to record it into base
 snapshots regardless), `push` (used to then delete it from the remote).
 
 A second, narrower variant reached the same outcome through `push` alone:
-`push` rebuilds its own base snapshot after every successful push from a
-fresh read of the entire remote `repositorySubdir` tree
-(`collectRemoteFiles` in `src/memory-sync/push.ts`), unmapped paths
-included. Left unfiltered, that write alone re-contaminated the base
-store on every push, so even a machine that never calls `pull` could
-still delete a peer's unmapped file two pushes later.
+`push` writes its base snapshot after every successful push from a fresh
+read of the remote `repositorySubdir` tree (`collectRemoteFiles` in
+`src/memory-sync/push.ts`), unmapped paths included. Left unfiltered, that
+write alone re-contaminated the base store on every push, so even a machine
+that never calls `pull` could still delete a peer's unmapped file two pushes
+later.
+
+That write is per path, not a replacement of the whole store: a path's base
+entry advances to the hub content only where the local copy equals it, is
+dropped where the path is absent on both sides, and otherwise keeps its
+previous entry (or stays absent). A path the local copy does not match
+(stale, never pulled, held back as a conflict, or markered on the hub) keeps
+its old base, so the next push still sees the true difference instead of
+"local unchanged against base" and does not republish a stale copy over a
+peer's newer version or delete a hub file this machine never pulled. When
+several queued snapshots are replayed in one push, the base chains: after
+each replay the next snapshot merges against what that replay published.
 
 The shipped fix excludes unmapped paths from base snapshots entirely,
 filtered at three call sites, all permanently load-bearing:
@@ -152,7 +176,10 @@ filtered at three call sites, all permanently load-bearing:
 - `pull` (`src/memory-sync/pull.ts`) filters what it writes as the new
   base snapshot after every run.
 - `push` (`src/memory-sync/push.ts`) filters what it writes as the new
-  base snapshot after every successful push too.
+  base snapshot after every successful push too (on top of the per-path
+  advance described above; the owner-scoped filter is deliberately not
+  applied to this write, only to push's read side, so a peer's deletion of
+  its own `ownerScoped` file still propagates).
 - `push` also filters its own base snapshot *read* (and any already-queued
   snapshot's stored `baseFiles`) before the 3-way merge runs, guarding
   against a store restored from an old backup or otherwise edited outside
