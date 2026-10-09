@@ -14,7 +14,7 @@ const {
 const { GitClient } = require("./git-client");
 const { acceptRemoteDeletions, findRemoteDeletionsToAccept } = require("./accept-remote-deletions");
 const { assertNoMassDelete, assertReliableCheckout } = require("./guards");
-const { mergeText } = require("./merge");
+const { hasConflictMarkers, mergeText } = require("./merge");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore, DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("./state-store");
 
@@ -260,6 +260,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // files", not "this checkout came back zeroed", so an emptied finding
     // still throws UnreliableCheckoutError here regardless of the flag.
     const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
+    const runStartTracked = listRunStartTracked(config, gitClient, workingCopy);
     let acceptedDeletions: string[] = [];
     let adoptedBasePaths: string[] = [];
     let preApplySnapshots: string[] = [];
@@ -302,6 +303,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     const mergedFiles: string[] = [];
     const conflictFiles: string[] = [];
     const deletedFiles: string[] = [];
+    const heldBackFiles: string[] = [];
 
     // The base moves forward across the snapshots applied in this run: a
     // queued snapshot is merged against the base captured when it was
@@ -337,13 +339,14 @@ async function performPush(config: PushConfig, options: PushOptions) {
       assertNoMassDelete({
         config,
         baseMap: snapshot.guardBaseFiles,
-        deletedPaths: stagedDeletions.claimed,
+        deletedPaths: netDeletionsAgainstRunStart(stagedDeletions.claimed, runStartTracked),
         unmappedDeletedPaths: stagedDeletions.unclaimed,
         allowMassDelete: options.allowMassDelete
       });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
+      heldBackFiles.push(...result.heldBackFiles);
       deletedFiles.push(...stagedDeletions.claimed);
       // The index as measured, and nothing else, is what gets committed
       // (GitClient.commitStaged). A commit that staged again on its way in
@@ -410,7 +413,13 @@ async function performPush(config: PushConfig, options: PushOptions) {
       filterUnmappedBaseMap(
         config,
         nextBaseAfterPush(
-          applyBaseDelta(stateStore.readBaseSnapshots(), baseDelta),
+          // Paths adopted from the remote's deletions have no local copy and
+          // no base entry after the adoption. A queued snapshot that edited
+          // one of them (replayed under conflictStrategy local-wins) left an
+          // entry for it in the overlay; carried into this write it records
+          // the replayed edit as converged with no local copy behind it, and
+          // the next plain push would delete the edit from the hub.
+          withoutKeys(applyBaseDelta(stateStore.readBaseSnapshots(), baseDelta), adoptedBasePaths),
           currentLocalMap,
           finalRemoteFiles
         )
@@ -439,7 +448,10 @@ async function performPush(config: PushConfig, options: PushOptions) {
         deletedFiles: unique([...deletedFiles, ...acceptedDeletions]),
         snapshots: preApplySnapshots,
         queuedSnapshotId,
-        notes: queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []
+        notes: [
+          ...(queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []),
+          ...heldBackNotes(heldBackFiles)
+        ]
       },
       ownerScopedWarnings
     );
@@ -660,6 +672,7 @@ function previewPush(
     );
 
     const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
+    const runStartTracked = listRunStartTracked(config, gitClient, workingCopy);
     const current = snapshots[snapshots.length - 1];
     const notes: string[] = [];
     let adoptedDeletions: string[] = [];
@@ -712,6 +725,7 @@ function previewPush(
     const mergedFiles: string[] = [];
     const conflictFiles: string[] = [];
     const deletedFiles: string[] = [];
+    const heldBackFiles: string[] = [];
 
     // Same base chaining as the real run, so the preview's plan for the
     // current snapshot matches what the real run will do after the queued
@@ -727,13 +741,14 @@ function previewPush(
       assertNoMassDelete({
         config,
         baseMap: snapshot.guardBaseFiles,
-        deletedPaths: stagedDeletions.claimed,
+        deletedPaths: netDeletionsAgainstRunStart(stagedDeletions.claimed, runStartTracked),
         unmappedDeletedPaths: stagedDeletions.unclaimed,
         allowMassDelete: options.allowMassDelete
       });
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
+      heldBackFiles.push(...result.heldBackFiles);
       deletedFiles.push(...stagedDeletions.claimed);
       // Committed even though nothing here is ever pushed: this working copy
       // is a throwaway under stateDir/tmp/push-preview, and the staged
@@ -765,7 +780,7 @@ function previewPush(
       deletedFiles: unique([...deletedFiles, ...adoptedDeletions]),
       snapshots: [],
       queuedSnapshotId: null,
-      notes
+      notes: [...notes, ...heldBackNotes(heldBackFiles)]
     };
   } catch (error) {
     // A refused plan is a real answer about the plan, not a symptom of an
@@ -808,18 +823,35 @@ function applySnapshotToWorkingCopy(
   const appliedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
+  const heldBackFiles: string[] = [];
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const repositoryPath = toRepositoryRelativePath(config, remoteRelativePath);
     const remoteContent = gitClient.readFile(repoDir, repositoryPath);
+    const localContent = readSnapshotValue(snapshot.localFiles, remoteRelativePath);
     const mergeResult = mergeText({
       base: readSnapshotValue(snapshot.baseFiles, remoteRelativePath),
-      local: readSnapshotValue(snapshot.localFiles, remoteRelativePath),
+      local: localContent,
       remote: remoteContent,
       strategy: config.conflictStrategy
     });
 
     if (mergeResult.status === "unchanged") {
+      continue;
+    }
+
+    // A conflict is resolved by a person in the local file, never on the hub:
+    // a path whose local content already carries conflict markers, or whose
+    // merge could only produce a marker-carrying result, is held back. The hub
+    // keeps its current content for it, the path is reported as a conflict,
+    // and the base entry stays where it was (nextBaseAfterPush keeps the
+    // previous entry for a path whose local copy differs from the hub), so
+    // the same decision is reached again on every later push until the local
+    // file is resolved. A configured wins strategy that resolves the conflict
+    // to marker-free content is a resolution, not a conflict, and goes through.
+    if (mergeResult.conflict || hasConflictMarkers(localContent)) {
+      conflictFiles.push(remoteRelativePath);
+      heldBackFiles.push(remoteRelativePath);
       continue;
     }
 
@@ -851,8 +883,51 @@ function applySnapshotToWorkingCopy(
   return {
     appliedFiles,
     mergedFiles,
-    conflictFiles
+    conflictFiles,
+    heldBackFiles
   };
+}
+
+// One note per path push held back (see applySnapshotToWorkingCopy), so the
+// summary line names the file instead of only counting it.
+function heldBackNotes(paths: string[]): string[] {
+  return unique(paths).map(
+    (remoteRelativePath) =>
+      `not published: ${remoteRelativePath} carries or would produce conflict markers; the hub keeps its ` +
+      `current content. Resolve the local file, then push again`
+  );
+}
+
+// The deletions that count against the mass-delete guard are net of the run:
+// a path the hub did not track when the run started was created by an earlier
+// snapshot of this same run, so a later snapshot removing it again takes
+// nothing away from the hub's tracked corpus. Without this, a create followed
+// by a delete while offline was measured against the base the run started
+// with and refused on every push.
+function netDeletionsAgainstRunStart(claimedDeletions: string[], runStartTracked: Set<string>): string[] {
+  return claimedDeletions.filter((remoteRelativePath) => runStartTracked.has(remoteRelativePath));
+}
+
+// The remote-relative paths the hub's commit tracked when the run started.
+// Read from the commit, not from the working tree: a working copy that does
+// not represent the hub (a wiped checkout) must not shrink the set, or the
+// deletions of that very wipe would be excluded from the guard's count.
+function listRunStartTracked(
+  config: { repositorySubdir: string },
+  gitClient: InstanceType<typeof GitClient>,
+  workingCopy: { repoDir: string; remoteHead: string | null }
+): Set<string> {
+  if (!workingCopy.remoteHead) {
+    return new Set();
+  }
+
+  const prefix = `${config.repositorySubdir}/`;
+  return new Set(
+    gitClient
+      .listTreePaths(workingCopy.repoDir, "HEAD", config.repositorySubdir)
+      .filter((repoRelativePath: string) => repoRelativePath.startsWith(prefix))
+      .map((repoRelativePath: string) => repoRelativePath.slice(prefix.length))
+  );
 }
 
 // Stages the working copy and reads back the deletions the next commit would

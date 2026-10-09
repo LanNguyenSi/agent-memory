@@ -26,6 +26,7 @@ interface Spoke {
   stateDir: string;
   configPath: string;
   root: string;
+  conflictStrategy?: "inline-markers" | "local-wins" | "remote-wins";
 }
 
 function writeSpokeConfig(spoke: Spoke, remoteUrl: string) {
@@ -36,23 +37,28 @@ function writeSpokeConfig(spoke: Spoke, remoteUrl: string) {
     branch: "main",
     repositorySubdir: "shared",
     stateDir: spoke.stateDir,
-    conflictStrategy: "inline-markers",
+    conflictStrategy: spoke.conflictStrategy || "inline-markers",
     syncPaths: [{ source: path.join(spoke.workspace, "notes"), destination: "notes", kind: "directory" }]
   });
 }
 
-function createSpoke(root: string, remoteDir: string, name: string): Spoke {
+function createSpoke(
+  root: string,
+  remoteDir: string,
+  name: string,
+  conflictStrategy?: Spoke["conflictStrategy"]
+): Spoke {
   const workspace = path.join(root, `workspace-${name}`);
   const stateDir = path.join(root, `state-${name}`);
   const configPath = path.join(root, `config-${name}.json`);
   mkdirSync(path.join(workspace, "notes"), { recursive: true });
-  const spoke = { name, workspace, stateDir, configPath, root };
+  const spoke = { name, workspace, stateDir, configPath, root, conflictStrategy };
   writeSpokeConfig(spoke, remoteDir);
   return spoke;
 }
 
-function runMode(spoke: Spoke, mode: "push" | "pull") {
-  const result = runCli(["run", spoke.name, "--config", spoke.configPath, "--mode", mode, "--output", "json"]);
+function runMode(spoke: Spoke, mode: "push" | "pull", extra: string[] = []) {
+  const result = runCli(["run", spoke.name, "--config", spoke.configPath, "--mode", mode, "--output", "json", ...extra]);
   return JSON.parse(result.stdout).runs[0];
 }
 
@@ -129,7 +135,12 @@ test("a hub-only file this spoke never pulled survives two consecutive pushes", 
   assert.equal(readBase(b)["notes/P.md"], undefined);
 });
 
-test("a genuine local edit of F against a newer hub version still goes through the three-way rule", () => {
+// The local edit and the hub's newer version are not append-compatible (the
+// hub's "f v2 from a" does not extend the base "f v1"), so the three-way rule
+// reaches a conflict. A conflict is not published: the hub keeps the peer's
+// version, the local edit stays local, and the base entry stays at the older
+// version.
+test("a genuine local edit of F against a newer hub version is held back and never overwrites the peer", () => {
   const root = createSandbox("push-base-negative-control");
   const remoteDir = initBareRemote(root);
   const { b } = seedDivergedHub(root, remoteDir);
@@ -138,30 +149,43 @@ test("a genuine local edit of F against a newer hub version still goes through t
   writeText(notePath(b, "F.md"), "f v1\nedit from b\n");
   const result = runMode(b, "push");
   assert.equal(result.status, "applied");
+  assert.deepEqual(result.conflictFiles, ["notes/F.md"]);
+  assert.ok(result.notes.some((note: string) => note.includes("notes/F.md")), JSON.stringify(result.notes));
 
-  const hubF = readHub(root, remoteDir, "notes/F.md");
-  assert.notEqual(hubF, null);
-  assert.notEqual(hubF, "f v1\nedit from b\n", "the peer's version must not be silently overwritten");
-  assert.notEqual(hubF, "f v2 from a\n", "B's edit must not be silently dropped");
-  assert.ok((hubF as string).includes("f v2 from a"), `peer content missing from hub F: ${hubF}`);
-  assert.ok((hubF as string).includes("edit from b"), `local edit missing from hub F: ${hubF}`);
+  assert.equal(readHub(root, remoteDir, "notes/F.md"), "f v2 from a\n", "the peer's version must stay on the hub");
+  assert.equal(readText(notePath(b, "F.md")), "f v1\nedit from b\n", "the local edit stays local");
+  assert.equal(readBase(b)["notes/F.md"], "f v1\n");
 
-  // A second push with no pull in between must still keep both contributions
-  // on the hub. (Whether a repeated push of an unresolved conflict leaves the
-  // markers byte-identical is a separate matter, pinned by the todo test
-  // below.)
-  assert.equal(runMode(b, "push").status, "applied");
-  const hubAgain = readHub(root, remoteDir, "notes/F.md") as string;
-  assert.ok(hubAgain.includes("f v2 from a"), `peer content missing after the second push: ${hubAgain}`);
-  assert.ok(hubAgain.includes("edit from b"), `local edit missing after the second push: ${hubAgain}`);
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  const again = runMode(b, "push");
+  assert.equal(again.status, "applied");
+  assert.deepEqual(again.conflictFiles, ["notes/F.md"]);
+  assert.equal(readHub(root, remoteDir, "notes/F.md"), "f v2 from a\n");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "the second push must change nothing");
 });
 
-// Known gap, not part of the base-advance rule: the unresolved conflict
-// markers are published as the hub content, the base stays at the older
-// version, and a repeated push merges the local edit against the markers
-// again, nesting a second marker block. Marked todo until the marker handling
-// is addressed.
-test("a repeated push of an unresolved conflict leaves the hub markers byte-identical", { todo: true }, () => {
+// An append-compatible pair of edits is still merged by the three-way rule
+// and published, so the hold-back is limited to real conflicts.
+test("an append-compatible local edit against a newer hub version is still merged and published", () => {
+  const root = createSandbox("push-base-append-merge");
+  const remoteDir = initBareRemote(root);
+  const a = createSpoke(root, remoteDir, "spoke-a");
+  const b = createSpoke(root, remoteDir, "spoke-b");
+  writeText(notePath(a, "F.md"), "f v1\n");
+  assert.equal(runMode(a, "push").status, "applied");
+  runMode(b, "pull");
+  writeText(notePath(a, "F.md"), "f v1\nfrom a\n");
+  assert.equal(runMode(a, "push").status, "applied");
+
+  writeText(notePath(b, "F.md"), "f v1\nfrom b\n");
+  const result = runMode(b, "push");
+  assert.deepEqual(result.conflictFiles, []);
+  assert.deepEqual(result.mergedFiles, ["notes/F.md"]);
+  const hubF = readHub(root, remoteDir, "notes/F.md") as string;
+  assert.ok(hubF.includes("from a") && hubF.includes("from b"), hubF);
+});
+
+test("a second push of an unresolved conflicting edit leaves the hub byte-identical and adds no commit", () => {
   const root = createSandbox("push-base-marker-idempotent");
   const remoteDir = initBareRemote(root);
   const { b } = seedDivergedHub(root, remoteDir);
@@ -308,4 +332,164 @@ test("a dry-run preview after an offline create and delete plans the deletion of
   assert.equal(preview.status, "dry-run");
   assert.deepEqual(preview.deletedFiles, ["notes/P.md"]);
   assert.equal(readHub(root, remoteDir, "notes/P.md"), null, "a dry-run must not publish anything");
+});
+
+// The mass-delete guard measures net deletions against the hub as the run
+// found it. A file created by one queued snapshot and removed by a later one
+// is not a deletion from the hub's tracked corpus.
+test("files created and deleted again while offline do not trip the mass-delete guard in a small destination", () => {
+  const root = createSandbox("push-queue-guard-net-deletions");
+  const remoteDir = initBareRemote(root);
+  const s = createSpoke(root, remoteDir, "spoke-q");
+  for (let index = 0; index < 19; index += 1) {
+    writeText(notePath(s, `T${index}.md`), `t${index}\n`);
+  }
+  assert.equal(runMode(s, "push").status, "applied");
+
+  goOffline(s);
+  writeText(notePath(s, "P1.md"), "p1\n");
+  writeText(notePath(s, "P2.md"), "p2\n");
+  assert.equal(runMode(s, "push").status, "queued");
+  rmSync(notePath(s, "P1.md"));
+  rmSync(notePath(s, "P2.md"));
+
+  goOnline(s, remoteDir);
+  const first = runMode(s, "push");
+  assert.equal(first.status, "applied");
+  assert.equal(readHub(root, remoteDir, "notes/P1.md"), null);
+  assert.equal(readHub(root, remoteDir, "notes/P2.md"), null);
+
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  assert.equal(runMode(s, "push").status, "applied");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "the second push must change nothing");
+
+  runMode(s, "pull");
+  assert.equal(existsSync(notePath(s, "P1.md")), false);
+  assert.equal(existsSync(notePath(s, "P2.md")), false);
+  assert.equal(readText(notePath(s, "T0.md")), "t0\n");
+});
+
+test("a queued snapshot that deletes a file followed by one that recreates it ends at the recreated content", () => {
+  const root = createSandbox("push-queue-delete-then-recreate");
+  const remoteDir = initBareRemote(root);
+  const s = createSpoke(root, remoteDir, "spoke-q");
+  writeText(notePath(s, "G.md"), "g0\n");
+  writeText(notePath(s, "D.md"), "d0\n");
+  assert.equal(runMode(s, "push").status, "applied");
+
+  goOffline(s);
+  writeText(notePath(s, "G.md"), "g1\n");
+  rmSync(notePath(s, "D.md"));
+  assert.equal(runMode(s, "push").status, "queued");
+  writeText(notePath(s, "G.md"), "g2\n");
+  writeText(notePath(s, "P.md"), "p2\n");
+  writeText(notePath(s, "D.md"), "d2\n");
+  assert.equal(runMode(s, "push").status, "queued");
+  writeText(notePath(s, "G.md"), "g0\n");
+  rmSync(notePath(s, "P.md"));
+
+  goOnline(s, remoteDir);
+  const pick = (result: any) => ({
+    applied: result.appliedFiles,
+    deleted: result.deletedFiles,
+    conflicts: result.conflictFiles,
+    merged: result.mergedFiles
+  });
+  const preview = runMode(s, "push", ["--dry-run"]);
+  const real = runMode(s, "push");
+  assert.equal(real.status, "applied");
+  assert.deepEqual(pick(preview), pick(real), "the dry-run plan matches the real run");
+  assert.equal(readHub(root, remoteDir, "notes/G.md"), "g0\n");
+  assert.equal(readHub(root, remoteDir, "notes/P.md"), null);
+  assert.equal(readHub(root, remoteDir, "notes/D.md"), "d2\n");
+  assert.deepEqual(readBase(s), { "notes/G.md": "g0\n", "notes/D.md": "d2\n" });
+
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  assert.equal(runMode(s, "push").status, "applied");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "the second push must change nothing");
+  runMode(s, "pull");
+  assert.equal(readText(notePath(s, "G.md")), "g0\n");
+  assert.equal(existsSync(notePath(s, "P.md")), false);
+  assert.equal(readText(notePath(s, "D.md")), "d2\n");
+});
+
+test("a pull between enqueue and replay moves another path's base and the replay keeps it", () => {
+  const root = createSandbox("push-queue-pull-between");
+  const remoteDir = initBareRemote(root);
+  const s = createSpoke(root, remoteDir, "spoke-q");
+  const peer = createSpoke(root, remoteDir, "spoke-peer");
+  writeText(notePath(s, "G.md"), "g0\n");
+  writeText(notePath(s, "Q.md"), "q0\n");
+  assert.equal(runMode(s, "push").status, "applied");
+  runMode(peer, "pull");
+
+  goOffline(s);
+  writeText(notePath(s, "G.md"), "g1\n");
+  writeText(notePath(s, "P.md"), "p1\n");
+  assert.equal(runMode(s, "push").status, "queued");
+
+  writeText(notePath(peer, "Q.md"), "q1 from peer\n");
+  assert.equal(runMode(peer, "push").status, "applied");
+
+  goOnline(s, remoteDir);
+  runMode(s, "pull");
+  assert.equal(readText(notePath(s, "Q.md")), "q1 from peer\n");
+
+  assert.equal(runMode(s, "push").status, "applied");
+  assert.equal(readHub(root, remoteDir, "notes/G.md"), "g1\n");
+  assert.equal(readHub(root, remoteDir, "notes/P.md"), "p1\n");
+  assert.equal(readHub(root, remoteDir, "notes/Q.md"), "q1 from peer\n");
+  const base = readBase(s);
+  assert.equal(base["notes/Q.md"], "q1 from peer\n", "the pulled base entry survives the replay");
+  assert.equal(base["notes/G.md"], "g1\n");
+  assert.equal(base["notes/P.md"], "p1\n");
+
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  assert.equal(runMode(s, "push").status, "applied");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "the second push must change nothing");
+  runMode(s, "pull");
+  assert.equal(readText(notePath(s, "G.md")), "g1\n");
+  assert.equal(readText(notePath(s, "Q.md")), "q1 from peer\n");
+});
+
+// Under local-wins a replayed offline edit of a path the peer has since
+// deleted is republished. An adopted deletion (--accept-mass-delete) removes
+// the local copy and the base entry; the final base write must not record the
+// replayed edit for that path, or the next plain push reads "no local copy,
+// base equals hub" and deletes the republished edit from the hub. The edit is
+// kept: it was made after the deletion's base and the strategy says local wins.
+test("under local-wins a replayed edit of an adopted-deleted path survives the next plain push", () => {
+  const root = createSandbox("push-adopted-replay-local-wins");
+  const remoteDir = initBareRemote(root);
+  const s = createSpoke(root, remoteDir, "spoke-q", "local-wins");
+  const peer = createSpoke(root, remoteDir, "spoke-peer");
+  for (let index = 0; index < 10; index += 1) {
+    writeText(notePath(s, `T${index}.md`), `t${index}\n`);
+  }
+  assert.equal(runMode(s, "push").status, "applied");
+  runMode(peer, "pull");
+
+  goOffline(s);
+  writeText(notePath(s, "T0.md"), "t0 edited offline\n");
+  assert.equal(runMode(s, "push").status, "queued");
+
+  for (let index = 0; index < 5; index += 1) {
+    rmSync(notePath(peer, `T${index}.md`));
+  }
+  assert.equal(runMode(peer, "push", ["--allow-mass-delete"]).status, "applied");
+
+  goOnline(s, remoteDir);
+  assert.equal(runMode(s, "push", ["--accept-mass-delete"]).status, "applied");
+  assert.equal(readHub(root, remoteDir, "notes/T0.md"), "t0 edited offline\n");
+  assert.equal(readHub(root, remoteDir, "notes/T1.md"), null);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(readBase(s), "notes/T0.md"),
+    false,
+    "an adopted path has no base entry after the run"
+  );
+
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  assert.equal(runMode(s, "push").status, "applied");
+  assert.equal(readHub(root, remoteDir, "notes/T0.md"), "t0 edited offline\n", "the replayed edit stays on the hub");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "the plain push must change nothing");
 });

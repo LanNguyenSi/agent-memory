@@ -221,7 +221,7 @@ test("watch tick does not delete a peer file that was pushed to the remote but n
   assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "seed\nlocal edit\n");
 });
 
-test("watch tick applies inline conflict markers instead of blindly overwriting a concurrently-changed remote file", async () => {
+test("watch tick holds back a divergent file instead of overwriting the remote or publishing conflict markers", async () => {
   const root = createSandbox("watch-mirror-blind-overwrite");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -245,13 +245,11 @@ test("watch tick applies inline conflict markers instead of blindly overwriting 
   });
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
 
+  // The peer's version stays on the hub untouched and the local edit stays
+  // local: neither a blind overwrite nor a marker-carrying merge is published.
   const inspection = cloneRemote(remoteDir, root, "inspect-conflict");
-  const content = readText(path.join(inspection, "shared", "MEMORY.md"));
-  assert.match(content, /<<<<<<< local/);
-  assert.match(content, /local replaced/);
-  assert.match(content, /=======/);
-  assert.match(content, /remote replaced/);
-  assert.match(content, />>>>>>> remote/);
+  assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "remote replaced\n");
+  assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "local replaced\n");
 });
 
 test("watch tick still deletes locally-removed files and pushes local edits, without touching an unrelated peer file", async () => {

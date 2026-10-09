@@ -10,10 +10,11 @@
 // (collectLocalSyncFiles) as its "local" snapshot; since nothing else
 // changed the remote in between, push's own 3-way merge sees
 // `remote === base` and takes the "local wins" fast path
-// (src/memory-sync/merge.ts) — which, before this fix, returned
+// (src/memory-sync/merge.ts), which before the honesty fix returned
 // `conflict: false` unconditionally, so the marker-carrying content was
 // pushed to the remote AND committed to the local base snapshot while the
-// run reported a clean 0-conflict outcome. Two rapid remote pushes plus a
+// run reported a clean 0-conflict outcome. Push now reports the conflict and
+// also holds the path back, so the markers never reach the remote. Two rapid remote pushes plus a
 // concurrent local edit produced exactly this on the mac mini on
 // 2026-08-03 (see 00-goal.md's "Reproduktion" section).
 //
@@ -56,7 +57,7 @@ function createConfig(workspaceRoot: string, remoteDir: string, stateDir: string
 
 test(
   "a push immediately following a pull that produced local conflict markers reports the file as a " +
-    "conflict, not silently as a clean local win",
+    "conflict and leaves the hub content untouched",
   () => {
     const root = createSandbox("push-conflict-marker-honesty");
     const remoteDir = initBareRemote(root);
@@ -107,29 +108,22 @@ test(
     const pushResult = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
     const pushPayload = JSON.parse(pushResult.stdout).runs[0];
 
-    assert.ok(
-      pushPayload.appliedFiles.includes("MEMORY.md"),
-      `expected MEMORY.md among push's appliedFiles: ${JSON.stringify(pushPayload.appliedFiles)}`
-    );
+    // The marker-carrying local file is a conflict and stays local: push
+    // reports it as such and does not publish it, so the hub keeps the
+    // remote's version byte for byte.
     assert.ok(
       pushPayload.conflictFiles.includes("MEMORY.md"),
       "push must report the marker-carrying file as a conflict, not silently as a clean local win " +
-        `(conflicts=0 hides that a real conflict landed on the remote); got conflictFiles: ${JSON.stringify(
-          pushPayload.conflictFiles
-        )}`
+        `(conflicts=0 hides an unresolved conflict); got conflictFiles: ${JSON.stringify(pushPayload.conflictFiles)}`
+    );
+    assert.equal(
+      pushPayload.appliedFiles.includes("MEMORY.md"),
+      false,
+      `a marker-carrying file must not be published: ${JSON.stringify(pushPayload.appliedFiles)}`
     );
 
-    // The payload itself is intentionally not rewritten by this fix — only
-    // the conflict flag becomes honest. The marker content still reaches
-    // the remote (identical to what a genuine single-pass conflict already
-    // does, and already covered by watch-mirror-delete.test.ts's pinned
-    // negative control) — but now correctly flagged as a conflict instead
-    // of hidden behind conflicts=0.
     const inspection = cloneRemote(remoteDir, root, "inspect-after-push");
-    const remoteContent = readText(path.join(inspection, "shared", "MEMORY.md"));
-    assert.match(remoteContent, /<<<<<<< local/);
-    assert.match(remoteContent, /local v2/);
-    assert.match(remoteContent, /remote v2/);
-    assert.match(remoteContent, />>>>>>> remote/);
+    assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "remote v2\n");
+    assert.match(readText(path.join(workspaceRoot, "MEMORY.md")), /<<<<<<< local/);
   }
 );
