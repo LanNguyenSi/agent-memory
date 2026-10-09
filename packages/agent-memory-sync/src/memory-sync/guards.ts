@@ -1,7 +1,6 @@
 // Deletion guards for the pull and push paths.
 //
-// Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
-// run .ai/runs/2026-09-11-memory-sync-wipe). A periodic `run --mode sync`
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c). A periodic `run --mode sync`
 // tick prepared a working copy under stateDir/tmp/pull while a concurrent
 // `watch` tick called StateStore.clearTemp(), which removes the WHOLE
 // stateDir/tmp tree. git had already reported a successful fetch+checkout,
@@ -51,7 +50,7 @@ interface MassDeleteGuardConfig {
 //
 // The measured corpus sizes and deletion counts these numbers were chosen
 // against belong to the incident record, not to shipped source: see the
-// CHANGELOG entry for this change and the pandora run it points to.
+// CHANGELOG entry for this change.
 const DEFAULT_MASS_DELETE_GUARD: MassDeleteGuardConfig = {
   maxRatio: 0.1,
   maxFiles: 20

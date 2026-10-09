@@ -1,6 +1,5 @@
 // `restore <profile> <destination>` from a hub commit or from a local
-// pre-apply snapshot (AC-007 of the 2026-09-11 wipe, agent-tasks cda5b12c,
-// pandora run .ai/runs/2026-09-11-memory-sync-wipe).
+// pre-apply snapshot.
 //
 // The older form, `restore <sha>` with --path/--yes, writes single files or
 // a whole snapshot tree and is covered in watch-restore.test.ts. This file
@@ -72,7 +71,7 @@ function remoteLogFileCount(remoteDir: string, root: string, label: string): num
 // AND the base snapshot in a state where the very next push republishes
 // them, which means the base has to move to the CURRENT remote tree, not to
 // the restored one.
-test("restore --from-commit brings a destination back and the next push republishes it (AC-007)", () => {
+test("restore --from-commit brings a destination back and the next push republishes it", () => {
   const root = createSandbox("restore-from-commit");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -142,7 +141,7 @@ test("restore --from-commit brings a destination back and the next push republis
   assert.deepEqual(fs.readFileSync(path.join(inspection, "shared", seeded[0])), originalBytes);
 });
 
-test("restore --from-snapshot reproduces the tree the accepting run copied (AC-007)", () => {
+test("restore --from-snapshot reproduces the tree the accepting run copied", () => {
   const root = createSandbox("restore-from-snapshot");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -195,7 +194,7 @@ test("restore --from-snapshot reproduces the tree the accepting run copied (AC-0
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-after-snapshot-restore"), 50);
 });
 
-test("restore --from-snapshot takes an explicit generation id (AC-007)", () => {
+test("restore --from-snapshot takes an explicit generation id", () => {
   const root = createSandbox("restore-snapshot-id");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -233,7 +232,7 @@ test("restore --from-snapshot takes an explicit generation id (AC-007)", () => {
   assert.equal(readText(path.join(workspaceRoot, seeded[1])), "entry 1\n");
 });
 
-test("restore replaces the destination rather than merging into it (AC-007)", () => {
+test("restore replaces the destination rather than merging into it", () => {
   const root = createSandbox("restore-exact");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -328,10 +327,10 @@ test("restore rejects both sources at once and a missing destination", () => {
   assert.match(noDestination.stderr, /destination/);
 });
 
-// R3 low: the destination forms removed files without --yes while
+// The destination forms removed files without --yes while
 // `restore <sha>` required it. Both forms replace a whole tree, so both ask
 // for the same confirmation; --dry-run previews without it.
-test("restore --from-commit/--from-snapshot require --yes, except for a dry run (AC-007)", () => {
+test("restore --from-commit/--from-snapshot require --yes, except for a dry run", () => {
   const root = createSandbox("restore-yes-gate");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -386,10 +385,10 @@ test("restore --from-commit/--from-snapshot require --yes, except for a dry run 
   assert.equal(fs.existsSync(snapshotDir), false);
 });
 
-// R3 low: `restore ... --dry-run` left stateDir/tmp/restore behind. The
+// `restore ... --dry-run` left stateDir/tmp/restore behind. The
 // working copy is a throwaway and is removed on every exit, including the
 // preview and a failed resolution.
-test("restore --from-commit removes its working copy after a dry run and after a failure (AC-007)", () => {
+test("restore --from-commit removes its working copy after a dry run and after a failure", () => {
   const root = createSandbox("restore-tmp-cleanup");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -421,10 +420,10 @@ test("restore --from-commit removes its working copy after a dry run and after a
   assert.equal(fs.existsSync(restoreTmp), false, "the failed restore left its working copy behind");
 });
 
-// R3 low: exit 5 was overloaded. A refused push plan and a restore whose
+// Exit 5 was overloaded. A refused push plan and a restore whose
 // source does not exist are different decisions, and the exit-code table sent
 // the operator to --allow-mass-delete for the second. Not-found is 10.
-test("restore exits 10 when the named source has nothing to restore (AC-007)", () => {
+test("restore exits 10 when the named source has nothing to restore", () => {
   const root = createSandbox("restore-not-found");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -490,7 +489,7 @@ test("restore exits 10 when the named source has nothing to restore (AC-007)", (
 // next sync then published that deletion, one file being below every
 // threshold. The older `restore <sha> --yes` form filtered the same list and
 // silently skipped the file instead of restoring it.
-test("restore --from-commit keeps and restores a path git would C-quote (AC-007)", () => {
+test("restore --from-commit keeps and restores a path git would C-quote", () => {
   const root = createSandbox("restore-quoted-paths");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");

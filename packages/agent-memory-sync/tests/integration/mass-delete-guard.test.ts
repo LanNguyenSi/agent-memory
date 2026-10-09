@@ -1,5 +1,5 @@
-// Red-test-first coverage for the 2026-09-11 memory-corpus wipe
-// (agent-tasks cda5b12c, pandora run .ai/runs/2026-09-11-memory-sync-wipe).
+// Red-test-first coverage for the memory-corpus wipe
+// (agent-tasks cda5b12c).
 //
 // Measured incident sequence on the mini, reproduced below with a local
 // bare-repo fixture and a stub git binary:
@@ -22,8 +22,7 @@
 //      (bare repo commit c6be19d). The Linux peer mirrored the deletion one
 //      tick later.
 //
-// Each test below names the criterion it pins (AC-001 to AC-003 in the run's
-// 00-goal.md). The two stub git binaries are the seam: git reports success,
+// Each test below names the behaviour it pins. The two stub git binaries are the seam: git reports success,
 // but the working copy it leaves behind is empty (the tmp-wipe race), or one
 // specific subcommand fails inside the PULL working copy only (the
 // generic-git-failure half). Both are plain POSIX shell scripts wrapping the
@@ -150,11 +149,11 @@ function writeStubGitFailingInPullWorkingCopy(root: string, subcommand: string, 
   return stubPath;
 }
 
-// AC-001 (a): the pull half of the incident. Remote at a full tree, base
+// The pull half of the incident. Remote at a full tree, base
 // snapshots present and equal to local, but the working copy the pull reads
 // comes back empty. Pre-fix this deleted every local file; the fix must
 // delete nothing and report the anomaly instead.
-test("pull: a working copy that comes back empty never deletes local files (AC-001)", () => {
+test("pull: a working copy that comes back empty never deletes local files", () => {
   const root = createSandbox("wipe-repro-pull");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -197,12 +196,12 @@ test("pull: a working copy that comes back empty never deletes local files (AC-0
   assert.ok(fs.readdirSync(baseLogsDir).length > 0);
 });
 
-// AC-001 (b): the push half. Local full, base full, but the push's own
+// The push half. Local full, base full, but the push's own
 // working copy comes back empty, so every path reads as "deleted on the
 // remote" and the 3-way merge resolves to a deletion commit. Pre-fix this
 // published a mass deletion; the fix must refuse before anything is
 // committed or pushed.
-test("push: a working copy that comes back empty never publishes mass deletions (AC-001)", () => {
+test("push: a working copy that comes back empty never publishes mass deletions", () => {
   const root = createSandbox("wipe-repro-push");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -236,11 +235,11 @@ test("push: a working copy that comes back empty never publishes mass deletions 
   assert.equal(fileExists(path.join(inspection, "shared", "MEMORY.md")), true);
 });
 
-// AC-001 (c): run.ts's executeMode must not answer a generic git failure
+// run.ts's executeMode must not answer a generic git failure
 // with a push-only retry. Pre-fix ANY error carrying exitCode 4 took that
 // branch, including GitClient.run's generic "git command failed" CliError,
 // which is how the incident's push ran at all.
-test("sync: a generic git failure in the pull phase does not fall back to a push-only retry (AC-001)", () => {
+test("sync: a generic git failure in the pull phase does not fall back to a push-only retry", () => {
   const root = createSandbox("wipe-repro-exit4");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -280,11 +279,11 @@ test("sync: a generic git failure in the pull phase does not fall back to a push
   );
 });
 
-// AC-001 (c), second half: the "remote unavailable during pull" diagnostic
+// The "remote unavailable during pull" diagnostic
 // was written through writeInfo, which is silent unless --verbose is set.
 // The launchd/systemd jobs run without --verbose, so the one line that
 // explains a degraded sync tick was invisible exactly where it mattered.
-test("sync: the remote-unavailable-during-pull diagnostic is written without --verbose (AC-001)", () => {
+test("sync: the remote-unavailable-during-pull diagnostic is written without --verbose", () => {
   const root = createSandbox("wipe-repro-diagnostic");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -315,10 +314,10 @@ test("sync: the remote-unavailable-during-pull diagnostic is written without --v
   assert.match((payload.runs[0].notes || []).join(" "), /remote unavailable during pull/);
 });
 
-// AC-002: a local file with no base snapshot is local-only. It is a push
+// A local file with no base snapshot is local-only. It is a push
 // candidate, never a pull deletion, and the run reports how many files that
 // rule protected.
-test("pull: a local file with no base snapshot is kept and counted as protected (AC-002)", () => {
+test("pull: a local file with no base snapshot is kept and counted as protected", () => {
   const root = createSandbox("protected-missing-base");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -342,10 +341,10 @@ test("pull: a local file with no base snapshot is kept and counted as protected 
   assert.equal(readText(path.join(workspaceRoot, "logs", "local-only.md")), "local only\n");
 });
 
-// AC-002, second half: the same rule when the base snapshot directory for a
+// The same rule when the base snapshot directory for a
 // destination is missing entirely (the state the mini was left in after the
 // incident's replaceBaseSnapshots wrote the empty tree).
-test("pull: a missing base directory protects every local file under it (AC-002)", () => {
+test("pull: a missing base directory protects every local file under it", () => {
   const root = createSandbox("protected-missing-base-dir");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -382,9 +381,9 @@ test("pull: a missing base directory protects every local file under it (AC-002)
   }
 });
 
-// AC-003, absolute rule: more than 20 deleted files is refused even when the
+// Absolute rule: more than 20 deleted files is refused even when the
 // proportion is small (21 of 250 is 8.4 percent, under the 10 percent ratio).
-test("push: a plan deleting more than 20 files is refused (AC-003)", () => {
+test("push: a plan deleting more than 20 files is refused", () => {
   const root = createSandbox("mass-delete-absolute");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -410,9 +409,9 @@ test("push: a plan deleting more than 20 files is refused (AC-003)", () => {
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-absolute"), 250);
 });
 
-// AC-003, proportional rule: 3 of 12 is 25 percent, over the 10 percent
+// Proportional rule: 3 of 12 is 25 percent, over the 10 percent
 // threshold, while staying well under the absolute limit of 20.
-test("push: a plan deleting more than 10 percent of a destination is refused (AC-003)", () => {
+test("push: a plan deleting more than 10 percent of a destination is refused", () => {
   const root = createSandbox("mass-delete-ratio");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -439,8 +438,8 @@ test("push: a plan deleting more than 10 percent of a destination is refused (AC
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-ratio"), 12);
 });
 
-// AC-003, the documented escape hatch.
-test("push: --allow-mass-delete applies a refused plan (AC-003)", () => {
+// The documented escape hatch.
+test("push: --allow-mass-delete applies a refused plan", () => {
   const root = createSandbox("mass-delete-flag");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -474,10 +473,10 @@ test("push: --allow-mass-delete applies a refused plan (AC-003)", () => {
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-flagged"), 9);
 });
 
-// AC-003, thresholds configurable per profile. 3 of 40 passes both defaults
+// Thresholds configurable per profile. 3 of 40 passes both defaults
 // (3 is under 20, and 7.5 percent is under 10 percent), so a refusal here can
 // only come from the profile's own massDeleteGuard.
-test("push: massDeleteGuard thresholds are read from the profile (AC-003)", () => {
+test("push: massDeleteGuard thresholds are read from the profile", () => {
   const root = createSandbox("mass-delete-config");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -510,10 +509,10 @@ test("push: massDeleteGuard thresholds are read from the profile (AC-003)", () =
 // Negative control for the proportional rule: a single deleted file is never
 // refused proportionally, however small the destination is. Deleting one of
 // five files is 20 percent, over the ratio, and must still go through. This
-// is the "genuine gradual deletion below the thresholds" AC-003's negative
+// is the "genuine gradual deletion below the thresholds" negative
 // space protects, and it is what keeps ordinary single-file housekeeping
 // (and watch-mirror-delete.test.ts's own negative control) working.
-test("push: a single-file deletion is never refused by the proportional rule (AC-003)", () => {
+test("push: a single-file deletion is never refused by the proportional rule", () => {
   const root = createSandbox("mass-delete-single");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -532,8 +531,8 @@ test("push: a single-file deletion is never refused by the proportional rule (AC
 
   assert.equal(payload.runs[0].status, "applied");
   assert.deepEqual(payload.runs[0].deletedFiles, ["logs/note-000.md"]);
-  // A removed path is reported as a deletion, not as an applied file (R1
-  // medium): a mass deletion used to arrive as status=applied with the
+  // A removed path is reported as a deletion, not as an applied file:
+  // a mass deletion used to arrive as status=applied with the
   // deleted paths listed under appliedFiles and deletedFiles empty, which
   // reads as a successful sync of exactly the files that were destroyed.
   assert.equal(
@@ -544,11 +543,11 @@ test("push: a single-file deletion is never refused by the proportional rule (AC
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-single"), 4);
 });
 
-// AC-003, watcher half: the snapshot push obeys the same guard, logs the
+// The snapshot push obeys the same guard, logs the
 // refusal, and the watch loop survives it. The second tick (no deletions
 // left in the plan) still pushes, which is the evidence that the loop kept
 // watching rather than shutting down on the refusal.
-test("watch: a refused mass delete is logged and the watcher keeps watching (AC-003)", async () => {
+test("watch: a refused mass delete is logged and the watcher keeps watching", async () => {
   const root = createSandbox("mass-delete-watch");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -641,7 +640,7 @@ test("watch: a refused mass delete is logged and the watcher keeps watching (AC-
 // PARTIALLY populated working tree behind: the real checkout runs first,
 // then every non-.git file except `keepRepoRelativePath` is removed.
 //
-// R1 critical (D-006): this is the same race writeStubGitWipingWorkTree
+// This is the same race writeStubGitWipingWorkTree
 // above models, one file short of total. The original guards saw nothing
 // wrong with it. The checkout check fired only on a destination holding
 // EXACTLY zero files, and the deletion plan built from such a tree reports
@@ -677,7 +676,7 @@ function writeStubGitLeavingOneFile(root: string, keepRepoRelativePath: string, 
 // git behaves normally until the moment the push stages its working copy,
 // and empties the tree immediately BEFORE that `git add -A` runs.
 //
-// This is the seam for the other half of D-006: everything the push reads
+// This is the seam for the other half of the push-side guard: everything the push reads
 // (the remote tree it compares against, the merge plan it builds) is read
 // before any staging, so both the checkout check and a plan-derived deletion
 // count see a perfectly healthy run. Only the index knows what the commit
@@ -705,8 +704,8 @@ function writeStubGitWipingWorkTreeOnStage(root: string): string {
 // git reports success for every subcommand, but `checkout` leaves every
 // checked-out file truncated to zero bytes in place: the real checkout runs
 // first, then every non-.git FILE (directories and .git untouched) is
-// overwritten with nothing. This is the D-013 follow-up shape (agent-tasks
-// 56e20494, review R2 of cda5b12c, head 0bf5eb0): unlike
+// overwritten with nothing. This is the follow-up shape (agent-tasks
+// 56e20494, follow-up review of cda5b12c): unlike
 // writeStubGitWipingWorkTree above, every base-tracked path is still
 // PRESENT on disk, so the presence-only half of findUnreliableCheckout sees
 // nothing wrong; only the emptied-content check added for this task does.
@@ -755,13 +754,13 @@ function preparePartialWipe(label: string, count: number) {
   return { root, remoteDir, workspaceRoot, configPath, stubConfigPath, seeded };
 }
 
-// AC-001/AC-003 (D-006), the reviewer's critical shape, at both corpus sizes
+// The reviewer's critical shape, at both corpus sizes
 // the run's evidence names. Pre-fix: rc 0, the remote tree reduced to a
 // single file, the payload reporting a successful apply with an empty
 // deletedFiles list.
 for (const count of [50, 400]) {
   for (const mode of ["push", "sync"]) {
-    test(`${mode}: a working copy holding 1 of ${count} files never publishes the loss (AC-001, AC-003)`, () => {
+    test(`${mode}: a working copy holding 1 of ${count} files never publishes the loss`, () => {
       const scenario = preparePartialWipe(`${mode}-${count}`, count);
 
       // One genuine local edit, so the run has real work to do and cannot
@@ -796,12 +795,12 @@ for (const count of [50, 400]) {
   }
 }
 
-// D-004/D-008: --allow-mass-delete is the operator's answer to "yes, delete
+// --allow-mass-delete is the operator's answer to "yes, delete
 // these files". It is not an answer to "the working copy this run fetched is
 // not the remote", and it used to bypass that check too - on a wiped working
 // copy, the one flag an operator would reach for after a refusal was the one
 // that published the wipe.
-test("push: --allow-mass-delete does not bypass the unreliable-checkout refusal (AC-003)", () => {
+test("push: --allow-mass-delete does not bypass the unreliable-checkout refusal", () => {
   const root = createSandbox("mass-delete-flag-checkout");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -831,12 +830,12 @@ test("push: --allow-mass-delete does not bypass the unreliable-checkout refusal 
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-flag-checkout"), 8);
 });
 
-// D-006, the other half: the guard's numerator must be the deletions the
+// The other half: the guard's numerator must be the deletions the
 // commit carries, not the deletions the merge plan intended. Here the
 // working copy is healthy for every read the push performs and is emptied
 // only at staging time, so the checkout check and any plan-derived count
 // both see a clean run.
-test("push: a working copy emptied between the merge and the commit is refused (AC-003)", () => {
+test("push: a working copy emptied between the merge and the commit is refused", () => {
   const root = createSandbox("staged-deletion-gate");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -866,12 +865,12 @@ test("push: a working copy emptied between the merge and the commit is refused (
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-staged-gate"), 30);
 });
 
-// AC-002 through the mode the periodic job actually runs. The AC-002 tests
+// The base-less local-only rule through the mode the periodic job actually runs. The tests
 // above drive `--mode pull` directly, so run.ts's own merge of pull's
 // protectedFiles into the combined sync result was unpinned: dropping it
 // left every one of them green while real `--mode sync` output lost its
 // protected= count entirely.
-test("sync: a protected local file is counted in both the JSON and the text summary (AC-002)", () => {
+test("sync: a protected local file is counted in both the JSON and the text summary", () => {
   const root = createSandbox("protected-sync-mode");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -904,12 +903,12 @@ test("sync: a protected local file is counted in both the JSON and the text summ
   assert.match(textResult.stdout, /protected=1/);
 });
 
-// RM8 (R1 low): removing assertNoMassDelete from previewPush left the whole
+// Removing assertNoMassDelete from previewPush left the whole
 // suite green, because no test drove an over-threshold plan through
 // --dry-run. --dry-run is exactly how an operator inspects a plan before
 // running it, so a dry-run that previews a plan the real run would refuse
 // is worse than useless.
-test("push --dry-run: an over-threshold plan is refused rather than previewed (AC-003)", () => {
+test("push --dry-run: an over-threshold plan is refused rather than previewed", () => {
   const root = createSandbox("mass-delete-dry-run");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -935,17 +934,17 @@ test("push --dry-run: an over-threshold plan is refused rather than previewed (A
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run"), 12);
 
   // The preview's throwaway working copy is removed on the refusal path
-  // too, not only when the preview completes (R2 low).
+  // too, not only when the preview completes.
   assert.equal(fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "tmp", "push-preview")), false);
 });
 
-// R1 medium, the reporting half: once a run really does remove paths, the
+// The reporting half: once a run really does remove paths, the
 // payload has to say so. Same seam as the staged-gate test above (the
 // working copy is emptied at staging time, so the merge plan reports no
 // deletions at all) plus the documented override, so the push goes through
 // and its payload can be inspected. deletedFiles must name what was
 // published as removed, whether or not the plan asked for it.
-test("push: deletedFiles reports what the commit removed, not what the plan intended (AC-003)", () => {
+test("push: deletedFiles reports what the commit removed, not what the plan intended", () => {
   const root = createSandbox("staged-deletion-reporting");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -1016,7 +1015,7 @@ function writeStubGitWipingSiblingSubtree(root: string, siblingDir: string): str
 // neither per-destination rule can see it. Pre-fix the push dropped it from
 // the count entirely and published the whole sibling subtree's removal at
 // exit 0, silently.
-test("push: staged deletions outside the repository subdir are counted and refused (AC-003)", () => {
+test("push: staged deletions outside the repository subdir are counted and refused", () => {
   const root = createSandbox("outside-subdir-deletions");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -1061,7 +1060,7 @@ test("push: staged deletions outside the repository subdir are counted and refus
   assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "memory root\n");
 });
 
-// R2 medium (docs): the flag overrides the PLAN guard. It has never been an
+// The flag overrides the PLAN guard. It has never been an
 // answer to "the working copy this run fetched is not the remote", and the
 // help text said it was.
 test("run and watch help: --allow-mass-delete does not promise to merge an unreliable working copy", () => {
@@ -1075,11 +1074,11 @@ test("run and watch help: --allow-mass-delete does not promise to merge an unrel
   }
 });
 
-// R3 medium (D-019): `watch --accept-mass-delete` was standing consent for
+// `watch --accept-mass-delete` was standing consent for
 // every future tick. Measured: a wiped checkout on a later tick deleted every
 // local file the remote still held, with the watcher exiting 0. The escape is
 // a one-shot `run`; `watch` does not take the flag at all.
-test("watch does not accept --accept-mass-delete; run does (AC-007)", () => {
+test("watch does not accept --accept-mass-delete; run does", () => {
   const runHelp = runCli(["run", "--help"]).stdout.replace(/\s+/g, " ");
   assert.match(runHelp, /--accept-mass-delete/);
 
@@ -1104,7 +1103,7 @@ test("watch does not accept --accept-mass-delete; run does (AC-007)", () => {
 // empties the working tree immediately before staging. Every invocation of
 // `add` is counted in `counterPath`.
 //
-// R3 medium (D-017): the push used to stage twice, once to measure the
+// The push used to stage twice, once to measure the
 // deletions the commit would carry (the guard's numerator) and once more
 // inside commitAll on the way to the commit. A wipe landing between the two
 // was invisible to the measurement and published by the second stage: rc 0,
@@ -1142,7 +1141,7 @@ function writeStubGitWipingWorkTreeOnSecondAdd(root: string, counterPath: string
 // healthy push of the one local edit. Pre-fix (measured at df78fb3): two
 // `git add` invocations, rc 0, the remote's log tree 30 to 0.
 for (const mode of ["push", "sync"]) {
-  test(`${mode}: a working copy wiped after the measured stage cannot reach the commit (AC-003)`, () => {
+  test(`${mode}: a working copy wiped after the measured stage cannot reach the commit`, () => {
     const root = createSandbox(`second-add-wipe-${mode}`);
     const remoteDir = initBareRemote(root);
     const workspaceRoot = path.join(root, "workspace");
@@ -1199,11 +1198,11 @@ for (const mode of ["push", "sync"]) {
   });
 }
 
-// R3 medium (D-018), the reporting half: after --accept-mass-delete adopted
+// The reporting half: after --accept-mass-delete adopted
 // a loss, the base snapshot no longer tracks the adopted paths, and a refusal
 // raised in the same run read "(50 of 0 tracked)". The share a plan removes
 // is measured against what the run started with.
-test("push: a refusal after an accepted adoption counts what the run started with (AC-003, AC-007)", () => {
+test("push: a refusal after an accepted adoption counts what the run started with", () => {
   const root = createSandbox("post-accept-denominator");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -1261,12 +1260,12 @@ test("push: a refusal after an accepted adoption counts what the run started wit
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-post-accept"), 50);
 });
 
-// RV7 (R2 low): previewPush commits each snapshot into its throwaway working
+// previewPush commits each snapshot into its throwaway working
 // copy, so snapshot N is measured against a HEAD that already carries
 // snapshot N-1. Without that commit the preview re-counts the earlier
 // snapshot's deletions and refuses a plan the real push accepts, which is
 // exactly backwards for the command an operator uses to check a plan first.
-test("push --dry-run: queued snapshots are measured one commit at a time (AC-003)", () => {
+test("push --dry-run: queued snapshots are measured one commit at a time", () => {
   const root = createSandbox("dry-run-queued-replay");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -1319,7 +1318,7 @@ test("push --dry-run: queued snapshots are measured one commit at a time (AC-003
 // working copy is staged reads as an empty plan right up to the moment it is
 // committed. A dry run that previewed such a plan as clean would be telling
 // an operator the opposite of what the real run is about to do.
-test("push --dry-run: a plan whose deletions appear only at staging time is refused (AC-003)", () => {
+test("push --dry-run: a plan whose deletions appear only at staging time is refused", () => {
   const root = createSandbox("dry-run-staged-gate");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -1350,7 +1349,7 @@ test("push --dry-run: a plan whose deletions appear only at staging time is refu
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run-staged"), 30);
 });
 
-// agent-tasks 56e20494 (D-013 follow-up): a checkout that truncates every
+// agent-tasks 56e20494: a checkout that truncates every
 // file to zero bytes instead of removing it must be refused exactly like
 // one that removed them, in both push and sync, at the corpus size the
 // measured reachability report used (50 files). Local stays intact (the
@@ -1416,7 +1415,7 @@ for (const mode of ["push", "sync"]) {
   });
 }
 
-// agent-tasks 56e20494, review R1 finding F1: --accept-mass-delete answers
+// agent-tasks 56e20494: --accept-mass-delete answers
 // "the remote really did drop these files", not "this checkout came back
 // zeroed". Measured pre-fix: push --accept-mass-delete against the
 // truncating stub exited 0 and published 50 zero-byte files with no
@@ -1483,7 +1482,7 @@ for (const mode of ["push", "sync", "pull"]) {
   });
 }
 
-// D-013 negative control, run through the real CLI rather than just the
+// Negative control, run through the real CLI rather than just the
 // pure guard function: a remote that legitimately rewrote most of a
 // destination to different, non-empty content applies cleanly. No stub git
 // involved here - every read is real, so this also confirms the emptied

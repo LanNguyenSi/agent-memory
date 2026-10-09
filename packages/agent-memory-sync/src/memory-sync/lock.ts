@@ -1,8 +1,7 @@
 // Advisory lock over a stateDir, so two agent-memory-sync processes never
 // work on one state directory at the same time.
 //
-// Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
-// run .ai/runs/2026-09-11-memory-sync-wipe). The periodic `run --mode sync`
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c). The periodic `run --mode sync`
 // job and the `watch` job share a stateDir, and nothing serialised them: one
 // job's working copy under stateDir/tmp was removed by the other job while
 // git had already reported a successful checkout, and the pull that read

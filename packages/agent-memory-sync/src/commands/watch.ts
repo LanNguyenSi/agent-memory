@@ -267,8 +267,7 @@ function registerWatchCommand(program: import("commander").Command): void {
           await pushSnapshot(message);
         } catch (error) {
           // A refused deletion plan or an unreliable working copy
-          // (agent-tasks cda5b12c, pandora run
-          // .ai/runs/2026-09-11-memory-sync-wipe; see
+          // (agent-tasks cda5b12c; see
           // src/memory-sync/guards.ts) is a
           // decision about THIS tick, not a broken watcher: the snapshot was
           // not pushed, nothing was lost, and the next tick is free to try
@@ -276,7 +275,7 @@ function registerWatchCommand(program: import("commander").Command): void {
           // loudly and keep watching, instead of routing it through
           // handleSnapshotError, which sets a non-zero exit code and shuts
           // the watcher down. A wedged watcher would be its own outage: the
-          // 2026-09-11 incident was noticed only because the watch job was
+          // memory-corpus wipe incident was noticed only because the watch job was
           // still running and still pushing.
           if (!isGuardRefusal(error)) {
             handleSnapshotError(error);

@@ -113,7 +113,7 @@ test("watch produces a single-file commit message when only one path changed", a
   // The result line this tick must produce is the pushed-snapshot one: it
   // edited exactly one file against a reachable remote. Accepting the
   // queued or the no-changes line here would let a tick that silently
-  // stopped pushing satisfy the ordering assertion below (R2 medium).
+  // stopped pushing satisfy the ordering assertion below.
   const pushStartIndex = stderr.indexOf("watch tick pushing snapshot");
   const resultIndex = stderr.search(/pushed snapshot [0-9a-f]{7} \(1 file\(s\) applied\)/);
   assert.ok(pushStartIndex >= 0, `push-start line missing from stderr: ${stderr}`);
@@ -374,7 +374,7 @@ test("restore rejects an unknown sha with a loud non-zero exit", () => {
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /fetch|deadbeef|not.+exist/i);
-  // Pins the AC-3 hint: `deadbeef` is short (8 hex chars), and unresolvable
+  // Pins the short-sha hint: `deadbeef` is short (8 hex chars), and unresolvable
   // both locally and via an explicit remote fetch (see the short-sha tests
   // below for the resolvable case), so the error should say outright that a
   // full 40-character sha is required instead of leaving the reader to

@@ -1,5 +1,5 @@
-// The stateDir lock through the CLI (AC-004 of the 2026-09-11 wipe,
-// agent-tasks cda5b12c, pandora run .ai/runs/2026-09-11-memory-sync-wipe).
+// The stateDir lock through the CLI (memory-corpus wipe guard,
+// agent-tasks cda5b12c).
 //
 // The incident's mechanism was two processes on one stateDir: a periodic
 // `run --mode sync` tick and a `watch` tick, with nothing serialising them,

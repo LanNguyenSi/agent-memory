@@ -1,5 +1,4 @@
-// AC-007 of the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run
-// .ai/runs/2026-09-11-memory-sync-wipe): the pull side.
+// The pull side of the memory-corpus wipe guards (agent-tasks cda5b12c).
 //
 // Two halves, driven here through the real binary against a local bare repo.
 // (1) Before a pull applies a deletion or an overwrite, the affected
@@ -75,7 +74,7 @@ function peerDeletes(remoteDir: string, root: string, label: string, names: stri
   git(["push", "origin", "HEAD:main"], checkout);
 }
 
-test("pull: a deletion is preceded by a snapshot holding the pre-apply bytes (AC-007)", () => {
+test("pull: a deletion is preceded by a snapshot holding the pre-apply bytes", () => {
   const root = createSandbox("pre-apply-snapshot");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -114,7 +113,7 @@ test("pull: a deletion is preceded by a snapshot holding the pre-apply bytes (AC
   assert.equal(readText(path.join(snapshotFiles, "note-001.md")), "entry 1\n");
 });
 
-test("pull: a run with nothing to apply writes no snapshot (AC-007)", () => {
+test("pull: a run with nothing to apply writes no snapshot", () => {
   const root = createSandbox("pre-apply-noop");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -129,7 +128,7 @@ test("pull: a run with nothing to apply writes no snapshot (AC-007)", () => {
   assert.deepEqual(snapshotIds(workspaceRoot, "logs"), []);
 });
 
-test("pull: snapshot rotation keeps only the configured generations (AC-007)", () => {
+test("pull: snapshot rotation keeps only the configured generations", () => {
   const root = createSandbox("pre-apply-rotation");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -152,10 +151,10 @@ test("pull: snapshot rotation keeps only the configured generations (AC-007)", (
   assert.deepEqual(kept, Array.from(new Set(observed)).sort().slice(-2));
 });
 
-// AC-007's own scenario: the incident's corpus size, removed in one remote
+// The wipe's own scenario: the incident's corpus size, removed in one remote
 // commit. The run has to refuse it, say how much it is, and leave the local
 // tree exactly as it found it.
-test("pull: a remote commit deleting the whole corpus is refused and applies with the flag (AC-007)", () => {
+test("pull: a remote commit deleting the whole corpus is refused and applies with the flag", () => {
   const root = createSandbox("pull-guard-406");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -216,7 +215,7 @@ test("pull: a remote commit deleting the whole corpus is refused and applies wit
 // The shape the checkout guard is structurally blind to: every destination
 // loses a share small enough to pass on its own, and the run still applies
 // far more deletions than the absolute limit allows in total.
-test("pull: deletions spread across destinations trip the plan-wide total (AC-007)", () => {
+test("pull: deletions spread across destinations trip the plan-wide total", () => {
   const root = createSandbox("pull-guard-total");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -292,11 +291,11 @@ test("pull: deletions spread across destinations trip the plan-wide total (AC-00
   }
 });
 
-// The R2 escape matrix (D-011): a legitimate remote deletion above the
+// The escape matrix: a legitimate remote deletion above the
 // threshold wedges every mode at exit 7 until an operator says it is
 // genuine. --accept-mass-delete is that one escape, and after it the same
 // command that was wedged runs clean again.
-test("sync: a genuine remote deletion is wedged at exit 7 until it is accepted (AC-007)", () => {
+test("sync: a genuine remote deletion is wedged at exit 7 until it is accepted", () => {
   const root = createSandbox("escape-matrix");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -353,7 +352,7 @@ test("sync: a genuine remote deletion is wedged at exit 7 until it is accepted (
 
 // watch pushes, it never pulls, so its escape has to make the local tree
 // match the remote itself before the push it was refusing can go through.
-test("push: --accept-mass-delete adopts the remote's deletion instead of republishing it (AC-007)", () => {
+test("push: --accept-mass-delete adopts the remote's deletion instead of republishing it", () => {
   const root = createSandbox("push-accept");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -438,7 +437,7 @@ function baseTrackedCount(workspaceRoot: string, destination: string): number {
 // claiming files that are no longer on disk, and the next run reads that as a
 // checkout that lost them: refused at exit 7, with the adoption the operator
 // already agreed to still not recorded anywhere.
-test("push: an accepted deletion survives a push that fails afterwards (AC-007)", () => {
+test("push: an accepted deletion survives a push that fails afterwards", () => {
   const root = createSandbox("accept-then-failed-push");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -486,12 +485,12 @@ test("push: an accepted deletion survives a push that fails afterwards (AC-007)"
   assert.equal(afterwards.status, 0, `stderr: ${afterwards.stderr}`);
 });
 
-// R3 medium (D-018): the two flags answer opposite questions, and together
+// The two flags answer opposite questions, and together
 // they re-enacted the incident (measured: local 50 to 0, remote 50 to 0,
 // rc 0). After --accept-mass-delete has adopted the remote's state there is
 // nothing left for --allow-mass-delete to publish, so the pair is refused as
 // a usage error before anything is read or written.
-test("run: --accept-mass-delete together with --allow-mass-delete is a usage error (AC-003, AC-007)", () => {
+test("run: --accept-mass-delete together with --allow-mass-delete is a usage error", () => {
   const root = createSandbox("flag-pair");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -541,12 +540,12 @@ test("run: --accept-mass-delete together with --allow-mass-delete is a usage err
   assert.equal(fs.readdirSync(path.join(inspection, "shared", "logs")).length, 20);
 });
 
-// R3 medium (D-020): `--dry-run --accept-mass-delete` exited 7 on push and
+// `--dry-run --accept-mass-delete` exited 7 on push and
 // sync while the real run applied, so the one command machine-setup tells an
 // operator to run first could not preview the acceptance. The preview now
 // reports the paths the real run would adopt, and changes nothing.
 for (const mode of ["push", "sync"]) {
-  test(`${mode} --dry-run --accept-mass-delete reports the adoption without applying it (AC-007)`, () => {
+  test(`${mode} --dry-run --accept-mass-delete reports the adoption without applying it`, () => {
     const root = createSandbox(`dry-run-accept-${mode}`);
     const remoteDir = initBareRemote(root);
     const workspaceRoot = path.join(root, "workspace");
@@ -606,10 +605,10 @@ for (const mode of ["push", "sync"]) {
   });
 }
 
-// R3 low: the add-only rule (a destination the plan only ADDS files to is not
+// The add-only rule (a destination the plan only ADDS files to is not
 // copied) was untested; removing it left the suite green. A pull that only
 // creates files takes nothing away, so there is nothing a copy could keep.
-test("pull: an add-only plan writes no snapshot (AC-007)", () => {
+test("pull: an add-only plan writes no snapshot", () => {
   const root = createSandbox("pre-apply-add-only");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");

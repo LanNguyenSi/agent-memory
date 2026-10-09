@@ -70,7 +70,7 @@ function backdateQueuedSnapshots(workspaceRoot: string, ageMs: number): void {
   }
 }
 
-// ─── AC2: below the threshold stays silent, exit 0 ──────────────────────────
+// ─── below the threshold stays silent, exit 0 ──────────────────────────
 
 test("push stays a silent, exit-0 queue while the oldest queued snapshot is well under the escalation threshold", () => {
   const root = createSandbox("escalation-below-threshold");
@@ -98,7 +98,7 @@ test("push stays a silent, exit-0 queue while the oldest queued snapshot is well
   assert.equal(readdirSync(queueDirFor(workspaceRoot)).length, 2);
 });
 
-// ─── AC1: above the threshold becomes visible (non-zero exit) ───────────────
+// ─── above the threshold becomes visible (non-zero exit) ───────────────
 
 test("push crashes loud with a clear message once the oldest queued snapshot is older than the escalation threshold", () => {
   const root = createSandbox("escalation-above-threshold");
@@ -164,7 +164,7 @@ test("watch tick exits non-zero once the queue has been failing to drain past th
   assert.match(stderr, /permanently misconfigured/);
 });
 
-// ─── AC4: the precheck-bypass path still queues via lookupRemoteHead ────────
+// ─── the precheck-bypass path still queues via lookupRemoteHead ────────
 //
 // Reviewer-named positive test: a remote whose scheme the reachability
 // precheck waves through as "unsupported" (see classifyRemote in
@@ -199,7 +199,7 @@ test("push still queues cleanly when an unsupported-scheme remote (precheck assu
 // #11): escalation must fire from the catch-all git-failure path
 // (push.ts's catch block around GitClient.lookupRemoteHead/push, ~line
 // 225-234), not only from the reachability-precheck skip path every test
-// above exercises. Reuses AC4's precheck-bypass mechanism above (an
+// above exercises. Reuses the precheck-bypass mechanism above (an
 // unsupported-scheme remote the precheck assumes reachable, so the failure
 // only ever surfaces once the real git operation runs and throws inside the
 // try block) — but this time with the queue already backdated past the
@@ -277,7 +277,7 @@ test("push does not escalate when the oldest queued snapshot's age is implausibl
 });
 
 // A plain 25h age (well under the 30x sanity ceiling) must still escalate —
-// this is the SAME assertion the "push crashes loud..." AC1 test above
+// this is the SAME assertion the "push crashes loud..." test above
 // already makes; restated here in the same section as the guard's negative
 // case per the fix-round brief, without duplicating the full test body.
 test("push still escalates a plain 25h age — the clock-skew guard does not swallow genuine escalations", () => {

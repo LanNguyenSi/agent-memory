@@ -1,5 +1,4 @@
-// AC-003 (task e104c9f2, pandora run
-// .ai/runs/2026-09-11-sync-peer-file-conflict): a local file that already
+// Task e104c9f2: a local file that already
 // carries inline conflict markers and that this run leaves untouched must
 // be named in the run's notes, once per file, in both the JSON payload and
 // the text summary's `notes=` field.
@@ -12,8 +11,7 @@
 // silently: it lands in neither appliedFiles nor conflictFiles, so the run
 // reports a clean 0-conflict outcome while the markers still sit in the
 // file. This is the mac mini's actual manual-sync experience after
-// installing the AC-002 mirror fix in isolation: the diagnosis in
-// .ai/runs/2026-09-11-sync-peer-file-conflict/01-plan.md is exactly this.
+// installing the peer-file mirror fix in isolation: the diagnosis is exactly this.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { mkdirSync } = require("node:fs");
@@ -145,7 +143,7 @@ test("run --mode sync also reports the stale-marker note (pull's notes carry thr
   );
 });
 
-test("negative control: no stale-marker note fires for a peer file whose local markers the AC-002 mirror rule overwrites", () => {
+test("negative control: no stale-marker note fires for a peer file whose local markers the peer-file mirror rule overwrites", () => {
   const root = createSandbox("stale-marker-note-overwritten");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -171,7 +169,7 @@ test("negative control: no stale-marker note fires for a peer file whose local m
   assert.ok(JSON.parse(seed.stdout).runs[0].appliedFiles.includes("machine-state/linux.json"));
 
   // Local acquires markers on the peer file, base == remote unchanged: the
-  // AC-002 mirror rule overwrites this on the very next pull, so it must
+  // the peer-file mirror rule overwrites this on the very next pull, so it must
   // never be reported as a "left untouched" stale-marker note.
   writeText(path.join(machineStateSource, "linux.json"), STALE_MARKER_CONTENT);
 
@@ -188,7 +186,7 @@ test("negative control: no stale-marker note fires for a peer file whose local m
   );
 });
 
-test("D-002: a profile positional that does not match this machine's own file gets a note", () => {
+test("a profile positional that does not match this machine's own file gets a note", () => {
   const root = createSandbox("stale-marker-note-profile-mismatch");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -238,7 +236,7 @@ test("D-002: a profile positional that does not match this machine's own file ge
   );
 });
 
-test("D-002: profile mismatch overwrite shape - the mismatched own file is mirrored from the remote as a peer file, and the note still fires exactly once", () => {
+test("profile mismatch overwrite shape - the mismatched own file is mirrored from the remote as a peer file, and the note still fires exactly once", () => {
   const root = createSandbox("stale-marker-note-profile-mismatch-overwrite");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -281,7 +279,7 @@ test("D-002: profile mismatch overwrite shape - the mismatched own file is mirro
 
   // Now pull under the MISMATCHED profile positional: mac-mini.json reads
   // as a peer file (wrong-profile.json is the expected own filename), so
-  // the AC-002 mirror rule overwrites it from the remote instead of 3-way
+  // the peer-file mirror rule overwrites it from the remote instead of 3-way
   // merging the local divergence.
   const pull = runCli(["run", "wrong-profile", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const payload = JSON.parse(pull.stdout).runs[0];
@@ -307,7 +305,7 @@ test("D-002: profile mismatch overwrite shape - the mismatched own file is mirro
   );
 });
 
-test("D-006: --mode sync reports the profile-mismatch note exactly once (pull's and push's own copies must share text, not just meaning)", () => {
+test("--mode sync reports the profile-mismatch note exactly once (pull's and push's own copies must share text, not just meaning)", () => {
   const root = createSandbox("stale-marker-note-sync-mismatch-dedupe");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -345,7 +343,7 @@ test("D-006: --mode sync reports the profile-mismatch note exactly once (pull's 
   );
 });
 
-test("D-003: a base-less protected peer file left with stale markers gets the peer-specific note", () => {
+test("a base-less protected peer file left with stale markers gets the peer-specific note", () => {
   const root = createSandbox("stale-marker-note-peer-protected");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -361,7 +359,7 @@ test("D-003: a base-less protected peer file left with stale markers gets the pe
   // A peer's file this workspace already has locally (e.g. carried over
   // from a channel outside this tool), never recorded in the base store,
   // and the remote has never had it either: protected by Guard 2, so it
-  // never reaches the AC-002 mirror rule and is left exactly as it is,
+  // never reaches the peer-file mirror rule and is left exactly as it is,
   // markers included.
   mkdirSync(machineStateSource, { recursive: true });
   writeText(path.join(machineStateSource, "linux.json"), STALE_MARKER_CONTENT);

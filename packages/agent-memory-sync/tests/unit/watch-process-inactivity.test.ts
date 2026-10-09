@@ -172,7 +172,7 @@ test("withTickDeadline (inactivity mode): the absolute whole-tick cap fires with
   }
 });
 
-// D-009: the inactivity budget is now an environment property rather than a
+// The inactivity budget is now an environment property rather than a
 // source-code constant (see resolveInactivityTimeoutMs in
 // tests/helpers/watch-process.ts). The fallback behavior is the load-bearing
 // half: a bad value must fall back to the default, never disable the

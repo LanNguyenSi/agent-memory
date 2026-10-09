@@ -1,4 +1,4 @@
-// Repro A (agent-tasks 06d09cde / .ai/runs/2026-08-03-sync-conflict-markers-echo).
+// Repro A (agent-tasks 06d09cde).
 //
 // Live incident this pins: `run --mode sync` runs performPull then
 // performPush back-to-back (src/commands/run.ts executeMode). A genuine
@@ -16,7 +16,7 @@
 // run reported a clean 0-conflict outcome. Push now reports the conflict and
 // also holds the path back, so the markers never reach the remote. Two rapid remote pushes plus a
 // concurrent local edit produced exactly this on the mac mini on
-// 2026-08-03 (see 00-goal.md's "Reproduktion" section).
+// the mac mini.
 //
 // This test drives pull and push as two separate CLI invocations against the
 // SAME stateDir/rootDir/remote (the task brief explicitly allows "im selben

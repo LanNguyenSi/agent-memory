@@ -96,8 +96,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
   // file, materialized locally by a prior pull, getting offered back as
   // this machine's own change) can originate. Pull's own collectLocalSyncFiles
   // call (src/memory-sync/pull.ts) deliberately omits this option — see
-  // config.ts's CollectLocalSyncFilesOptions and D-004 in
-  // .ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md.
+  // config.ts's CollectLocalSyncFilesOptions (agent-tasks 06d09cde).
   const ownerScopedWarnings: string[] = [];
   const currentLocalFiles = collectLocalSyncFiles(config, {
     ownerFilter: true,
@@ -134,13 +133,13 @@ async function performPush(config: PushConfig, options: PushOptions) {
 
   const queuedSnapshots = stateStore.listQueuedSnapshots();
   const snapshots = [
-    // Fix-Runde MEDIUM finding #3 (05-review-findings.md, agent-tasks
+    // Follow-up fix (agent-tasks
     // 06d09cde): a snapshot enqueued BEFORE this machine's profile picked up
     // ownerScoped:true (or before this fix shipped at all) can still carry a
     // peer's ownerScoped file in its stored localFiles/baseFiles — it was
     // captured verbatim from an older, unfiltered collectLocalSyncFiles/
     // readBaseSnapshots() call. Replaying it verbatim would re-introduce
-    // exactly the echo Fix 2/D-002-D-004 closed for the "current" snapshot,
+    // exactly the echo the ownerScoped fix closed for the "current" snapshot,
     // just via the queue instead of a live collection. Route both maps
     // through the same filterOwnerScopedBaseMap used for currentBaseMap
     // below so a stale queued peer file is stripped here too, not just on
@@ -504,7 +503,7 @@ function resolveQueueEscalationThresholdMs(value: number | null | undefined): nu
   return value ?? DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS;
 }
 
-// Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde):
+// Follow-up fix (agent-tasks 06d09cde):
 // merges collectLocalSyncFiles' ownerScoped "own file missing among peer
 // files" warnings (see config.ts's CollectLocalSyncFilesResult.warnings)
 // into whatever `notes` array a given result already carries, on every
@@ -1073,8 +1072,8 @@ function listRunStartTracked(
 // carry, as remote-relative paths (the key space the guards, the base
 // snapshot store and the result payload all use).
 //
-// This is the mass-delete guard's real numerator (agent-tasks cda5b12c,
-// pandora run .ai/runs/2026-09-11-memory-sync-wipe). `git add -A` stages
+// This is the mass-delete guard's real numerator (agent-tasks cda5b12c).
+// `git add -A` stages
 // every path the working copy lacks, whether the merge plan asked for it or
 // not, so the plan is not what gets committed and must not be what gets
 // checked. This is also the ONLY stage of the working copy per snapshot:

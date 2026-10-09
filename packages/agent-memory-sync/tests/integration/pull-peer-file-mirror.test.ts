@@ -1,11 +1,10 @@
-// AC-002 (task e104c9f2, pandora run
-// .ai/runs/2026-09-11-sync-peer-file-conflict): pull's peer-file mirror rule
+// Task e104c9f2: pull's peer-file mirror rule
 // for an ownerScoped directory destination.
 //
 // Live incident this closes: the mac mini's `machine-state/linux.json` (a
 // peer's ownerScoped file, not this machine's own `<profile>.json`) carried
-// inline conflict markers from the 2026-08-03 pre-fix cascade. base ==
-// remote (the hub's content, unchanged since 2026-08-10), local != base
+// inline conflict markers from the pre-fix cascade. base ==
+// remote (the hub's content, unchanged for days), local != base
 // (the markers). The old 3-way merge's `remote === base` fast path always
 // resolved to "local wins" with the marker-carrying content, and push's
 // ownerFilter (owner-scoped-push.test.ts) never publishes a peer file to fix
@@ -83,7 +82,7 @@ const NESTED_LIVE_MARKER_CONTENT = [
   ">>>>>>> remote"
 ].join("\n");
 
-test("AC-002(a): a peer file with nested local conflict markers (base == remote) is mirrored, not merged", () => {
+test("a peer file with nested local conflict markers (base == remote) is mirrored, not merged", () => {
   const root = createSandbox("peer-mirror-a");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -136,7 +135,7 @@ test("AC-002(a): a peer file with nested local conflict markers (base == remote)
   );
 });
 
-test("AC-002(b): a peer file where local, base and remote all differ is mirrored to the remote content, not 3-way merged", () => {
+test("a peer file where local, base and remote all differ is mirrored to the remote content, not 3-way merged", () => {
   const root = createSandbox("peer-mirror-b");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -180,7 +179,7 @@ test("AC-002(b): a peer file where local, base and remote all differ is mirrored
   assert.ok(payload.appliedFiles.includes("machine-state/linux.json"));
 });
 
-test("AC-002(c): the machine's own ownerScoped file still 3-way merges/conflicts on a genuine divergence", () => {
+test("the machine's own ownerScoped file still 3-way merges/conflicts on a genuine divergence", () => {
   const root = createSandbox("peer-mirror-c");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -218,7 +217,7 @@ test("AC-002(c): the machine's own ownerScoped file still 3-way merges/conflicts
   );
 });
 
-test("AC-002(d): a base-less local peer file the remote lacks stays protected (unchanged)", () => {
+test("a base-less local peer file the remote lacks stays protected (unchanged)", () => {
   const root = createSandbox("peer-mirror-d");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -249,7 +248,7 @@ test("AC-002(d): a base-less local peer file the remote lacks stays protected (u
   assert.ok(!payload.conflictFiles.includes("machine-state/linux.json"));
 });
 
-test("AC-002(e): a peer file present in base and local is removed on the remote: pull deletes it locally and reports it in deletedFiles", () => {
+test("a peer file present in base and local is removed on the remote: pull deletes it locally and reports it in deletedFiles", () => {
   const root = createSandbox("peer-mirror-e");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -292,7 +291,7 @@ test("AC-002(e): a peer file present in base and local is removed on the remote:
   );
 });
 
-test("AC-002/D-001: a peer file whose remote content itself carries conflict markers is mirrored and reported as a conflict", () => {
+test("a peer file whose remote content itself carries conflict markers is mirrored and reported as a conflict", () => {
   const root = createSandbox("peer-mirror-f");
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -332,7 +331,7 @@ test("AC-002/D-001: a peer file whose remote content itself carries conflict mar
     `a markered remote peer file must be reported as a conflict, not conflicts=0: ${JSON.stringify(payload.conflictFiles)}`
   );
 
-  // D-003 shape (1) (05-review-findings.md round 2): a second pull with
+  // Shape (1) of the stale-marker note: a second pull with
   // nothing else changing (base == remote == local, all markered) must
   // leave the file untouched (nothing left to mirror) while still naming
   // it, once, as an unresolved peer file, not report a silent conflicts=0.

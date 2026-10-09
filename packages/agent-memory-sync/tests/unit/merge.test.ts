@@ -1,5 +1,5 @@
-// Unit coverage for mergeText's marker-honesty guard (Teil 1, agent-tasks
-// 06d09cde / .ai/runs/2026-08-03-sync-conflict-markers-echo).
+// Unit coverage for mergeText's marker-honesty guard (agent-tasks
+// 06d09cde).
 //
 // Root defect: both fast paths (`local === base` -> remote wins,
 // `remote === base` -> local wins) and the appendOnly merge success path
@@ -16,7 +16,7 @@
 // single-pass conflict fallback (marker construction, already
 // conflict:true) and the untouched `unchanged`/strategy paths alone.
 //
-// Fix-Runde (05-review-findings.md, agent-tasks 06d09cde): two follow-up
+// Follow-up fix (agent-tasks 06d09cde): two follow-up
 // clusters added below.
 //   Fix 2 (MEDIUM, "Markdown-Ausschluss"): the first cut of
 //   hasConflictMarkers also matched a bare `=======` / `>>>>>>> ` line, which

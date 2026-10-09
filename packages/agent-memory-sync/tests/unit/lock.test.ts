@@ -1,7 +1,6 @@
 // Unit coverage for the stateDir advisory lock (src/memory-sync/lock.ts).
 //
-// Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
-// run .ai/runs/2026-09-11-memory-sync-wipe). The periodic sync job and the
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c). The periodic sync job and the
 // watch job shared one stateDir with nothing serialising them, and the wipe
 // began when one job removed the other's working copy underneath it. This
 // file pins the lock's own arithmetic (acquire, refusal, staleness,

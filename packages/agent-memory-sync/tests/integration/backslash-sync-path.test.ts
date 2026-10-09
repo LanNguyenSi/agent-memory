@@ -4,8 +4,7 @@
 // relative path is part of an actual file name. Blindly converting it to
 // "/" (the pre-fix behavior) silently published the file's content under a
 // different, mangled remote path that pull and restore --from-commit could
-// never map back to the original file (review R5 of the 2026-09-11 wipe fix,
-// pandora run .ai/runs/2026-09-11-memory-sync-wipe, agent-tasks 73ea60bf).
+// never map back to the original file (agent-tasks 73ea60bf).
 // This platform never exercises the win32 branch (converting every
 // backslash to "/" there is exact, since NTFS disallows one in a real file
 // name); these tests run on darwin/linux only and pin the refusal.
@@ -305,7 +304,7 @@ test("legacy restore <sha> --yes with a backslash path in the commit aborts befo
 });
 
 // The destination-restore form's own write loop (restoreDestination,
-// restore.ts, review round 3 MEDIUM #1): every source path must be mapped
+// restore.ts): every source path must be mapped
 // and validated before the pre-apply snapshot is taken or the first write
 // happens, the same invariant the legacy whole-commit form above pins.
 // "logs/aaa.md" sorts before "logs/zzz\back.md" in git's own tree order, so
@@ -388,8 +387,8 @@ test("restore <profile> <destination> --from-commit --dry-run refuses a late-sor
   assert.equal(fs.existsSync(path.join(stateDir, "snapshots")), false);
 });
 
-// The pull direction refuses the same as push/sync/restore (review round 3
-// LOW #2): `run --mode pull` also collects local sync files to merge
+// The pull direction refuses the same as push/sync/restore:
+// `run --mode pull` also collects local sync files to merge
 // against the remote, so a local backslash-named file must abort it too,
 // not just push/sync/restore (agent-tasks 73ea60bf).
 test("run --mode pull refuses a local file name that contains a backslash, naming the path (exit 3)", () => {
@@ -417,8 +416,8 @@ test("run --mode pull refuses a local file name that contains a backslash, namin
 });
 
 // The repositorySubdir config value goes through the same portable-path
-// check as a sync destination now (normalizeRelativePath, src/config/loader.ts,
-// review round 3 LOW #3): a backslash in it is refused the same way, rather
+// check as a sync destination now (normalizeRelativePath, src/config/loader.ts):
+// a backslash in it is refused the same way, rather
 // than being silently flattened into "/" (agent-tasks 73ea60bf).
 test("a repositorySubdir config value containing a backslash is refused (exit 3)", () => {
   const root = createSandbox("backslash-repository-subdir-refuse");

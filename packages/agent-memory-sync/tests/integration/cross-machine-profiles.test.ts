@@ -667,8 +667,8 @@ test("all committed profiles keep rootDir/stateDir absolute, un-expanded (no lea
   }
 });
 
-// Pins Defect B's fix (agent-tasks 06d09cde / .ai/runs/2026-08-03-sync-conflict-markers-echo,
-// D-002/D-003): machine-state and frictions are one-owner-file-per-machine
+// Pins Defect B's fix (agent-tasks 06d09cde):
+// machine-state and frictions are one-owner-file-per-machine
 // destinations, so push must never re-offer a peer's file it only pulled —
 // ownerScoped: true on both entries in every committed profile is what
 // makes collectLocalSyncFiles' ownerFilter (src/memory-sync/config.ts)

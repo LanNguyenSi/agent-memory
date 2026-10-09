@@ -108,8 +108,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const notes: string[] = [];
   const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir, notes);
   // Guard 1: never merge against a working copy that cannot be trusted to
-  // represent the remote. In the 2026-09-11 wipe (agent-tasks cda5b12c,
-  // pandora run .ai/runs/2026-09-11-memory-sync-wipe) the fetched copy under
+  // represent the remote. In the memory-corpus wipe (agent-tasks cda5b12c) the fetched copy under
   // stateDir/tmp/pull had been removed by a concurrent tick AFTER git
   // reported a successful checkout, so every remote path read as null and
   // the merge below deleted every local file the merge visited. This throws
@@ -191,10 +190,8 @@ async function performPull(config: PullConfig, options: PullOptions) {
       continue;
     }
 
-    // AC-002 mirror rule (task e104c9f2; the incident class is recorded in
-    // CHANGELOG.md's [Unreleased] entry, and the dated base/local/remote
-    // triple is in the run files under
-    // .ai/runs/2026-09-11-sync-peer-file-conflict): a peer's
+    // the peer-file mirror rule (task e104c9f2; the incident class is recorded in
+    // CHANGELOG.md's [Unreleased] entry): a peer's
     // file inside an ownerScoped directory destination is never this
     // machine's own state, so a 3-way merge over it (and the inline-markers
     // fallback that comes with one) is the wrong operation. This machine
@@ -237,7 +234,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
       ? {
           content: remoteValue,
           status: remoteValue === localValue ? "unchanged" : "remote",
-          // D-001 (review R1 medium, task e104c9f2): the remote is
+          // The remote is
           // definitionally correct for a peer file, but "correct" is not the
           // same as "clean": a peer's own hub content can itself carry
           // stale inline markers (e.g. a peer's unresolved own-file conflict
@@ -301,29 +298,27 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const changedFiles = plan.map((entry) => entry.remoteRelativePath);
   const deletedFiles = plan.filter((entry) => entry.content === null).map((entry) => entry.remoteRelativePath);
 
-  // AC-003 (task e104c9f2; see the AC-002 mirror-rule comment above for the
-  // run pointer): a local file that already carries inline conflict markers
+  // Stale-marker note (task e104c9f2): a local file that already carries inline conflict markers
   // and that this run leaves untouched must say so, once per file, instead
   // of letting the summary report conflicts=0 while the file still sits
   // there unresolved. Two shapes reach this loop with markers still in the
   // local content: (1) remote == local == markered, so mergeText's (or the
-  // AC-002 mirror rule's) `mergeResult.content === localValue` fast path
+  // peer-file mirror rule's) `mergeResult.content === localValue` fast path
   // hands back the same content unchanged, for the machine's own file or a
-  // non-ownerScoped (e.g. memory) file as well as an ownerScoped peer file
-  // (AC-001's actual shape); and (2) a base-less protected peer file (Guard
+  // non-ownerScoped (e.g. memory) file as well as an ownerScoped peer file; and (2) a base-less protected peer file (Guard
   // 2 above), which carries markers and is never routed through the
   // mirror/merge branch at all. A path the plan is about to overwrite
-  // (plannedPaths.has below) is excluded, since after the AC-002 mirror
+  // (plannedPaths.has below) is excluded, since after the peer-file mirror
   // rule an ownerScoped peer file WITH a base snapshot is always planned
-  // for overwrite and never reaches here. D-003: the note text below
+  // for overwrite and never reaches here. The note text below
   // distinguishes an ownerScoped peer file (fix at the hub or restore) from
   // every other case (fix by editing the file), since a peer file's fix
   // path is never a local edit.
   const plannedPaths = new Set(plan.map((entry) => entry.remoteRelativePath));
 
-  // D-002 (task e104c9f2, review R1 medium): the CLI's [profile] positional
+  // Profile mismatch (task e104c9f2): the CLI's [profile] positional
   // can silently not match this machine's actual owner filename (loader.ts's
-  // override order), in which case the AC-002 mirror rule above treats this
+  // override order), in which case the peer-file mirror rule above treats this
   // machine's own file as just another peer and mirrors/overwrites it from
   // the remote without a word. Push already surfaces the identical
   // mismatch as a warning (collectLocalSyncFiles' ownerFilter branch,
@@ -571,8 +566,8 @@ function findOwnerScopedDirectoryEntry(
 
 // True when remoteRelativePath falls under an ownerScoped directory
 // destination AND is not this machine's own `<profile>.json` there, i.e.
-// the AC-002 mirror rule's own definition of "a peer file". Shared by the
-// mirror-rule branch and the AC-003 stale-marker note loop above so both
+// the peer-file mirror rule's own definition of "a peer file". Shared by the
+// mirror-rule branch and the stale-marker note loop above so both
 // use one notion of "peer file" rather than two independently maintained
 // checks drifting apart.
 function isOwnerScopedPeerPath(

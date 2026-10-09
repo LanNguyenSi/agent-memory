@@ -4,8 +4,7 @@
 // the shared predicate findRemoteDeletionsToAccept below routes through,
 // which refuses those outright, flag or no flag.
 //
-// Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
-// run .ai/runs/2026-09-11-memory-sync-wipe) and the review round that
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c) and the review round that
 // followed it. The checkout guard (./guards.ts) refuses a working copy that
 // came back missing a large share of what the base snapshot tracks, or
 // present but emptied to zero bytes, and nothing at the file level tells a

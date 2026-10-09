@@ -1,8 +1,7 @@
 // Unit tests for the AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND env
 // override's parsing.
 //
-// Incident (live, 2026-07-22, .ai/runs/2026-07-22-memory-sync-activation/
-// 05-review-findings.md "Delta-Review" section): setting this env var to
+// Incident (seen live during the memory-sync activation): setting this env var to
 // `false` was silently ignored — the value is valid JSON (the boolean
 // `false`), so JSON.parse succeeds, but normalizeReachabilityCheckCommand's
 // `if (!value) return null;` guard treats any falsy parse result as "not
