@@ -7,7 +7,7 @@
 // hub-only file this spoke never pulled was deleted from the hub.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { existsSync, mkdirSync, rmSync } = require("node:fs");
+const { copyFileSync, existsSync, mkdirSync, rmSync } = require("node:fs");
 const path = require("node:path");
 const {
   createSandbox,
@@ -498,8 +498,10 @@ test("under local-wins a replayed edit of an adopted-deleted path survives the n
 // a path the hub deleted is a conflict, so it is held back. The adoption has
 // already removed the local copy and the base entry and drained nothing but
 // the queue, so the edit survives only in the pre-apply snapshot the adoption
-// took. The held-back note names that snapshot and the restore command, and
-// that command brings the edit back.
+// took. The held-back note names that one snapshotted file and the local path
+// to copy it back to. Copying that single file and pushing again brings the
+// edit back to the hub and nothing else: the other four paths the peer deleted
+// stay deleted, locally and on the hub.
 test("under inline-markers a replayed edit of an adopted-deleted path is held back and survives only in the pre-apply snapshot", () => {
   const root = createSandbox("push-adopted-replay-inline-markers");
   const remoteDir = initBareRemote(root);
@@ -521,6 +523,17 @@ test("under inline-markers a replayed edit of an adopted-deleted path is held ba
   assert.equal(runMode(peer, "push", ["--allow-mass-delete"]).status, "applied");
 
   goOnline(s, remoteDir);
+
+  // A dry run takes no snapshot, so its note has no id to name yet; it must
+  // still describe the single-file recovery and never advise a bare
+  // whole-destination restore.
+  const preview = runMode(s, "push", ["--accept-mass-delete", "--dry-run"]);
+  const previewNote = preview.notes.find((entry: string) => entry.includes("notes/T0.md"));
+  assert.ok(previewNote, JSON.stringify(preview.notes));
+  assert.ok(previewNote.includes("snapshots/notes/<id>/files/notes/T0.md"), `dry-run note: ${previewNote}`);
+  assert.equal(previewNote.includes("--yes"), false, `dry-run note: ${previewNote}`);
+  assert.equal(existsSync(notePath(s, "T1.md")), true, "a dry run removes nothing");
+
   const commitsBefore = hubCommitCount(root, remoteDir);
   const accepted = runMode(s, "push", ["--accept-mass-delete"]);
   assert.equal(accepted.status, "applied");
@@ -533,26 +546,27 @@ test("under inline-markers a replayed edit of an adopted-deleted path is held ba
 
   assert.equal(accepted.snapshots.length, 1);
   const snapshotId = accepted.snapshots[0];
+  const snapshotFile = path.join(s.stateDir, "snapshots", "notes", snapshotId, "files", "notes", "T0.md");
   const note = accepted.notes.find((entry: string) => entry.includes("notes/T0.md"));
   assert.ok(note, JSON.stringify(accepted.notes));
   assert.ok(note.includes(snapshotId), `the note names the snapshot id: ${note}`);
+  assert.ok(note.includes(snapshotFile), `the note names the snapshotted file ${snapshotFile}: ${note}`);
+  assert.ok(note.includes(notePath(s, "T0.md")), `the note names the local path to copy it to: ${note}`);
+  assert.equal(note.includes("--yes"), false, `the note must not advise a confirmed restore: ${note}`);
   assert.ok(
-    note.includes(`agent-memory-sync restore spoke-q notes --from-snapshot ${snapshotId} --yes`),
-    `the note carries the restore command: ${note}`
+    note.includes("replaces the whole") && note.includes("every other file"),
+    `a whole-destination fallback must say what it replaces: ${note}`
   );
 
-  // The command in the note recovers the queued edit.
-  runCli([
-    "restore",
-    "spoke-q",
-    "notes",
-    "--config",
-    s.configPath,
-    "--from-snapshot",
-    snapshotId,
-    "--yes",
-    "--output",
-    "json"
-  ]);
-  assert.equal(readText(notePath(s, "T0.md")), "t0 edited offline\n");
+  // The advised step: copy the one snapshotted file back, then push again.
+  assert.equal(readText(snapshotFile), "t0 edited offline\n", "the snapshot holds the queued edit");
+  copyFileSync(snapshotFile, notePath(s, "T0.md"));
+  const followUp = runMode(s, "push");
+  assert.equal(followUp.status, "applied");
+  assert.equal(readHub(root, remoteDir, "notes/T0.md"), "t0 edited offline\n", "the edit is back on the hub");
+  for (let index = 1; index < 5; index += 1) {
+    assert.equal(readHub(root, remoteDir, `notes/T${index}.md`), null, `T${index} stays deleted on the hub`);
+    assert.equal(existsSync(notePath(s, `T${index}.md`)), false, `T${index} stays deleted locally`);
+  }
+  assert.equal(readHub(root, remoteDir, "notes/T5.md"), "t5\n");
 });

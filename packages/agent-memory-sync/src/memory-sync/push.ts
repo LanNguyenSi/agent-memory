@@ -1,8 +1,10 @@
 const { readdirSync, rmSync } = require("node:fs");
+const path = require("node:path");
 const {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
   filterUnmappedBaseMap,
+  mapRemotePathToLocalAbsolute,
   resolveSyncPathEntries,
   toRepositoryRelativePath
 } = require("./config");
@@ -928,9 +930,9 @@ interface HeldBackPath {
 // A path whose local copy is gone because --accept-mass-delete adopted the
 // hub's deletion (adoptedPaths) is held back with its queued edit surviving
 // only in the pre-apply snapshot that adoption took; that note names the
-// snapshot id and the restore command.
+// snapshot id and the one snapshotted file to copy back.
 function heldBackNotes(
-  config: { profile: string; stateDir: string; syncPaths: PushConfig["syncPaths"] },
+  config: PushConfig,
   held: HeldBackPath[],
   adoption: { adoptedPaths: string[]; snapshotIds: string[] }
 ): string[] {
@@ -946,10 +948,7 @@ function heldBackNotes(
       const kind = kindByPath.get(remoteRelativePath) as HeldBackKind;
       const prefix = `not published: ${remoteRelativePath}`;
       if (kind === "hub-markers") {
-        return (
-          `${prefix} was left as it is because the hub copy carries conflict markers; the hub keeps its current ` +
-          "content. Repair the hub copy (commit a clean version to the hub), then sync again"
-        );
+        return hubMarkersPushNote(remoteRelativePath);
       }
       if (adoption.adoptedPaths.includes(remoteRelativePath)) {
         return adoptedHeldBackNote(config, remoteRelativePath, adoption.snapshotIds);
@@ -975,33 +974,62 @@ function heldBackNotes(
     });
 }
 
-function adoptedHeldBackNote(
-  config: { profile: string; stateDir: string; syncPaths: PushConfig["syncPaths"] },
-  remoteRelativePath: string,
-  snapshotIds: string[]
-): string {
-  const destinations: string[] = resolveSyncPathEntries(config)
+// The note for a path push skipped because the hub copy carries conflict
+// markers. Exported so the combined sync run can drop it for a path the pull
+// side already named (see src/commands/run.ts).
+function hubMarkersPushNote(remoteRelativePath: string): string {
+  return (
+    `not published: ${remoteRelativePath} was left as it is because the hub copy carries conflict markers; the ` +
+    "hub keeps its current content. Repair the hub copy (commit a clean version to the hub), then sync again"
+  );
+}
+
+// The recovery step names the one file the adoption snapshotted for this path,
+// and the local path to copy it to. A whole-destination restore from the same
+// snapshot would also bring back every other file the adoption removed, and
+// the next push would publish those to the hub again, so it is named only as a
+// fallback that says so, and never with the confirmation flag.
+function adoptedHeldBackNote(config: PushConfig, remoteRelativePath: string, snapshotIds: string[]): string {
+  const resolvedEntries = resolveSyncPathEntries(config);
+  const destinations: string[] = resolvedEntries
     .map((entry: { destination: string }) => entry.destination)
     .sort((left: string, right: string) => right.length - left.length);
   const destination =
     destinations.find(
       (candidate) => remoteRelativePath === candidate || remoteRelativePath.startsWith(`${candidate}/`)
     ) || "<destination>";
-  const own = snapshotIds.filter((id) =>
-    listPreApplySnapshots(config.stateDir, destination).some((entry: { id: string }) => entry.id === id)
+  // The snapshot of this destination that actually holds the path; the last
+  // one wins when a run took several.
+  const holding = snapshotIds.filter((id) =>
+    listPreApplySnapshots(config.stateDir, destination).some(
+      (entry: { id: string; manifest: { files: string[] } }) =>
+        entry.id === id && entry.manifest.files.includes(remoteRelativePath)
+    )
   );
-  const ids = own.length > 0 ? own : snapshotIds;
-  const id = ids.length > 0 ? ids[ids.length - 1] : "<id>";
-  // A dry run takes no snapshot, so it has no id to name yet.
+  const id = holding.length > 0 ? holding[holding.length - 1] : null;
+  const snapshotFile = path.join(
+    config.stateDir,
+    "snapshots",
+    destination,
+    id === null ? "<id>" : id,
+    "files",
+    remoteRelativePath
+  );
+  const localPath = mapRemotePathToLocalAbsolute(config, remoteRelativePath, resolvedEntries) || remoteRelativePath;
   const survives =
-    ids.length > 0
-      ? `The edit survives only in the pre-apply snapshot ${id}`
-      : "The edit would survive only in the pre-apply snapshot the real run takes (its id is reported under snapshots)";
+    id === null
+      ? "The edit would survive only in the pre-apply snapshot the real run takes (its id is reported under " +
+        `snapshots), as the file ${snapshotFile}`
+      : `The edit survives only in the pre-apply snapshot ${id}, as the file ${snapshotFile}`;
+  const restoreId = id === null ? "<id>" : id;
   return (
     `not published: ${remoteRelativePath} has no local copy because --accept-mass-delete adopted the hub's ` +
     "deletion of it, and the edit queued for it conflicts with that deletion; the hub keeps its current content. " +
-    `${survives}; restore it with: ` +
-    `agent-memory-sync restore ${config.profile} ${destination} --from-snapshot ${id} --yes`
+    `${survives}. To keep the edit, copy that one file to ${localPath} and push again. ` +
+    "Fallback: agent-memory-sync restore " +
+    `${config.profile} ${destination} --from-snapshot ${restoreId} --dry-run previews restoring the whole ` +
+    `'${destination}' destination from that snapshot; a real run replaces the whole destination and brings back ` +
+    "every other file this adoption removed, which the next push then publishes to the hub again"
   );
 }
 
@@ -1199,5 +1227,6 @@ function unique(values: string[]): string[] {
 }
 
 module.exports = {
+  hubMarkersPushNote,
   performPush
 };

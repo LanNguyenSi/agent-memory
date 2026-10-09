@@ -21,9 +21,24 @@ const { StateStore } = require("../../src/memory-sync/state-store");
 
 interface Spoke {
   name: string;
+  root: string;
+  strategy: "inline-markers" | "local-wins" | "remote-wins";
   workspace: string;
   stateDir: string;
   configPath: string;
+}
+
+function spokeConfig(spoke: Spoke, remoteUrl: string) {
+  return {
+    profile: spoke.name,
+    rootDir: spoke.workspace,
+    remoteUrl,
+    branch: "main",
+    repositorySubdir: "shared",
+    stateDir: spoke.stateDir,
+    conflictStrategy: spoke.strategy,
+    syncPaths: [{ source: path.join(spoke.workspace, "notes"), destination: "notes", kind: "directory" }]
+  };
 }
 
 function createSpoke(
@@ -33,20 +48,26 @@ function createSpoke(
   conflictStrategy: "inline-markers" | "local-wins" | "remote-wins" = "inline-markers"
 ): Spoke {
   const workspace = path.join(root, `workspace-${name}`);
-  const stateDir = path.join(root, `state-${name}`);
-  const configPath = path.join(root, `config-${name}.json`);
+  const spoke: Spoke = {
+    name,
+    root,
+    strategy: conflictStrategy,
+    workspace,
+    stateDir: path.join(root, `state-${name}`),
+    configPath: path.join(root, `config-${name}.json`)
+  };
   mkdirSync(path.join(workspace, "notes"), { recursive: true });
-  writeProjectConfig(configPath, {
-    profile: name,
-    rootDir: workspace,
-    remoteUrl: remoteDir,
-    branch: "main",
-    repositorySubdir: "shared",
-    stateDir,
-    conflictStrategy,
-    syncPaths: [{ source: path.join(workspace, "notes"), destination: "notes", kind: "directory" }]
-  });
-  return { name, workspace, stateDir, configPath };
+  writeProjectConfig(spoke.configPath, spokeConfig(spoke, remoteDir));
+  return spoke;
+}
+
+// A remote that does not exist: push queues its snapshot instead of publishing.
+function goOffline(spoke: Spoke) {
+  writeProjectConfig(spoke.configPath, spokeConfig(spoke, path.join(spoke.root, "missing.git")));
+}
+
+function goOnline(spoke: Spoke, remoteDir: string) {
+  writeProjectConfig(spoke.configPath, spokeConfig(spoke, remoteDir));
 }
 
 function runMode(spoke: Spoke, mode: string, extra: string[] = []) {
@@ -113,6 +134,14 @@ test("pull refuses a markered hub file: the local file is byte-identical, the pa
 
   assert.equal(readText(notePath(s, "K.md")), "k1 from hub\n", "the rest of the pull proceeds");
   assert.equal(readBase(s)["notes/K.md"], "k1 from hub\n", "the base of the rest advances");
+
+  // The same sync again, as JSON: the path is named by exactly one note, the
+  // pull side's, not once more by the push side that skips it too.
+  const again = runMode(s, "sync");
+  assert.deepEqual(again.conflictFiles, ["notes/H.md"]);
+  const pathNotes = again.notes.filter((note: string) => note.includes("notes/H.md"));
+  assert.equal(pathNotes.length, 1, JSON.stringify(again.notes));
+  assert.ok(pathNotes[0].startsWith("not pulled: notes/H.md"), pathNotes[0]);
 });
 
 test("pull reports the refusal in conflictFiles and a note, and writes no pre-apply snapshot for it", () => {
@@ -239,4 +268,98 @@ test("push skips a markered hub path whose local copy was deleted", () => {
   assert.equal(readHub(root, remoteDir, "notes/H.md"), THREE_MARKERS);
   assert.equal(hubCommitCount(root, remoteDir), commitsBefore);
   assert.equal(readBase(s)["notes/H.md"], baseBefore["notes/H.md"]);
+});
+
+const MARKERED = "<<<<<<< local\nmine\n=======\ntheirs\n>>>>>>> remote\n";
+
+function countOpeners(content: string | null): number {
+  return (content || "").split("\n").filter((line) => line.startsWith("<<<<<<< ")).length;
+}
+
+// A spoke whose local copy already equals the markered hub copy is exempt from
+// the pull refusal (there is nothing local to protect), so the markers sit in
+// both places. A local resolution of such a file is held back by push because
+// the hub copy still carries markers, so the stale-marker note must send the
+// operator to the hub copy rather than say only "edit the file".
+test("a local copy equal to the markered hub copy: no nesting, a hub-repair note, a local resolution is held back, convergence after the hub repair", () => {
+  const root = createSandbox("markered-hub-equal-local");
+  const remoteDir = initBareRemote(root);
+  const s = createSpoke(root, remoteDir, "spoke-s");
+  const t = createSpoke(root, remoteDir, "spoke-t");
+  writeText(notePath(s, "K.md"), "k\n");
+  assert.equal(runMode(s, "push").status, "applied");
+  hubWrites(root, remoteDir, { "notes/H.md": MARKERED });
+  writeText(notePath(s, "H.md"), MARKERED);
+  writeText(notePath(t, "H.md"), MARKERED);
+
+  const first = runMode(s, "sync");
+  const second = runMode(s, "sync");
+  runMode(t, "sync");
+  assert.equal(readText(notePath(s, "H.md")), MARKERED, "no nesting on further syncs");
+  assert.equal(readHub(root, remoteDir, "notes/H.md"), MARKERED, "the hub copy is untouched");
+  assert.equal(readBase(s)["notes/H.md"], MARKERED);
+  for (const run of [first, second]) {
+    const staleNotes = run.notes.filter((note: string) => note.includes("stale conflict markers in notes/H.md"));
+    assert.equal(staleNotes.length, 1, JSON.stringify(run.notes));
+    assert.ok(/hub copy/.test(staleNotes[0]) && /repair/.test(staleNotes[0]), `hub-repair wording: ${staleNotes[0]}`);
+    assert.ok(
+      /local resolution alone is not published/.test(staleNotes[0]),
+      `says a local resolution alone is not published: ${staleNotes[0]}`
+    );
+    assert.equal(staleNotes[0].includes("resolve by editing the file"), false, staleNotes[0]);
+  }
+
+  // A local resolution is held back by push and the hub keeps its markers.
+  writeText(notePath(t, "H.md"), "resolved by t\n");
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  const resolved = runMode(t, "sync");
+  assert.ok(resolved.conflictFiles.includes("notes/H.md"), JSON.stringify(resolved.conflictFiles));
+  assert.equal(readHub(root, remoteDir, "notes/H.md"), MARKERED, "the hub keeps its markers until repaired");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore);
+  assert.equal(readText(notePath(t, "H.md")), "resolved by t\n", "the local resolution stays local");
+
+  // After the hub repair both spokes converge, and the hub stays clean.
+  hubWrites(root, remoteDir, { "notes/H.md": "clean\n" });
+  runMode(s, "sync");
+  assert.equal(readText(notePath(s, "H.md")), "clean\n");
+  assert.equal(readBase(s)["notes/H.md"], "clean\n");
+  runMode(t, "sync");
+  assert.ok(countOpeners(readText(notePath(t, "H.md"))) <= 1, "at most one marker level locally");
+  assert.equal(readHub(root, remoteDir, "notes/H.md"), "clean\n", "the hub stays clean");
+});
+
+// The queued snapshot saw the hub copy clean; the hub became markered while
+// the spoke was offline. Replay must still not write over the markered copy,
+// whatever local-wins would otherwise decide.
+test("a queued edit replayed against a hub copy that turned markered while offline is skipped under local-wins", () => {
+  const root = createSandbox("markered-hub-queued-replay");
+  const remoteDir = initBareRemote(root);
+  const s = createSpoke(root, remoteDir, "spoke-s", "local-wins");
+  writeText(notePath(s, "H.md"), "b0\n");
+  assert.equal(runMode(s, "push").status, "applied");
+
+  goOffline(s);
+  writeText(notePath(s, "H.md"), "offline edit\n");
+  assert.equal(runMode(s, "push").status, "queued");
+  hubWrites(root, remoteDir, { "notes/H.md": MARKERED });
+  goOnline(s, remoteDir);
+
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  const preview = runMode(s, "push", ["--dry-run"]);
+  assert.deepEqual(preview.conflictFiles, ["notes/H.md"], "the dry run reports the same skip");
+  assert.equal(new StateStore(s.stateDir, s.name).listQueuedSnapshots().length, 1, "a dry run drains nothing");
+
+  const replay = runMode(s, "push");
+  assert.deepEqual(replay.conflictFiles, ["notes/H.md"]);
+  assert.equal(replay.appliedFiles.includes("notes/H.md"), false);
+  assert.equal(readHub(root, remoteDir, "notes/H.md"), MARKERED, "the hub copy is untouched");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "no commit may reach the hub");
+  assert.equal(readBase(s)["notes/H.md"], "b0\n", "the base entry stays");
+  assert.equal(new StateStore(s.stateDir, s.name).listQueuedSnapshots().length, 0, "the queue drained");
+  assert.equal(readText(notePath(s, "H.md")), "offline edit\n", "the local edit is kept");
+
+  const again = runMode(s, "push");
+  assert.deepEqual(again.conflictFiles, ["notes/H.md"], "reported again, never requeued");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore);
+  assert.equal(new StateStore(s.stateDir, s.name).listQueuedSnapshots().length, 0);
 });

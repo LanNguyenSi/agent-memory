@@ -236,10 +236,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
     ) {
       refusedPaths.push(remoteRelativePath);
       conflictFiles.push(remoteRelativePath);
-      notes.push(
-        `not pulled: ${remoteRelativePath}: the hub copy carries conflict markers and is not merged into the ` +
-          "local file, which is left unchanged; repair the hub copy (commit a clean version to the hub), then sync again"
-      );
+      notes.push(hubMarkersPullNote(remoteRelativePath));
       continue;
     }
 
@@ -368,10 +365,19 @@ async function performPull(config: PullConfig, options: PullOptions) {
     if (!hasConflictMarkers(readSnapshotValue(localMap, remoteRelativePath))) {
       continue;
     }
+    // A local copy equal to a hub copy that carries the same markers is exempt
+    // from the refusal above (there is nothing local to protect), but editing
+    // it is not enough: push holds a path whose hub copy carries markers
+    // back, so a local resolution alone never reaches the hub.
+    const hubCarriesSameMarkers =
+      readSnapshotValue(remoteMap, remoteRelativePath) === readSnapshotValue(localMap, remoteRelativePath);
     notes.push(
       isOwnerScopedPeerPath(resolvedSyncPathEntries, config.profile, remoteRelativePath)
         ? `stale conflict markers in ${remoteRelativePath}; the remote owns this file, fix it at the hub or restore --from-commit`
-        : `stale conflict markers in ${remoteRelativePath}; resolve by editing the file`
+        : hubCarriesSameMarkers
+          ? `stale conflict markers in ${remoteRelativePath}; the hub copy carries the same markers, so repair the ` +
+            "hub copy (commit a clean version to the hub), a local resolution alone is not published"
+          : `stale conflict markers in ${remoteRelativePath}; resolve by editing the file`
     );
   }
 
@@ -450,6 +456,16 @@ async function performPull(config: PullConfig, options: PullOptions) {
     snapshots,
     notes
   };
+}
+
+// The note for a path whose hub copy carries conflict markers and that a pull
+// therefore left alone. Exported so the combined sync run can tell which paths
+// the pull side already named (see src/commands/run.ts).
+function hubMarkersPullNote(remoteRelativePath: string): string {
+  return (
+    `not pulled: ${remoteRelativePath}: the hub copy carries conflict markers and is not merged into the ` +
+    "local file, which is left unchanged; repair the hub copy (commit a clean version to the hub), then sync again"
+  );
 }
 
 // The base to store after a pull, with `keptPaths` holding the entry they had
@@ -627,5 +643,6 @@ function readSnapshotValue(source: Record<string, string | null>, key: string): 
 }
 
 module.exports = {
+  hubMarkersPullNote,
   performPull
 };
