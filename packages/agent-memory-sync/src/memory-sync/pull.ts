@@ -155,6 +155,10 @@ async function performPull(config: PullConfig, options: PullOptions) {
   const conflictFiles: string[] = [];
   const skippedFiles: string[] = [];
   const protectedFiles: string[] = [];
+  // Paths whose hub copy carries conflict markers and that this pull
+  // therefore left alone; their base entries must not move (see the base
+  // write at the end of this function).
+  const refusedPaths: string[] = [];
   // Everything this pull would write or delete, assembled before any of it
   // is carried out. The plan exists as its own phase so the guard below can
   // refuse an implausible one, and so the pre-apply snapshots can be taken,
@@ -211,6 +215,33 @@ async function performPull(config: PullConfig, options: PullOptions) {
     // peer file to fix it from the other end. The machine's own
     // `<profile>.json` is exempt and keeps the existing 3-way rule below.
     const isOwnerScopedPeerFile = isOwnerScopedPeerPath(resolvedSyncPathEntries, config.profile, remoteRelativePath);
+
+    // A hub file that itself carries conflict markers is never merged into
+    // the local file, whichever strategy is configured: writing it, or a
+    // merge built on it, would copy damaged content over a local file that
+    // may be the only clean copy. The local file stays byte-identical (it is
+    // not in the plan, so it is not snapshotted either), the path is reported
+    // as a conflict and named in a note, and its base entry stays where it
+    // was so the same decision is reached again until the hub copy is
+    // repaired. A path whose local copy already equals the hub copy has
+    // nothing to protect and goes on to the stale-marker note below, and a
+    // path no sync path maps is skipped further down as before. An
+    // ownerScoped peer file is exempt: the remote owns it and the mirror
+    // rule takes it verbatim, flagged as a conflict.
+    if (
+      !isOwnerScopedPeerFile &&
+      localValue !== remoteValue &&
+      hasConflictMarkers(remoteValue) &&
+      mapRemotePathToLocalAbsolute(config, remoteRelativePath, resolvedSyncPathEntries)
+    ) {
+      refusedPaths.push(remoteRelativePath);
+      conflictFiles.push(remoteRelativePath);
+      notes.push(
+        `not pulled: ${remoteRelativePath}: the hub copy carries conflict markers and is not merged into the ` +
+          "local file, which is left unchanged; repair the hub copy (commit a clean version to the hub), then sync again"
+      );
+      continue;
+    }
 
     const mergeResult = isOwnerScopedPeerFile
       ? {
@@ -394,7 +425,14 @@ async function performPull(config: PullConfig, options: PullOptions) {
   // writeup. Left unfiltered, the next push's 3-way merge would see
   // base=<content>/local=null for that path and silently delete it from
   // the remote as a false "local wins".
-  stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, remoteMap));
+  //
+  // A path pull refused (its hub copy carries conflict markers) keeps the
+  // base entry it had, or none: the local file did not converge on the hub
+  // content, so recording that content as the base would make the next
+  // three-way merge read the damaged hub copy as "unchanged".
+  stateStore.replaceBaseSnapshots(
+    keepPreviousBaseEntries(filterUnmappedBaseMap(config, remoteMap), baseMap, refusedPaths)
+  );
   stateStore.saveState(state);
   stateStore.clearTemp(PULL_TEMP_LABEL);
 
@@ -412,6 +450,24 @@ async function performPull(config: PullConfig, options: PullOptions) {
     snapshots,
     notes
   };
+}
+
+// The base to store after a pull, with `keptPaths` holding the entry they had
+// before this run (or no entry if they had none) instead of the hub content.
+function keepPreviousBaseEntries(
+  nextBase: Record<string, string | null>,
+  previousBase: Record<string, string | null>,
+  keptPaths: string[]
+): Record<string, string | null> {
+  const result = { ...nextBase };
+  for (const key of keptPaths) {
+    if (Object.prototype.hasOwnProperty.call(previousBase, key)) {
+      result[key] = previousBase[key];
+    } else {
+      delete result[key];
+    }
+  }
+  return result;
 }
 
 interface PullPlanEntry {

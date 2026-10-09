@@ -493,3 +493,66 @@ test("under local-wins a replayed edit of an adopted-deleted path survives the n
   assert.equal(readHub(root, remoteDir, "notes/T0.md"), "t0 edited offline\n", "the replayed edit stays on the hub");
   assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "the plain push must change nothing");
 });
+
+// Under inline-markers the same shape ends differently: the replayed edit of
+// a path the hub deleted is a conflict, so it is held back. The adoption has
+// already removed the local copy and the base entry and drained nothing but
+// the queue, so the edit survives only in the pre-apply snapshot the adoption
+// took. The held-back note names that snapshot and the restore command, and
+// that command brings the edit back.
+test("under inline-markers a replayed edit of an adopted-deleted path is held back and survives only in the pre-apply snapshot", () => {
+  const root = createSandbox("push-adopted-replay-inline-markers");
+  const remoteDir = initBareRemote(root);
+  const s = createSpoke(root, remoteDir, "spoke-q");
+  const peer = createSpoke(root, remoteDir, "spoke-peer");
+  for (let index = 0; index < 10; index += 1) {
+    writeText(notePath(s, `T${index}.md`), `t${index}\n`);
+  }
+  assert.equal(runMode(s, "push").status, "applied");
+  runMode(peer, "pull");
+
+  goOffline(s);
+  writeText(notePath(s, "T0.md"), "t0 edited offline\n");
+  assert.equal(runMode(s, "push").status, "queued");
+
+  for (let index = 0; index < 5; index += 1) {
+    rmSync(notePath(peer, `T${index}.md`));
+  }
+  assert.equal(runMode(peer, "push", ["--allow-mass-delete"]).status, "applied");
+
+  goOnline(s, remoteDir);
+  const commitsBefore = hubCommitCount(root, remoteDir);
+  const accepted = runMode(s, "push", ["--accept-mass-delete"]);
+  assert.equal(accepted.status, "applied");
+  assert.deepEqual(accepted.conflictFiles, ["notes/T0.md"], "the replayed edit is held back");
+  assert.equal(readHub(root, remoteDir, "notes/T0.md"), null, "the hub keeps its deletion");
+  assert.equal(hubCommitCount(root, remoteDir), commitsBefore, "the adoption publishes nothing");
+  assert.equal(existsSync(notePath(s, "T0.md")), false, "the adoption removed the local copy");
+  assert.equal(Object.prototype.hasOwnProperty.call(readBase(s), "notes/T0.md"), false, "the base is stripped");
+  assert.equal(new StateStore(s.stateDir, s.name).listQueuedSnapshots().length, 0, "the queue drained");
+
+  assert.equal(accepted.snapshots.length, 1);
+  const snapshotId = accepted.snapshots[0];
+  const note = accepted.notes.find((entry: string) => entry.includes("notes/T0.md"));
+  assert.ok(note, JSON.stringify(accepted.notes));
+  assert.ok(note.includes(snapshotId), `the note names the snapshot id: ${note}`);
+  assert.ok(
+    note.includes(`agent-memory-sync restore spoke-q notes --from-snapshot ${snapshotId} --yes`),
+    `the note carries the restore command: ${note}`
+  );
+
+  // The command in the note recovers the queued edit.
+  runCli([
+    "restore",
+    "spoke-q",
+    "notes",
+    "--config",
+    s.configPath,
+    "--from-snapshot",
+    snapshotId,
+    "--yes",
+    "--output",
+    "json"
+  ]);
+  assert.equal(readText(notePath(s, "T0.md")), "t0 edited offline\n");
+});

@@ -3,6 +3,7 @@ const {
   collectLocalSyncFiles,
   filterOwnerScopedBaseMap,
   filterUnmappedBaseMap,
+  resolveSyncPathEntries,
   toRepositoryRelativePath
 } = require("./config");
 const {
@@ -15,6 +16,7 @@ const { GitClient } = require("./git-client");
 const { acceptRemoteDeletions, findRemoteDeletionsToAccept } = require("./accept-remote-deletions");
 const { assertNoMassDelete, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
+const { listPreApplySnapshots } = require("./pre-apply-snapshot");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore, DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS } = require("./state-store");
 
@@ -303,7 +305,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     const mergedFiles: string[] = [];
     const conflictFiles: string[] = [];
     const deletedFiles: string[] = [];
-    const heldBackFiles: string[] = [];
+    const heldBack: HeldBackPath[] = [];
 
     // The base moves forward across the snapshots applied in this run: a
     // queued snapshot is merged against the base captured when it was
@@ -346,7 +348,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
-      heldBackFiles.push(...result.heldBackFiles);
+      heldBack.push(...result.heldBack);
       deletedFiles.push(...stagedDeletions.claimed);
       // The index as measured, and nothing else, is what gets committed
       // (GitClient.commitStaged). A commit that staged again on its way in
@@ -450,7 +452,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
         queuedSnapshotId,
         notes: [
           ...(queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []),
-          ...heldBackNotes(heldBackFiles)
+          ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedBasePaths, snapshotIds: preApplySnapshots })
         ]
       },
       ownerScopedWarnings
@@ -725,7 +727,7 @@ function previewPush(
     const mergedFiles: string[] = [];
     const conflictFiles: string[] = [];
     const deletedFiles: string[] = [];
-    const heldBackFiles: string[] = [];
+    const heldBack: HeldBackPath[] = [];
 
     // Same base chaining as the real run, so the preview's plan for the
     // current snapshot matches what the real run will do after the queued
@@ -748,7 +750,7 @@ function previewPush(
       appliedFiles.push(...result.appliedFiles);
       mergedFiles.push(...result.mergedFiles);
       conflictFiles.push(...result.conflictFiles);
-      heldBackFiles.push(...result.heldBackFiles);
+      heldBack.push(...result.heldBack);
       deletedFiles.push(...stagedDeletions.claimed);
       // Committed even though nothing here is ever pushed: this working copy
       // is a throwaway under stateDir/tmp/push-preview, and the staged
@@ -780,7 +782,10 @@ function previewPush(
       deletedFiles: unique([...deletedFiles, ...adoptedDeletions]),
       snapshots: [],
       queuedSnapshotId: null,
-      notes: [...notes, ...heldBackNotes(heldBackFiles)]
+      notes: [
+        ...notes,
+        ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedDeletions, snapshotIds: [] })
+      ]
     };
   } catch (error) {
     // A refused plan is a real answer about the plan, not a symptom of an
@@ -823,7 +828,7 @@ function applySnapshotToWorkingCopy(
   const appliedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
-  const heldBackFiles: string[] = [];
+  const heldBack: HeldBackPath[] = [];
 
   for (const remoteRelativePath of Array.from(targetPaths).sort()) {
     const repositoryPath = toRepositoryRelativePath(config, remoteRelativePath);
@@ -840,6 +845,20 @@ function applySnapshotToWorkingCopy(
       continue;
     }
 
+    // A hub file that itself carries conflict markers is never merged into,
+    // whatever the local copy or the strategy says: the path is skipped, the
+    // hub keeps its content, and the path is reported as a conflict. Its base
+    // entry stays where it was (nextBaseAfterPush keeps the previous entry
+    // for a path whose local copy differs from the hub), so the same decision
+    // is reached again on every later push until the hub copy is repaired.
+    // A local copy identical to the hub copy never gets here (the unchanged
+    // check above) and has nothing to publish.
+    if (hasConflictMarkers(remoteContent)) {
+      conflictFiles.push(remoteRelativePath);
+      heldBack.push({ path: remoteRelativePath, kind: "hub-markers" });
+      continue;
+    }
+
     // A conflict is resolved by a person in the local file, never on the hub:
     // a path whose local content already carries conflict markers, or whose
     // merge could only produce a marker-carrying result, is held back. The hub
@@ -851,15 +870,19 @@ function applySnapshotToWorkingCopy(
     // to marker-free content is a resolution, not a conflict, and goes through.
     if (mergeResult.conflict || hasConflictMarkers(localContent)) {
       conflictFiles.push(remoteRelativePath);
-      heldBackFiles.push(remoteRelativePath);
+      heldBack.push({
+        path: remoteRelativePath,
+        kind: hasConflictMarkers(localContent)
+          ? "local-markers"
+          : localContent === null
+            ? "local-deletion"
+            : "merge-conflict"
+      });
       continue;
     }
 
     if (mergeResult.status === "merged") {
       mergedFiles.push(remoteRelativePath);
-    }
-    if (mergeResult.conflict) {
-      conflictFiles.push(remoteRelativePath);
     }
 
     if (mergeResult.content === null) {
@@ -884,17 +907,101 @@ function applySnapshotToWorkingCopy(
     appliedFiles,
     mergedFiles,
     conflictFiles,
-    heldBackFiles
+    heldBack
   };
 }
 
+// Why push held a path back; each reason has its own recovery step.
+type HeldBackKind = "hub-markers" | "local-markers" | "local-deletion" | "merge-conflict";
+
+interface HeldBackPath {
+  path: string;
+  kind: HeldBackKind;
+}
+
 // One note per path push held back (see applySnapshotToWorkingCopy), so the
-// summary line names the file instead of only counting it.
-function heldBackNotes(paths: string[]): string[] {
-  return unique(paths).map(
-    (remoteRelativePath) =>
-      `not published: ${remoteRelativePath} carries or would produce conflict markers; the hub keeps its ` +
-      `current content. Resolve the local file, then push again`
+// summary line names the file instead of only counting it, and says what to
+// do about it: the step differs by reason, and a push-only run never writes
+// the hub version into the local file, so "resolve the local file" alone
+// would be advice that cannot work.
+//
+// A path whose local copy is gone because --accept-mass-delete adopted the
+// hub's deletion (adoptedPaths) is held back with its queued edit surviving
+// only in the pre-apply snapshot that adoption took; that note names the
+// snapshot id and the restore command.
+function heldBackNotes(
+  config: { profile: string; stateDir: string; syncPaths: PushConfig["syncPaths"] },
+  held: HeldBackPath[],
+  adoption: { adoptedPaths: string[]; snapshotIds: string[] }
+): string[] {
+  // Later snapshots of one run describe the path's current state best.
+  const kindByPath = new Map<string, HeldBackKind>();
+  for (const entry of held) {
+    kindByPath.set(entry.path, entry.kind);
+  }
+
+  return Array.from(kindByPath.keys())
+    .sort()
+    .map((remoteRelativePath) => {
+      const kind = kindByPath.get(remoteRelativePath) as HeldBackKind;
+      const prefix = `not published: ${remoteRelativePath}`;
+      if (kind === "hub-markers") {
+        return (
+          `${prefix} was left as it is because the hub copy carries conflict markers; the hub keeps its current ` +
+          "content. Repair the hub copy (commit a clean version to the hub), then sync again"
+        );
+      }
+      if (adoption.adoptedPaths.includes(remoteRelativePath)) {
+        return adoptedHeldBackNote(config, remoteRelativePath, adoption.snapshotIds);
+      }
+      if (kind === "local-markers") {
+        return (
+          `${prefix} carries conflict markers in the local file; the hub keeps its current content. ` +
+          "Resolve the conflict markers in the local file, then push again"
+        );
+      }
+      if (kind === "local-deletion") {
+        return (
+          `${prefix} was deleted locally but the hub version changed; the hub keeps its current content. ` +
+          "The local deletion was not published because the hub version changed; pull to see the hub version, " +
+          "then delete again or keep it"
+        );
+      }
+      return (
+        `${prefix} conflicts with the hub version; the hub keeps its current content. ` +
+        "Run pull or sync to bring the hub version into the local file, resolve the conflict markers it writes, " +
+        "then push again"
+      );
+    });
+}
+
+function adoptedHeldBackNote(
+  config: { profile: string; stateDir: string; syncPaths: PushConfig["syncPaths"] },
+  remoteRelativePath: string,
+  snapshotIds: string[]
+): string {
+  const destinations: string[] = resolveSyncPathEntries(config)
+    .map((entry: { destination: string }) => entry.destination)
+    .sort((left: string, right: string) => right.length - left.length);
+  const destination =
+    destinations.find(
+      (candidate) => remoteRelativePath === candidate || remoteRelativePath.startsWith(`${candidate}/`)
+    ) || "<destination>";
+  const own = snapshotIds.filter((id) =>
+    listPreApplySnapshots(config.stateDir, destination).some((entry: { id: string }) => entry.id === id)
+  );
+  const ids = own.length > 0 ? own : snapshotIds;
+  const id = ids.length > 0 ? ids[ids.length - 1] : "<id>";
+  // A dry run takes no snapshot, so it has no id to name yet.
+  const survives =
+    ids.length > 0
+      ? `The edit survives only in the pre-apply snapshot ${id}`
+      : "The edit would survive only in the pre-apply snapshot the real run takes (its id is reported under snapshots)";
+  return (
+    `not published: ${remoteRelativePath} has no local copy because --accept-mass-delete adopted the hub's ` +
+    "deletion of it, and the edit queued for it conflicts with that deletion; the hub keeps its current content. " +
+    `${survives}; restore it with: ` +
+    `agent-memory-sync restore ${config.profile} ${destination} --from-snapshot ${id} --yes`
   );
 }
 
