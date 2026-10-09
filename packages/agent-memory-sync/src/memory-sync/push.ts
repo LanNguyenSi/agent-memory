@@ -454,7 +454,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
         queuedSnapshotId,
         notes: [
           ...(queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []),
-          ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedBasePaths, snapshotIds: preApplySnapshots })
+          ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedBasePaths, snapshotIds: preApplySnapshots, dryRun: false })
         ]
       },
       ownerScopedWarnings
@@ -786,7 +786,7 @@ function previewPush(
       queuedSnapshotId: null,
       notes: [
         ...notes,
-        ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedDeletions, snapshotIds: [] })
+        ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedDeletions, snapshotIds: [], dryRun: true })
       ]
     };
   } catch (error) {
@@ -934,7 +934,7 @@ interface HeldBackPath {
 function heldBackNotes(
   config: PushConfig,
   held: HeldBackPath[],
-  adoption: { adoptedPaths: string[]; snapshotIds: string[] }
+  adoption: { adoptedPaths: string[]; snapshotIds: string[]; dryRun: boolean }
 ): string[] {
   // Later snapshots of one run describe the path's current state best.
   const kindByPath = new Map<string, HeldBackKind>();
@@ -951,7 +951,7 @@ function heldBackNotes(
         return hubMarkersPushNote(remoteRelativePath);
       }
       if (adoption.adoptedPaths.includes(remoteRelativePath)) {
-        return adoptedHeldBackNote(config, remoteRelativePath, adoption.snapshotIds);
+        return adoptedHeldBackNote(config, remoteRelativePath, adoption.snapshotIds, adoption.dryRun);
       }
       if (kind === "local-markers") {
         return (
@@ -989,7 +989,12 @@ function hubMarkersPushNote(remoteRelativePath: string): string {
 // snapshot would also bring back every other file the adoption removed, and
 // the next push would publish those to the hub again, so it is named only as a
 // fallback that says so, and never with the confirmation flag.
-function adoptedHeldBackNote(config: PushConfig, remoteRelativePath: string, snapshotIds: string[]): string {
+function adoptedHeldBackNote(
+  config: PushConfig,
+  remoteRelativePath: string,
+  snapshotIds: string[],
+  dryRun: boolean
+): string {
   const resolvedEntries = resolveSyncPathEntries(config);
   const destinations: string[] = resolvedEntries
     .map((entry: { destination: string }) => entry.destination)
@@ -1007,6 +1012,17 @@ function adoptedHeldBackNote(config: PushConfig, remoteRelativePath: string, sna
     )
   );
   const id = holding.length > 0 ? holding[holding.length - 1] : null;
+  // A real run whose snapshots hold no copy of the path (it had no local copy
+  // when the adoption ran) has nothing to copy back: the queue has drained,
+  // so the edit is gone, and the note must not name a file or a restore.
+  if (!dryRun && id === null) {
+    return (
+      `not published: ${remoteRelativePath} has no local copy because --accept-mass-delete adopted the hub's ` +
+      "deletion of it, and the edit queued for it conflicts with that deletion; the hub keeps its current content. " +
+      `The adoption snapshot holds no copy of ${remoteRelativePath}, because the path had no local copy when the ` +
+      "adoption ran, so the queued edit is not recoverable from it"
+    );
+  }
   const snapshotFile = path.join(
     config.stateDir,
     "snapshots",
