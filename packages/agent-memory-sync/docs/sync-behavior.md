@@ -135,7 +135,11 @@ on disk but is not a regular file the sync collects`, naming the path, and
   [exit-code table](../README.md#exit-codes)). In both cases nothing is
   written or removed in any destination and the base snapshot does not move.
   Running the pull again takes a fresh snapshot; if it stops again at the
-  same path, move that path aside.
+  same path, move that path aside. A write or removal that fails after that
+  check (a permission error, say) stops the pull with `13` and a message that
+  lists the paths already applied and the snapshot generation holding their
+  previous content; the base snapshot does not move and running the pull
+  again applies the rest.
 - **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
   thresholds refuse. It does not override an untrustworthy working copy.
 - **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the
@@ -149,7 +153,9 @@ on disk but is not a regular file the sync collects`, naming the path, and
   hold a stored copy of every file about to be removed; when it does not,
   the run exits `12` with no file removed and the base snapshot unmoved (see
   the [exit-code table](../README.md#exit-codes)), and running it again takes
-  a fresh snapshot. It cannot be combined
+  a fresh snapshot. A removal that fails part way (exit `13`) lists the files
+  already removed and the snapshot generation that holds them, leaves the base
+  snapshot unmoved, and a repeated run removes the rest. It cannot be combined
   with `--allow-mass-delete` (usage error, exit `2`). It is a one-shot
   decision about one observed remote state, which is why `watch` does not
   take it.

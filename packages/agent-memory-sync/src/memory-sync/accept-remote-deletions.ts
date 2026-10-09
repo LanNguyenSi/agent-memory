@@ -31,7 +31,7 @@
 const { existsSync, rmSync } = require("node:fs");
 const { mapRemotePathToLocalAbsolute, resolveSyncPathEntries } = require("./config");
 const { assertOverridableCheckout } = require("./guards");
-const { AdoptionSnapshotNotIntactError } = require("../errors");
+const { AdoptionSnapshotNotIntactError, PartialApplyError } = require("../errors");
 const { findPreApplySnapshotProblem, writePreApplySnapshot } = require("./pre-apply-snapshot");
 
 interface AcceptConfig {
@@ -186,9 +186,24 @@ function acceptRemoteDeletions(input: {
     }
   }
 
+  // A removal that throws part way (EACCES, a directory where a file was
+  // expected) leaves the earlier ones done. The base snapshot has not moved,
+  // so the same push run again removes the rest; the error names what is
+  // already gone and the generations that hold it.
   const deletedPaths: string[] = [];
   for (const { lostPath, absolutePath } of toDelete) {
-    rmSync(absolutePath, { force: true });
+    try {
+      rmSync(absolutePath, { force: true });
+    } catch (error) {
+      throw new PartialApplyError(
+        `--accept-mass-delete stopped part way: removing ${lostPath} failed (${(error as Error).message}). ` +
+          `Already removed (${deletedPaths.length} of ${toDelete.length}): ${listForMessage(deletedPaths)}. ` +
+          `Their previous content is in the pre-apply snapshot${snapshots.length === 1 ? "" : "s"} ` +
+          `${lost.destinations.map((destination, index) => `'${destination}' ${snapshots[index]}`).join(", ")} ` +
+          `(restore <profile> <destination> --from-snapshot <id>). The base snapshot was not moved; ` +
+          "fix the cause and run the push again to remove the rest"
+      );
+    }
     deletedPaths.push(lostPath);
   }
 
@@ -212,6 +227,10 @@ function acceptRemoteDeletions(input: {
   }
 
   return { deletedPaths, snapshots, baseMap, localMap };
+}
+
+function listForMessage(paths: string[]): string {
+  return paths.length === 0 ? "none" : paths.join(", ");
 }
 
 // Longest destination first, so the most specific configured destination

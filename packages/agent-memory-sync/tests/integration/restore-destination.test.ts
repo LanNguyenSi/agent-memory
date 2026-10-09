@@ -232,6 +232,49 @@ test("restore --from-snapshot takes an explicit generation id", () => {
   assert.equal(readText(path.join(workspaceRoot, seeded[1])), "entry 1\n");
 });
 
+test("restore --from-snapshot of the oldest generation survives the rotation its own pre-apply copy triggers", () => {
+  const root = createSandbox("restore-oldest-generation");
+  const remoteDir = initBareRemote(root);
+  const workspaceRoot = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+
+  writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
+  const seeded = seedLogFiles(workspaceRoot, 6);
+  // Two generations is the whole retention, so the destination is full when
+  // the restore takes its own pre-apply copy.
+  writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir, { snapshotGenerations: 2 }));
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  peerDeletes(remoteDir, root, "peer-oldest-1", [seeded[0].replace(/\\/g, "/")]);
+  runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  peerDeletes(remoteDir, root, "peer-oldest-2", [seeded[1].replace(/\\/g, "/")]);
+  runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
+
+  const snapshotDir = path.join(workspaceRoot, ".agent-memory-sync", "default", "snapshots", "logs");
+  const generations = fs.readdirSync(snapshotDir).sort();
+  assert.equal(generations.length, 2);
+  const oldest = generations[0];
+
+  const restored = runCli([
+    "restore",
+    "default",
+    "logs",
+    "--config",
+    configPath,
+    "--from-snapshot",
+    oldest,
+    "--yes",
+    "--output",
+    "json"
+  ]);
+  assert.equal(restored.status, 0, `stderr: ${restored.stderr}`);
+  assert.equal(JSON.parse(restored.stdout).source.snapshot, oldest);
+  assert.equal(readText(path.join(workspaceRoot, seeded[0])), "entry 0\n");
+  assert.equal(readText(path.join(workspaceRoot, seeded[1])), "entry 1\n");
+  // The restore's own copy of what it replaced is still taken, and retention holds.
+  assert.equal(fs.readdirSync(snapshotDir).length, 2);
+});
+
 test("restore replaces the destination rather than merging into it", () => {
   const root = createSandbox("restore-exact");
   const remoteDir = initBareRemote(root);

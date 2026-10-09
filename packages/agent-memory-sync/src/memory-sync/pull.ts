@@ -8,7 +8,7 @@ const {
   ownerMismatchNote,
   resolveSyncPathEntries
 } = require("./config");
-const { CliError, AdoptionSnapshotNotIntactError } = require("../errors");
+const { CliError, AdoptionSnapshotNotIntactError, PartialApplyError } = require("../errors");
 const { GitClient } = require("./git-client");
 const { assertNoRemoteMassDelete, assertOverridableCheckout, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
@@ -435,14 +435,30 @@ async function performPull(config: PullConfig, options: PullOptions) {
     );
   }
 
+  // A write or removal that throws part way (EACCES, a directory where a file
+  // was expected) leaves the earlier ones applied. The base snapshot has not
+  // moved, so the same pull run again applies the rest; the error names what
+  // is already applied and the generations that hold the previous content.
+  const applied: string[] = [];
   for (const entry of plan) {
-    if (entry.content === null) {
-      rmSync(entry.localAbsolutePath, { force: true });
-      continue;
+    try {
+      if (entry.content === null) {
+        rmSync(entry.localAbsolutePath, { force: true });
+      } else {
+        mkdirSync(path.dirname(entry.localAbsolutePath), { recursive: true });
+        writeFileSync(entry.localAbsolutePath, entry.content, "utf8");
+      }
+    } catch (error) {
+      throw new PartialApplyError(
+        `pull stopped part way: ${entry.remoteRelativePath} failed (${(error as Error).message}). ` +
+          `Already applied (${applied.length} of ${plan.length}): ${applied.length === 0 ? "none" : applied.join(", ")}. ` +
+          `Their previous content is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
+          `${writtenSnapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ")} ` +
+          `(restore ${config.profile} <destination> --from-snapshot <id>). The base snapshot was not moved; ` +
+          "fix the cause and run the pull again to apply the rest"
+      );
     }
-
-    mkdirSync(path.dirname(entry.localAbsolutePath), { recursive: true });
-    writeFileSync(entry.localAbsolutePath, entry.content, "utf8");
+    applied.push(entry.remoteRelativePath);
   }
 
   const remoteHeadAfter = workingCopy.remoteHead ? gitClient.revParseHead(workingCopy.repoDir) : null;

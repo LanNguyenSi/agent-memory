@@ -418,10 +418,17 @@ async function restoreDestination(
     // "latest" never means the snapshot this very command is about to take.
     const stored = readPreApplySnapshot(runConfig.stateDir, mode.destination, mode.snapshot);
     resolvedSha = stored.id;
-    sourceFiles = stored.files.map((file: { remoteRelativePath: string; storedPath: string }) => ({
-      remoteRelativePath: file.remoteRelativePath,
-      read: () => readFileSync(file.storedPath)
-    }));
+    // The bytes are read now, not when the write loop reaches them: the
+    // pre-apply copy below rotates the destination's generations, and with a
+    // full destination that drops the oldest other one, which is this source
+    // when an operator restores the oldest generation. Reading first also
+    // keeps retention at exactly the configured number of generations, which
+    // pinning the source against rotation would not. A source file that is
+    // missing fails here, before anything is written.
+    sourceFiles = stored.files.map((file: { remoteRelativePath: string; storedPath: string }) => {
+      const bytes = readFileSync(file.storedPath);
+      return { remoteRelativePath: file.remoteRelativePath, read: () => bytes };
+    });
   }
 
   const sourcePaths = new Set(sourceFiles.map((file) => file.remoteRelativePath));
