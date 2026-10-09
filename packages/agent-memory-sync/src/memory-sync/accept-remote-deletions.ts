@@ -31,7 +31,7 @@
 const { existsSync, rmSync } = require("node:fs");
 const { mapRemotePathToLocalAbsolute, resolveSyncPathEntries } = require("./config");
 const { assertOverridableCheckout } = require("./guards");
-const { CliError } = require("../errors");
+const { AdoptionSnapshotNotIntactError } = require("../errors");
 const { findPreApplySnapshotProblem, writePreApplySnapshot } = require("./pre-apply-snapshot");
 
 interface AcceptConfig {
@@ -159,10 +159,27 @@ function acceptRemoteDeletions(input: {
     });
     snapshots.push(written.id);
   }
+  // The paths this adoption will remove: every lost path that exists on disk
+  // now. That is decided after the snapshots are written, not from the
+  // localFiles collected before the fetch, because a lost path that came back
+  // in between (recreated, or restored by hand) is on disk without being in
+  // any snapshot, and removing it would leave it nowhere. Each destination's
+  // snapshot must hold a stored copy of every one of its share, and only
+  // paths that pass are removed.
+  const toDelete: Array<{ lostPath: string; absolutePath: string }> = [];
+  for (const lostPath of lostPaths) {
+    const absolutePath = mapRemotePathToLocalAbsolute(input.config, lostPath, resolvedEntries);
+    if (absolutePath && existsSync(absolutePath)) {
+      toDelete.push({ lostPath, absolutePath });
+    }
+  }
   for (const [index, destination] of lost.destinations.entries()) {
-    const problem = findPreApplySnapshotProblem(input.config.stateDir, destination, snapshots[index]);
+    const expectedFiles = toDelete
+      .map((entry) => entry.lostPath)
+      .filter((lostPath) => destinationOf(destinations, lostPath) === destination);
+    const problem = findPreApplySnapshotProblem(input.config.stateDir, destination, snapshots[index], expectedFiles);
     if (problem) {
-      throw new CliError(
+      throw new AdoptionSnapshotNotIntactError(
         `--accept-mass-delete stopped: the pre-apply snapshot for '${destination}' is not intact (${problem}). ` +
           "No local file was removed and the base snapshot was not moved; run the push again"
       );
@@ -170,11 +187,7 @@ function acceptRemoteDeletions(input: {
   }
 
   const deletedPaths: string[] = [];
-  for (const lostPath of lostPaths) {
-    const absolutePath = mapRemotePathToLocalAbsolute(input.config, lostPath, resolvedEntries);
-    if (!absolutePath || !existsSync(absolutePath)) {
-      continue;
-    }
+  for (const { lostPath, absolutePath } of toDelete) {
     rmSync(absolutePath, { force: true });
     deletedPaths.push(lostPath);
   }

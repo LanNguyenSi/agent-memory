@@ -45,26 +45,43 @@ function loadAcceptWith(wrapWrite: ((real: (input: unknown) => { id: string; dir
   }
 }
 
-function setup(name: string) {
+interface SetupOptions {
+  destinations?: string[];
+  // Indexes of destination "notes" files that exist on disk but are left out
+  // of the collected localFiles, as a file that came back after the
+  // collection would be.
+  uncollected?: number[];
+}
+
+function setup(name: string, options: SetupOptions = {}) {
   const root = sandbox(name);
   const workspace = path.join(root, "workspace");
   const stateDir = path.join(root, "state");
+  const destinations = options.destinations || ["notes"];
+  const uncollected = new Set(options.uncollected || []);
   const baseMap: Record<string, string | null> = {};
   const localMap: Record<string, string> = {};
   const localFiles: Array<{ remoteRelativePath: string; absolutePath: string }> = [];
-  for (let index = 0; index < 10; index += 1) {
-    const remoteRelativePath = `notes/T${index}.md`;
-    const absolutePath = path.join(workspace, remoteRelativePath);
-    mkdirSync(path.dirname(absolutePath), { recursive: true });
-    writeFileSync(absolutePath, `t${index}\n`, "utf8");
-    baseMap[remoteRelativePath] = `t${index}\n`;
-    localMap[remoteRelativePath] = `t${index}\n`;
-    localFiles.push({ remoteRelativePath, absolutePath });
-  }
-  // The hub dropped the first five.
   const remoteMap: Record<string, string | null> = {};
-  for (let index = 5; index < 10; index += 1) {
-    remoteMap[`notes/T${index}.md`] = `t${index}\n`;
+  const filesByDestination: Record<string, string[]> = {};
+  for (const destination of destinations) {
+    filesByDestination[destination] = [];
+    for (let index = 0; index < 10; index += 1) {
+      const remoteRelativePath = `${destination}/T${index}.md`;
+      const absolutePath = path.join(workspace, remoteRelativePath);
+      mkdirSync(path.dirname(absolutePath), { recursive: true });
+      writeFileSync(absolutePath, `t${index}\n`, "utf8");
+      baseMap[remoteRelativePath] = `t${index}\n`;
+      localMap[remoteRelativePath] = `t${index}\n`;
+      filesByDestination[destination].push(absolutePath);
+      if (!(destination === "notes" && uncollected.has(index))) {
+        localFiles.push({ remoteRelativePath, absolutePath });
+      }
+      // The hub dropped the first five of each destination.
+      if (index >= 5) {
+        remoteMap[remoteRelativePath] = `t${index}\n`;
+      }
+    }
   }
 
   let stored: Record<string, string | null> = { ...baseMap };
@@ -81,7 +98,11 @@ function setup(name: string) {
     rootDir: workspace,
     repositorySubdir: "shared",
     profile: "unit",
-    syncPaths: [{ source: path.join(workspace, "notes"), destination: "notes", kind: "directory" }]
+    syncPaths: destinations.map((destination) => ({
+      source: path.join(workspace, destination),
+      destination,
+      kind: "directory"
+    }))
   };
 
   return {
@@ -96,7 +117,7 @@ function setup(name: string) {
         remoteMap,
         remoteHead: "abc123"
       }) as { deletedPaths: string[]; snapshots: string[] },
-    localFile: (index: number) => localFiles[index].absolutePath,
+    localFile: (index: number, destinationIndex = 0) => filesByDestination[destinations[destinationIndex]][index],
     baseReplaced: () => replaced
   };
 }
@@ -129,7 +150,11 @@ test("an adoption whose snapshot is gone after rotation deletes nothing and repo
 
   assert.throws(
     () => ctx.run(accept),
-    (error: Error) => /pre-apply snapshot/.test(error.message) && /No local file was removed/.test(error.message)
+    (error: Error & { exitCode?: number }) =>
+      /pre-apply snapshot/.test(error.message) &&
+      /No local file was removed/.test(error.message) &&
+      error.exitCode === 12 &&
+      error.name === "AdoptionSnapshotNotIntactError"
   );
 
   for (let index = 0; index < 10; index += 1) {
@@ -151,4 +176,48 @@ test("an adoption whose snapshot lost a stored file deletes nothing", () => {
   for (let index = 0; index < 10; index += 1) {
     assert.equal(existsSync(ctx.localFile(index)), true, `T${index}.md is still on disk`);
   }
+});
+
+test("an adoption deletes nothing in any destination when only a later destination's snapshot is gone", () => {
+  // The adoption walks destinations in sorted order, so "notes" is the second.
+  const ctx = setup("two-destinations", { destinations: ["archive", "notes"] });
+  // Only the second destination's snapshot disappears; the first stays intact.
+  const accept = loadAcceptWith((real) => (input: unknown) => {
+    const written = real(input);
+    if ((input as { destination: string }).destination === "notes") {
+      rmSync(written.dir, { recursive: true, force: true });
+    }
+    return written;
+  });
+
+  assert.throws(
+    () => ctx.run(accept),
+    (error: Error & { exitCode?: number }) => /'notes'/.test(error.message) && error.exitCode === 12
+  );
+
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(existsSync(ctx.localFile(index, 0)), true, `archive/T${index}.md is still on disk`);
+    assert.equal(existsSync(ctx.localFile(index, 1)), true, `notes/T${index}.md is still on disk`);
+  }
+  assert.equal(ctx.baseReplaced(), 0, "the base snapshot was not moved");
+});
+
+test("an adoption deletes nothing when a lost path on disk is not in the snapshot", () => {
+  // T1 is on disk but was not among the files collected before the fetch, so
+  // the snapshot never copied it; removing it would leave it nowhere.
+  const ctx = setup("uncollected", { uncollected: [1] });
+  const accept = loadAcceptWith(null);
+
+  assert.throws(
+    () => ctx.run(accept),
+    (error: Error & { exitCode?: number }) =>
+      /does not list notes\/T1\.md/.test(error.message) &&
+      /No local file was removed/.test(error.message) &&
+      error.exitCode === 12
+  );
+
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(existsSync(ctx.localFile(index)), true, `T${index}.md is still on disk`);
+  }
+  assert.equal(ctx.baseReplaced(), 0, "the base snapshot was not moved");
 });

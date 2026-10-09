@@ -165,6 +165,21 @@ class ConfigKeyNotSetError extends CliError {
   }
 }
 
+// Thrown when `run --accept-mass-delete` would remove local files but a
+// pre-apply snapshot that must hold their copy is not intact (missing, rotated
+// away, or without a stored copy of a file about to be removed;
+// src/memory-sync/accept-remote-deletions.ts). Exit code 12, its own code:
+// the run stopped before removing anything and before moving the base
+// snapshot, so the same invocation can simply be repeated. Not 1, which the
+// exit-code table reserves for commander-level usage errors, and not 7, which
+// means the fetched working copy cannot be trusted, a different condition.
+class AdoptionSnapshotNotIntactError extends CliError {
+  constructor(message: string, exitCode = 12) {
+    super(message, exitCode);
+    this.name = "AdoptionSnapshotNotIntactError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -187,6 +202,7 @@ module.exports = {
   StateDirLockedError,
   RestoreSourceNotFoundError,
   ConfigKeyNotSetError,
+  AdoptionSnapshotNotIntactError,
   isCliError,
   formatErrorMessage
 };
