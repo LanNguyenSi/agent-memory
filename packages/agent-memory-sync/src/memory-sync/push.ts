@@ -130,10 +130,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
   // never had a local copy of. See filterUnmappedBaseMap's own comment in
   // config.ts for the full writeup, including why removing any one of its
   // three call sites (this read, and both writes) reopens the bug.
-  let currentBaseMap = filterUnmappedBaseMap(
-    config,
-    filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots())
-  );
+  let currentBaseMap = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots()));
 
   const queuedSnapshots = stateStore.listQueuedSnapshots();
   const snapshots = [
@@ -158,16 +155,21 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // a filtered write, is exactly the kind of external input the read-side
     // filter is permanent defense-in-depth against. Never treat this call
     // as redundant just because push's own write is filtered too.
-    ...queuedSnapshots.map((entry: { id: string; data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> } }) => {
-      const baseFiles = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles));
-      return {
-        id: entry.id,
-        localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
-        baseFiles,
-        guardBaseFiles: baseFiles,
-        message: `sync(queue): replay ${entry.id}`
-      };
-    }),
+    ...queuedSnapshots.map(
+      (entry: {
+        id: string;
+        data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> };
+      }) => {
+        const baseFiles = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles));
+        return {
+          id: entry.id,
+          localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
+          baseFiles,
+          guardBaseFiles: baseFiles,
+          message: `sync(queue): replay ${entry.id}`
+        };
+      }
+    ),
     {
       id: "current",
       localFiles: currentLocalMap,
@@ -359,12 +361,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
       // was published as a total deletion the guard had measured as none.
       gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
       if (!isLast) {
-        recordBaseAdvance(
-          config,
-          baseDelta,
-          snapshot,
-          collectRemoteFiles(config, gitClient, workingCopy.repoDir)
-        );
+        recordBaseAdvance(config, baseDelta, snapshot, collectRemoteFiles(config, gitClient, workingCopy.repoDir));
       }
     }
 
@@ -454,7 +451,11 @@ async function performPush(config: PushConfig, options: PushOptions) {
         queuedSnapshotId,
         notes: [
           ...(queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []),
-          ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedBasePaths, snapshotIds: preApplySnapshots, dryRun: false })
+          ...heldBackNotes(config, heldBack, {
+            adoptedPaths: adoptedBasePaths,
+            snapshotIds: preApplySnapshots,
+            dryRun: false
+          })
         ]
       },
       ownerScopedWarnings
@@ -591,10 +592,7 @@ const QUEUE_ESCALATION_SANITY_CEILING_MULTIPLE = 30;
 // diagnostic note (string) instead of throwing when the computed age is past
 // the clock-skew sanity ceiling above; returns null when there is nothing to
 // report.
-function checkQueueEscalation(
-  stateStore: InstanceType<typeof StateStore>,
-  thresholdMs: number | null
-): string | null {
+function checkQueueEscalation(stateStore: InstanceType<typeof StateStore>, thresholdMs: number | null): string | null {
   if (thresholdMs === null) {
     return null;
   }
@@ -669,11 +667,7 @@ function previewPush(
   try {
     const gitClient = new GitClient(config.gitBinary);
     previewRepoDir = gitClient.createTempRepoDir(config.stateDir, "push-preview");
-    const workingCopy = gitClient.prepareWorkingCopy(
-      config.remoteUrl,
-      config.branch,
-      previewRepoDir
-    );
+    const workingCopy = gitClient.prepareWorkingCopy(config.remoteUrl, config.branch, previewRepoDir);
 
     const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
     const runStartTracked = listRunStartTracked(config, gitClient, workingCopy);
@@ -739,7 +733,9 @@ function previewPush(
     for (const [index, plannedSnapshot] of previewSnapshots.entries()) {
       const isLast = index === previewSnapshots.length - 1;
       const snapshot =
-        index > 0 ? { ...plannedSnapshot, baseFiles: applyBaseDelta(plannedSnapshot.baseFiles, baseDelta) } : plannedSnapshot;
+        index > 0
+          ? { ...plannedSnapshot, baseFiles: applyBaseDelta(plannedSnapshot.baseFiles, baseDelta) }
+          : plannedSnapshot;
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
       const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
       assertNoMassDelete({
@@ -764,12 +760,7 @@ function previewPush(
       // identical to the real run's.
       gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
       if (!isLast) {
-        recordBaseAdvance(
-          config,
-          baseDelta,
-          snapshot,
-          collectRemoteFiles(config, gitClient, workingCopy.repoDir)
-        );
+        recordBaseAdvance(config, baseDelta, snapshot, collectRemoteFiles(config, gitClient, workingCopy.repoDir));
       }
     }
 
@@ -823,10 +814,7 @@ function applySnapshotToWorkingCopy(
   repoDir: string,
   snapshot: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> }
 ) {
-  const targetPaths = new Set<string>([
-    ...Object.keys(snapshot.localFiles),
-    ...Object.keys(snapshot.baseFiles)
-  ]);
+  const targetPaths = new Set<string>([...Object.keys(snapshot.localFiles), ...Object.keys(snapshot.baseFiles)]);
   const appliedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
@@ -1133,10 +1121,7 @@ function newBaseDelta(): BaseDelta {
   return { set: {}, removed: new Set() };
 }
 
-function applyBaseDelta(
-  base: Record<string, string | null>,
-  delta: BaseDelta
-): Record<string, string | null> {
+function applyBaseDelta(base: Record<string, string | null>, delta: BaseDelta): Record<string, string | null> {
   const result = withoutKeys(base, Array.from(delta.removed));
   return { ...result, ...delta.set };
 }

@@ -126,7 +126,19 @@ test("watch refuses a truncating checkout on two ticks without publishing or alt
   });
 
   const child = spawnWatch(
-    ["watch", "default", "--config", configPath, "--debounce-ms", "300", "--max-runs", "2", "--verbose", "--output", "json"],
+    [
+      "watch",
+      "default",
+      "--config",
+      configPath,
+      "--debounce-ms",
+      "300",
+      "--max-runs",
+      "2",
+      "--verbose",
+      "--output",
+      "json"
+    ],
     process.env
   );
   let stderr = "";

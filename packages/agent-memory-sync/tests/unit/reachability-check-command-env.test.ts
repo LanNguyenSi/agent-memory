@@ -109,9 +109,7 @@ test(`${ENV_KEY}='[1,2]' (a JSON array, but of numbers, not strings) warns visib
 });
 
 test(`${ENV_KEY} with a valid JSON array of non-empty strings applies with no warning`, async () => {
-  const { reachabilityCheckCommand, stderr } = await resolveWithEnvValue(
-    '["ssh","-o","BatchMode=yes","host","true"]'
-  );
+  const { reachabilityCheckCommand, stderr } = await resolveWithEnvValue('["ssh","-o","BatchMode=yes","host","true"]');
 
   assert.deepEqual(reachabilityCheckCommand, ["ssh", "-o", "BatchMode=yes", "host", "true"]);
   assert.doesNotMatch(stderr, /warning/i);

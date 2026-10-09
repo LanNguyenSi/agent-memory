@@ -20,22 +20,22 @@ guided the decision:
 
 #### Languages
 
-| Language | Strengths | Weaknesses |
-|----------|-----------|------------|
-| Python | Fast iteration, large library ecosystem, easy scripting | Requires runtime; distribution of executables is complex |
-| Go | Compiles to static binary, fast startup, good stdlib | Verbose error handling; less ergonomic for argument parsing |
-| Rust | Best performance, memory safety, excellent binary output | Steep learning curve; slower compile times |
-| TypeScript | Familiar for web developers, rich ecosystem | Requires Node.js runtime; startup time higher than compiled |
+| Language   | Strengths                                                | Weaknesses                                                  |
+| ---------- | -------------------------------------------------------- | ----------------------------------------------------------- |
+| Python     | Fast iteration, large library ecosystem, easy scripting  | Requires runtime; distribution of executables is complex    |
+| Go         | Compiles to static binary, fast startup, good stdlib     | Verbose error handling; less ergonomic for argument parsing |
+| Rust       | Best performance, memory safety, excellent binary output | Steep learning curve; slower compile times                  |
+| TypeScript | Familiar for web developers, rich ecosystem              | Requires Node.js runtime; startup time higher than compiled |
 
 #### CLI Frameworks
 
-| Framework | Language | Strengths |
-|-----------|----------|-----------|
-| Typer | Python | Type-annotation-first, auto-generates help, integrates with Rich |
-| Click | Python | Mature, flexible, decorator-based, well-documented |
-| Cobra | Go | De facto Go CLI standard, used by kubectl and many major tools |
-| Clap | Rust | Derive-macro ergonomics, excellent validation, shell completions |
-| Commander | TypeScript/Node | Most widely used Node CLI library, flexible |
+| Framework | Language        | Strengths                                                        |
+| --------- | --------------- | ---------------------------------------------------------------- |
+| Typer     | Python          | Type-annotation-first, auto-generates help, integrates with Rich |
+| Click     | Python          | Mature, flexible, decorator-based, well-documented               |
+| Cobra     | Go              | De facto Go CLI standard, used by kubectl and many major tools   |
+| Clap      | Rust            | Derive-macro ergonomics, excellent validation, shell completions |
+| Commander | TypeScript/Node | Most widely used Node CLI library, flexible                      |
 
 ## Decision
 
@@ -52,7 +52,6 @@ the tool shares logic with an existing Node.js codebase.
 - Minimal, predictable API
 - First-class TypeScript support
 - No magic - explicit option and command registration
-
 
 ### Distribution: binary
 

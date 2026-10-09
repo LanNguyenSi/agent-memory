@@ -126,12 +126,7 @@ function acceptRemoteDeletions(input: {
   baseMap: Record<string, string | null>;
   localMap: Record<string, string>;
 } | null {
-  const lost = findRemoteDeletionsToAccept(
-    input.config,
-    input.baseMap,
-    input.remoteMap,
-    input.remoteHead
-  );
+  const lost = findRemoteDeletionsToAccept(input.config, input.baseMap, input.remoteMap, input.remoteHead);
   const lostPaths = lost.paths;
   if (lostPaths.length === 0) {
     return null;

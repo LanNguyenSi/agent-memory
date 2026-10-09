@@ -85,10 +85,7 @@ test("run with a missing explicit --config path exits 3 naming the path, instead
   });
 
   assert.equal(result.status, 3);
-  assert.ok(
-    result.stderr.includes(missingConfigPath),
-    `expected the missing path in stderr, got: ${result.stderr}`
-  );
+  assert.ok(result.stderr.includes(missingConfigPath), `expected the missing path in stderr, got: ${result.stderr}`);
   assert.match(result.stderr, /does not exist/);
   // The fix hint points at restoring the file first. It must not suggest
   // `config set`, which would create a stub that silently replaces a real
@@ -107,10 +104,7 @@ test("watch with a missing explicit --config path exits 3 naming the path, befor
   const result = runCli(["watch", "default", "--config", missingConfigPath], { expectFailure: true });
 
   assert.equal(result.status, 3);
-  assert.ok(
-    result.stderr.includes(missingConfigPath),
-    `expected the missing path in stderr, got: ${result.stderr}`
-  );
+  assert.ok(result.stderr.includes(missingConfigPath), `expected the missing path in stderr, got: ${result.stderr}`);
   assert.match(result.stderr, /does not exist/);
 });
 
@@ -124,10 +118,7 @@ test("restore with a missing explicit --config path exits 3 naming the path", ()
   const result = runCli(["restore", "abcd1234", "--config", missingConfigPath], { expectFailure: true });
 
   assert.equal(result.status, 3);
-  assert.ok(
-    result.stderr.includes(missingConfigPath),
-    `expected the missing path in stderr, got: ${result.stderr}`
-  );
+  assert.ok(result.stderr.includes(missingConfigPath), `expected the missing path in stderr, got: ${result.stderr}`);
   assert.match(result.stderr, /does not exist/);
 });
 
@@ -141,10 +132,7 @@ test("run with AGENT_MEMORY_SYNC_CONFIG pointing at a missing file exits 3 namin
   });
 
   assert.equal(result.status, 3);
-  assert.ok(
-    result.stderr.includes(missingConfigPath),
-    `expected the missing path in stderr, got: ${result.stderr}`
-  );
+  assert.ok(result.stderr.includes(missingConfigPath), `expected the missing path in stderr, got: ${result.stderr}`);
 });
 
 // The create-on-write path this change must NOT break: `config set` reads

@@ -23,7 +23,5 @@ registerRestoreCommand(program);
 program.parseAsync(process.argv).catch((error: unknown) => {
   process.stderr.write(`error: ${formatErrorMessage(error)}\n`);
   process.exitCode =
-    typeof (error as { exitCode?: unknown }).exitCode === "number"
-      ? (error as { exitCode: number }).exitCode
-      : 1;
+    typeof (error as { exitCode?: unknown }).exitCode === "number" ? (error as { exitCode: number }).exitCode : 1;
 });

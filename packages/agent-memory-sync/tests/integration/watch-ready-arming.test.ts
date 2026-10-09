@@ -82,7 +82,19 @@ function setupWorkspace(name: string, missingDirs: string[], missingFiles: strin
 }
 
 function watchArgs(configPath: string, maxRuns: number): string[] {
-  return ["watch", "default", "--config", configPath, "--debounce-ms", "300", "--max-runs", String(maxRuns), "--verbose", "--output", "json"];
+  return [
+    "watch",
+    "default",
+    "--config",
+    configPath,
+    "--debounce-ms",
+    "300",
+    "--max-runs",
+    String(maxRuns),
+    "--verbose",
+    "--output",
+    "json"
+  ];
 }
 
 function count(text: string, pattern: RegExp): number {
@@ -92,7 +104,12 @@ function count(text: string, pattern: RegExp): number {
 // Resolves once `pattern` matches `getStderr()` at least `atLeast` times;
 // rejects when the child ends first, so a child killed by withTickDeadline's
 // inactivity budget fails the wait instead of leaving it polling.
-function waitForCount(child: ReturnType<typeof spawn>, getStderr: () => string, pattern: RegExp, atLeast: number): Promise<void> {
+function waitForCount(
+  child: ReturnType<typeof spawn>,
+  getStderr: () => string,
+  pattern: RegExp,
+  atLeast: number
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const check = () => {
       if (count(getStderr(), pattern) >= atLeast) {
@@ -115,11 +132,7 @@ async function runWatch(
   name: string,
   missingDirs: string[],
   maxRuns: number,
-  scenario: (ctx: {
-    workspaceRoot: string;
-    child: ReturnType<typeof spawn>;
-    stderr: () => string;
-  }) => Promise<void>,
+  scenario: (ctx: { workspaceRoot: string; child: ReturnType<typeof spawn>; stderr: () => string }) => Promise<void>,
   env: (workspaceRoot: string) => NodeJS.ProcessEnv = () => process.env
 ): Promise<{ exitCode: number; stderr: string }> {
   const { workspaceRoot, configPath } = setupWorkspace(name, missingDirs);
@@ -175,11 +188,16 @@ test("watch delivers a write into a missing syncPath straight after the ready li
 // chokidar 4.0.3 delivered only one of them, whichever deferred listener
 // registered first. Both writes need their own tick.
 test("watch delivers each of two missing syncPaths that share an existing directory", async () => {
-  const { exitCode, stderr } = await runWatch("watch-arming-shared", ["logs", "notes"], 2, async ({ workspaceRoot, child, stderr }) => {
-    await waitForWatcherReady(stderr);
-    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "logs", "a.md"), 1);
-    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "notes", "b.md"), 2);
-  });
+  const { exitCode, stderr } = await runWatch(
+    "watch-arming-shared",
+    ["logs", "notes"],
+    2,
+    async ({ workspaceRoot, child, stderr }) => {
+      await waitForWatcherReady(stderr);
+      await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "logs", "a.md"), 1);
+      await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "notes", "b.md"), 2);
+    }
+  );
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
   assert.equal(count(stderr, TICK_STARTED), 2);
 });
@@ -187,11 +205,16 @@ test("watch delivers each of two missing syncPaths that share an existing direct
 // The same shape with the second path written first, so the result does not
 // depend on which path comes first in the configuration.
 test("watch delivers two missing syncPaths in either order of appearance", async () => {
-  const { exitCode, stderr } = await runWatch("watch-arming-shared-reversed", ["logs", "notes"], 2, async ({ workspaceRoot, child, stderr }) => {
-    await waitForWatcherReady(stderr);
-    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "notes", "b.md"), 1);
-    await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "logs", "a.md"), 2);
-  });
+  const { exitCode, stderr } = await runWatch(
+    "watch-arming-shared-reversed",
+    ["logs", "notes"],
+    2,
+    async ({ workspaceRoot, child, stderr }) => {
+      await waitForWatcherReady(stderr);
+      await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "notes", "b.md"), 1);
+      await writeAndAwaitTick(child, stderr, path.join(workspaceRoot, "logs", "a.md"), 2);
+    }
+  );
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
   assert.equal(count(stderr, TICK_STARTED), 2);
 });
@@ -199,22 +222,32 @@ test("watch delivers two missing syncPaths in either order of appearance", async
 // Shape (b). `logs` is missing as well, so chokidar 4.0.3 re-added the target
 // for its leaf name under the workspace root and never matched it.
 test("watch delivers a nested missing syncPath whose parent directory is missing too", async () => {
-  const { exitCode, stderr } = await runWatch("watch-arming-nested", [path.join("logs", "daily")], 1, async ({ workspaceRoot, stderr }) => {
-    await waitForWatcherReady(stderr);
-    writeText(path.join(workspaceRoot, "logs", "daily", "a.md"), "daily\n");
-  });
+  const { exitCode, stderr } = await runWatch(
+    "watch-arming-nested",
+    [path.join("logs", "daily")],
+    1,
+    async ({ workspaceRoot, stderr }) => {
+      await waitForWatcherReady(stderr);
+      writeText(path.join(workspaceRoot, "logs", "daily", "a.md"), "daily\n");
+    }
+  );
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
   assert.equal(count(stderr, TICK_STARTED), 1);
 });
 
 test("watch delivers a nested missing syncPath that is created one directory level at a time", async () => {
-  const { exitCode, stderr } = await runWatch("watch-arming-nested-steps", [path.join("logs", "daily")], 1, async ({ workspaceRoot, stderr }) => {
-    await waitForWatcherReady(stderr);
-    writeText(path.join(workspaceRoot, "logs", "unrelated.md"), "outside the syncPath\n");
-    // Several poll intervals pass with `logs` present and `logs/daily` absent.
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    writeText(path.join(workspaceRoot, "logs", "daily", "a.md"), "daily\n");
-  });
+  const { exitCode, stderr } = await runWatch(
+    "watch-arming-nested-steps",
+    [path.join("logs", "daily")],
+    1,
+    async ({ workspaceRoot, stderr }) => {
+      await waitForWatcherReady(stderr);
+      writeText(path.join(workspaceRoot, "logs", "unrelated.md"), "outside the syncPath\n");
+      // Several poll intervals pass with `logs` present and `logs/daily` absent.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      writeText(path.join(workspaceRoot, "logs", "daily", "a.md"), "daily\n");
+    }
+  );
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
   assert.equal(count(stderr, TICK_STARTED), 1);
 });
@@ -224,12 +257,17 @@ test("watch delivers a nested missing syncPath that is created one directory lev
 // any re-read, so it reaches the tick only through the watcher `watch` started
 // for that path.
 test("watch delivers a file written into a missing syncPath after the path appeared and was armed", async () => {
-  const { exitCode, stderr } = await runWatch("watch-arming-after-appeared", ["logs"], 1, async ({ workspaceRoot, child, stderr }) => {
-    await waitForWatcherReady(stderr);
-    fs.mkdirSync(path.join(workspaceRoot, "logs"));
-    await waitForCount(child, stderr, /syncPath .*logs is armed \(0 existing file\(s\) reported\)/g, 1);
-    writeText(path.join(workspaceRoot, "logs", "late.md"), "late\n");
-  });
+  const { exitCode, stderr } = await runWatch(
+    "watch-arming-after-appeared",
+    ["logs"],
+    1,
+    async ({ workspaceRoot, child, stderr }) => {
+      await waitForWatcherReady(stderr);
+      fs.mkdirSync(path.join(workspaceRoot, "logs"));
+      await waitForCount(child, stderr, /syncPath .*logs is armed \(0 existing file\(s\) reported\)/g, 1);
+      writeText(path.join(workspaceRoot, "logs", "late.md"), "late\n");
+    }
+  );
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
   assert.equal(count(stderr, TICK_STARTED), 1);
 });
@@ -336,13 +374,21 @@ test("watch delivers a file that was created together with a missing syncPath be
 });
 
 test("watch says which syncPaths it is waiting for and announces each one that appears", async () => {
-  const { exitCode, stderr } = await runWatch("watch-arming-info", ["logs", "notes"], 1, async ({ workspaceRoot, stderr }) => {
-    await waitForWatcherReady(stderr);
-    writeText(path.join(workspaceRoot, "notes", "b.md"), "b\n");
-  });
+  const { exitCode, stderr } = await runWatch(
+    "watch-arming-info",
+    ["logs", "notes"],
+    1,
+    async ({ workspaceRoot, stderr }) => {
+      await waitForWatcherReady(stderr);
+      writeText(path.join(workspaceRoot, "notes", "b.md"), "b\n");
+    }
+  );
   assert.equal(exitCode, 0, `watch exited non-zero. stderr: ${stderr}`);
   assert.match(stderr, /2 syncPath\(s\) do not exist yet and are checked every \d+ms: .*logs, .*notes/);
-  assert.ok(stderr.search(/syncPath\(s\) do not exist yet/) < stderr.search(READY_LINE), `the waiting line must precede the ready line. stderr: ${stderr}`);
+  assert.ok(
+    stderr.search(/syncPath\(s\) do not exist yet/) < stderr.search(READY_LINE),
+    `the waiting line must precede the ready line. stderr: ${stderr}`
+  );
   assert.match(stderr, /syncPath .*notes appeared, watching it/);
   assert.doesNotMatch(stderr, /syncPath .*logs appeared/);
 });
@@ -358,7 +404,12 @@ test("watch prints its ready line once with two missing syncPaths", async () => 
     stderr += chunk.toString("utf8");
   });
   try {
-    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+    await withTickDeadline(
+      child,
+      async () => waitForWatcherReady(() => stderr),
+      INACTIVITY_TIMEOUT_MS,
+      () => stderr
+    );
     // A second `ready` would follow the first within milliseconds; 1 s is far
     // beyond that.
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -423,7 +474,12 @@ test("watch prints its ready line only after the scratch watch that confirms the
     stderr += chunk.toString("utf8");
   });
   try {
-    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+    await withTickDeadline(
+      child,
+      async () => waitForWatcherReady(() => stderr),
+      INACTIVITY_TIMEOUT_MS,
+      () => stderr
+    );
   } finally {
     await stopWatchProcessGroup(child);
   }
@@ -431,7 +487,10 @@ test("watch prints its ready line only after the scratch watch that confirms the
   const scratchWatchAt = stderr.search(/arm-probe: fs\.watch \S*agent-memory-sync-arm-\S*\n/);
   const readyAt = stderr.search(READY_LINE);
   assert.ok(memoryWatchAt >= 0, `no fs.watch on MEMORY.md. stderr: ${stderr}`);
-  assert.ok(scratchWatchAt > memoryWatchAt, `the scratch watch must come after the watch on MEMORY.md. stderr: ${stderr}`);
+  assert.ok(
+    scratchWatchAt > memoryWatchAt,
+    `the scratch watch must come after the watch on MEMORY.md. stderr: ${stderr}`
+  );
   assert.ok(readyAt > scratchWatchAt, `the ready line must come after the scratch watch. stderr: ${stderr}`);
   assert.doesNotMatch(stderr, /could not confirm within/);
 });
@@ -446,12 +505,20 @@ test("watch warns, and still prints its ready line, when the OS watch is not con
     stderr += chunk.toString("utf8");
   });
   try {
-    await withTickDeadline(child, async () => waitForWatcherReady(() => stderr), INACTIVITY_TIMEOUT_MS, () => stderr);
+    await withTickDeadline(
+      child,
+      async () => waitForWatcherReady(() => stderr),
+      INACTIVITY_TIMEOUT_MS,
+      () => stderr
+    );
   } finally {
     await stopWatchProcessGroup(child);
   }
   assert.match(stderr, /warning: could not confirm within 0ms that the operating system file watch is live/);
-  assert.ok(stderr.search(/could not confirm within/) < stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${stderr}`);
+  assert.ok(
+    stderr.search(/could not confirm within/) < stderr.search(READY_LINE),
+    `the warning must precede the ready line. stderr: ${stderr}`
+  );
   assert.equal(count(stderr, new RegExp(READY_LINE.source, "g")), 1);
 });
 
@@ -544,48 +611,70 @@ async function sigtermAndTimeExit(
 // once, exit 0 well inside the bound, and must not announce a watch that is no
 // longer there: no ready line and no could-not-confirm warning after (or
 // without) the shutdown.
-test("a shutdown while the OS watch is still being confirmed ends the wait and prints neither the ready line nor a warning", { timeout: 40000 }, async () => {
-  const { configPath } = setupWorkspace("watch-arming-shutdown-confirming", ["logs"]);
-  const { child, output, exited } = startPreloadedWatch(configPath, {
-    AGENT_MEMORY_SYNC_TEST_SUPPRESS_SCRATCH_EVENTS: "1",
-    AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS: "8000"
-  });
-  try {
-    await waitForStderr(child, () => output.stderr, /arm-probe: fs\.watch \S*agent-memory-sync-arm-/);
-    // Let the confirmation write into the scratch directory a few times first.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const { exitCode, elapsed } = await sigtermAndTimeExit(child, exited);
-    assert.equal(exitCode, 0, `watch did not exit with 0 within 6 s of SIGTERM (got ${exitCode}). stderr: ${output.stderr}`);
-    assert.ok(elapsed < 3000, `the 8 s confirmation bound must not delay the shutdown, took ${elapsed}ms. stderr: ${output.stderr}`);
-    assert.match(output.stderr, /received SIGTERM/);
-    assert.doesNotMatch(output.stderr, READY_LINE, "no ready line for a watch that is shutting down");
-    assert.doesNotMatch(output.stderr, /could not (confirm|check)/, "no could-not-confirm warning after a shutdown");
-  } finally {
-    await stopWatchProcessGroup(child);
+test(
+  "a shutdown while the OS watch is still being confirmed ends the wait and prints neither the ready line nor a warning",
+  { timeout: 40000 },
+  async () => {
+    const { configPath } = setupWorkspace("watch-arming-shutdown-confirming", ["logs"]);
+    const { child, output, exited } = startPreloadedWatch(configPath, {
+      AGENT_MEMORY_SYNC_TEST_SUPPRESS_SCRATCH_EVENTS: "1",
+      AGENT_MEMORY_SYNC_WATCH_ARM_TIMEOUT_MS: "8000"
+    });
+    try {
+      await waitForStderr(child, () => output.stderr, /arm-probe: fs\.watch \S*agent-memory-sync-arm-/);
+      // Let the confirmation write into the scratch directory a few times first.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const { exitCode, elapsed } = await sigtermAndTimeExit(child, exited);
+      assert.equal(
+        exitCode,
+        0,
+        `watch did not exit with 0 within 6 s of SIGTERM (got ${exitCode}). stderr: ${output.stderr}`
+      );
+      assert.ok(
+        elapsed < 3000,
+        `the 8 s confirmation bound must not delay the shutdown, took ${elapsed}ms. stderr: ${output.stderr}`
+      );
+      assert.match(output.stderr, /received SIGTERM/);
+      assert.doesNotMatch(output.stderr, READY_LINE, "no ready line for a watch that is shutting down");
+      assert.doesNotMatch(output.stderr, /could not (confirm|check)/, "no could-not-confirm warning after a shutdown");
+    } finally {
+      await stopWatchProcessGroup(child);
+    }
   }
-});
+);
 
 // A syncPath appeared and its watcher never becomes ready (the preload leaves
 // the later stats of the path unsettled), so `watch` is waiting for it under a
 // 5 s bound when SIGTERM arrives. That bound must not keep the process alive.
-test("a shutdown while an appeared syncPath's watcher is not ready yet exits promptly", { timeout: 40000 }, async () => {
-  const { configPath, workspaceRoot } = setupWorkspace("watch-arming-shutdown-appeared", ["logs"]);
-  const logsDir = path.join(workspaceRoot, "logs");
-  const { child, output, exited } = startPreloadedWatch(configPath, {
-    AGENT_MEMORY_SYNC_TEST_HANG_STAT_AFTER_EXISTS_DIR: logsDir
-  });
-  try {
-    await waitForWatcherReady(() => output.stderr);
-    fs.mkdirSync(logsDir);
-    await waitForStderr(child, () => output.stderr, /syncPath .*logs appeared, watching it/);
-    const { exitCode, elapsed } = await sigtermAndTimeExit(child, exited);
-    assert.equal(exitCode, 0, `watch did not exit with 0 within 6 s of SIGTERM (got ${exitCode}). stderr: ${output.stderr}`);
-    assert.ok(elapsed < 2500, `the wait for the appeared path's watcher must not delay the shutdown, took ${elapsed}ms. stderr: ${output.stderr}`);
-    assert.doesNotMatch(output.stderr, /is armed/);
-  } finally {
-    await stopWatchProcessGroup(child);
+test(
+  "a shutdown while an appeared syncPath's watcher is not ready yet exits promptly",
+  { timeout: 40000 },
+  async () => {
+    const { configPath, workspaceRoot } = setupWorkspace("watch-arming-shutdown-appeared", ["logs"]);
+    const logsDir = path.join(workspaceRoot, "logs");
+    const { child, output, exited } = startPreloadedWatch(configPath, {
+      AGENT_MEMORY_SYNC_TEST_HANG_STAT_AFTER_EXISTS_DIR: logsDir
+    });
+    try {
+      await waitForWatcherReady(() => output.stderr);
+      fs.mkdirSync(logsDir);
+      await waitForStderr(child, () => output.stderr, /syncPath .*logs appeared, watching it/);
+      const { exitCode, elapsed } = await sigtermAndTimeExit(child, exited);
+      assert.equal(
+        exitCode,
+        0,
+        `watch did not exit with 0 within 6 s of SIGTERM (got ${exitCode}). stderr: ${output.stderr}`
+      );
+      assert.ok(
+        elapsed < 2500,
+        `the wait for the appeared path's watcher must not delay the shutdown, took ${elapsed}ms. stderr: ${output.stderr}`
+      );
+      assert.doesNotMatch(output.stderr, /is armed/);
+    } finally {
+      await stopWatchProcessGroup(child);
+    }
   }
-});
+);
 
 // The probe directory cannot be created (the preload makes mkdtemp of it
 // throw), which is a failure to set the probe up and not a timeout: the warning says
@@ -594,11 +683,22 @@ test("watch warns with the cause, and still prints its ready line, when the OS w
   const { configPath } = setupWorkspace("watch-arming-probe-setup", ["logs"]);
   const { child, output } = startPreloadedWatch(configPath, { AGENT_MEMORY_SYNC_TEST_FAIL_SCRATCH_SETUP: "1" });
   try {
-    await withTickDeadline(child, async () => waitForWatcherReady(() => output.stderr), INACTIVITY_TIMEOUT_MS, () => output.stderr);
+    await withTickDeadline(
+      child,
+      async () => waitForWatcherReady(() => output.stderr),
+      INACTIVITY_TIMEOUT_MS,
+      () => output.stderr
+    );
   } finally {
     await stopWatchProcessGroup(child);
   }
-  assert.match(output.stderr, /warning: could not check that the operating system file watch is live \(EACCES: scratch directory refused by the test preload\)/);
+  assert.match(
+    output.stderr,
+    /warning: could not check that the operating system file watch is live \(EACCES: scratch directory refused by the test preload\)/
+  );
   assert.doesNotMatch(output.stderr, /could not confirm within/);
-  assert.ok(output.stderr.search(/could not check that/) < output.stderr.search(READY_LINE), `the warning must precede the ready line. stderr: ${output.stderr}`);
+  assert.ok(
+    output.stderr.search(/could not check that/) < output.stderr.search(READY_LINE),
+    `the warning must precede the ready line. stderr: ${output.stderr}`
+  );
 });

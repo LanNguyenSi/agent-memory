@@ -29,10 +29,10 @@ Always use the canonical exit codes from [the README's Exit codes table](../READ
 
 ### stdout vs stderr
 
-| Stream | What goes here |
-|--------|----------------|
+| Stream   | What goes here                                            |
+| -------- | --------------------------------------------------------- |
 | `stdout` | All program output meant for the user or downstream tools |
-| `stderr` | Warnings, progress messages, debug logs, error messages |
+| `stderr` | Warnings, progress messages, debug logs, error messages   |
 
 This makes the tool composable:
 
@@ -79,11 +79,11 @@ For operations that may take more than one second:
 
 Commands that produce structured data must support `--output` / `-o`:
 
-| Value | Description |
-|-------|-------------|
-| `text` | Human-readable, may include color and formatting |
+| Value  | Description                                       |
+| ------ | ------------------------------------------------- |
+| `text` | Human-readable, may include color and formatting  |
 | `json` | Newline-terminated JSON object or array, no color |
-| `yaml` | YAML document, no color |
+| `yaml` | YAML document, no color                           |
 
 Default is `text`. When `--output json` is used, the schema must remain stable across releases.
 
@@ -218,15 +218,19 @@ Write an ADR in `docs/adrs/` when:
 # ADR-NNNN: Title
 
 ## Status
+
 Proposed | Accepted | Deprecated | Superseded by ADR-XXXX
 
 ## Context
+
 What is the situation? What constraints or requirements exist?
 
 ## Decision
+
 What did we decide to do?
 
 ## Consequences
+
 What are the trade-offs? What becomes easier or harder?
 ```
 

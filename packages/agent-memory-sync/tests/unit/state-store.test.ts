@@ -57,10 +57,7 @@ test("oldestQueuedSnapshotAgeMs: reports the OLDEST of several queued snapshots,
   ids.forEach((id: string, index: number) => {
     const manifestPath = path.join(store.queueDir(), id, "manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({ ...manifest, createdAt: timestamps[index].toISOString() }, null, 2)
-    );
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, createdAt: timestamps[index].toISOString() }, null, 2));
   });
 
   const referenceTime = newer.getTime();

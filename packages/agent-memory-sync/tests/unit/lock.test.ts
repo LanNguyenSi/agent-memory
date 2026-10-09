@@ -13,11 +13,7 @@ const { existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs"
 const { spawnSync } = require("node:child_process");
 const { hostname } = require("node:os");
 const path = require("node:path");
-const {
-  DEFAULT_LOCK_STALE_MS,
-  acquireStateDirLock,
-  lockFilePath
-} = require("../../src/memory-sync/lock");
+const { DEFAULT_LOCK_STALE_MS, acquireStateDirLock, lockFilePath } = require("../../src/memory-sync/lock");
 
 function sandbox(name: string): string {
   const root = path.join(

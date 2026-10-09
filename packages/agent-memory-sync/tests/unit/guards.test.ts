@@ -83,10 +83,7 @@ test("resolveMassDeleteGuard: a partial override keeps the default for the other
 });
 
 test("findMassDelete: an empty plan is never a mass delete", () => {
-  assert.equal(
-    findMassDelete(config(), tracked("memory", 400), [], DEFAULT_MASS_DELETE_GUARD),
-    null
-  );
+  assert.equal(findMassDelete(config(), tracked("memory", 400), [], DEFAULT_MASS_DELETE_GUARD), null);
 });
 
 test("findMassDelete: the absolute rule fires at 21 deletions, not at 20", () => {
@@ -117,23 +114,13 @@ test("findMassDelete: a single deletion never trips the proportional rule, howev
 });
 
 test("findMassDelete: two deletions out of two tracked files are refused", () => {
-  const finding = findMassDelete(
-    config(),
-    tracked("logs", 2),
-    paths("logs", 2),
-    DEFAULT_MASS_DELETE_GUARD
-  );
+  const finding = findMassDelete(config(), tracked("logs", 2), paths("logs", 2), DEFAULT_MASS_DELETE_GUARD);
   assert.deepEqual(finding, { destination: "logs", deleted: 2, tracked: 2, rule: "proportional" });
 });
 
 test("findMassDelete: the whole incident shape (404 tracked, 406 deleted) is refused", () => {
   const baseMap = tracked("memory", 404);
-  const finding = findMassDelete(
-    config(),
-    baseMap,
-    paths("memory", 404),
-    DEFAULT_MASS_DELETE_GUARD
-  );
+  const finding = findMassDelete(config(), baseMap, paths("memory", 404), DEFAULT_MASS_DELETE_GUARD);
   assert.deepEqual(finding, { destination: "memory", deleted: 404, tracked: 404, rule: "absolute" });
 });
 
@@ -198,12 +185,7 @@ test("findMassDelete: 15 plus 10 deletions across two destinations trip the plan
   const baseMap = { ...tracked("memory", 400), ...tracked("logs", 400) };
 
   assert.deepEqual(
-    findMassDelete(
-      guardConfig,
-      baseMap,
-      [...paths("memory", 15), ...paths("logs", 10)],
-      DEFAULT_MASS_DELETE_GUARD
-    ),
+    findMassDelete(guardConfig, baseMap, [...paths("memory", 15), ...paths("logs", 10)], DEFAULT_MASS_DELETE_GUARD),
     { destination: null, deleted: 25, tracked: 800, rule: "total" }
   );
 });
@@ -214,22 +196,12 @@ test("findMassDelete: the plan-wide total fires strictly above maxFiles, not at 
 
   // Exactly 20 in total is at the limit, not over it.
   assert.equal(
-    findMassDelete(
-      guardConfig,
-      baseMap,
-      [...paths("memory", 10), ...paths("logs", 10)],
-      DEFAULT_MASS_DELETE_GUARD
-    ),
+    findMassDelete(guardConfig, baseMap, [...paths("memory", 10), ...paths("logs", 10)], DEFAULT_MASS_DELETE_GUARD),
     null
   );
 
   assert.deepEqual(
-    findMassDelete(
-      guardConfig,
-      baseMap,
-      [...paths("memory", 11), ...paths("logs", 10)],
-      DEFAULT_MASS_DELETE_GUARD
-    ),
+    findMassDelete(guardConfig, baseMap, [...paths("memory", 11), ...paths("logs", 10)], DEFAULT_MASS_DELETE_GUARD),
     { destination: null, deleted: 21, tracked: 800, rule: "total" }
   );
 });
@@ -324,10 +296,7 @@ test("findUnreliableCheckout: a remote with no commits is never an anomaly", () 
 });
 
 test("findUnreliableCheckout: a destination that tracked a single file is an ordinary deletion", () => {
-  assert.equal(
-    findUnreliableCheckout(config(), tracked("logs", 1), {}, "c6be19d"),
-    null
-  );
+  assert.equal(findUnreliableCheckout(config(), tracked("logs", 1), {}, "c6be19d"), null);
 });
 
 test("findUnreliableCheckout: one destination still present does not excuse another that vanished", () => {
@@ -715,18 +684,12 @@ test("findMassDelete: deletions no destination claims count toward the plan-wide
   });
 
   // Negative control: exactly 20 is at the limit, not over it.
-  assert.equal(
-    findMassDelete(guardConfig, baseMap, [], DEFAULT_MASS_DELETE_GUARD, outsidePaths(20)),
-    null
-  );
+  assert.equal(findMassDelete(guardConfig, baseMap, [], DEFAULT_MASS_DELETE_GUARD, outsidePaths(20)), null);
 
   // They add to the mapped deletions rather than replacing them: 15 inside
   // 'memory' is acceptable on its own (under both per-destination rules) and
   // 6 outside is acceptable on its own, 21 together is not.
-  assert.equal(
-    findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD),
-    null
-  );
+  assert.equal(findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD), null);
   assert.deepEqual(
     findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD, outsidePaths(6)),
     { destination: null, deleted: 21, tracked: 400, rule: "total" }

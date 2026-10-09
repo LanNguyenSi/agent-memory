@@ -181,9 +181,7 @@ function writePreApplySnapshot(input: {
 }
 
 function resolveGenerations(value?: number | null): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0
-    ? value
-    : DEFAULT_SNAPSHOT_GENERATIONS;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : DEFAULT_SNAPSHOT_GENERATIONS;
 }
 
 function rotate(stateDir: string, destination: string, generations: number): void {
@@ -202,8 +200,7 @@ function readPreApplySnapshot(
   id: string
 ): { id: string; dir: string; createdAt: string; files: Array<{ remoteRelativePath: string; storedPath: string }> } {
   const available = listPreApplySnapshots(stateDir, destination);
-  const selected =
-    id === "latest" ? available[available.length - 1] : available.find((entry) => entry.id === id);
+  const selected = id === "latest" ? available[available.length - 1] : available.find((entry) => entry.id === id);
 
   if (!selected) {
     throw new RestoreSourceNotFoundError(

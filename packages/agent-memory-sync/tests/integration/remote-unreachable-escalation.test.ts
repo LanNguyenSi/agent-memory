@@ -31,13 +31,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { readFileSync, readdirSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
-const {
-  createSandbox,
-  fileExists,
-  runCli,
-  writeProjectConfig,
-  writeText
-} = require("../helpers/cli.ts");
+const { createSandbox, fileExists, runCli, writeProjectConfig, writeText } = require("../helpers/cli.ts");
 const { runWatchTick } = require("../helpers/watch-process.ts");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
@@ -124,10 +118,9 @@ test("push crashes loud with a clear message once the oldest queued snapshot is 
   backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(secondRun.status, 6, `expected the escalation's own exit code. stderr: ${secondRun.stderr}`);
   assert.match(secondRun.stderr, /remote has been unreachable for/);
@@ -227,10 +220,9 @@ test("escalation also fires from the catch-all git-failure path, not only the re
   backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(
     secondRun.status,
@@ -303,10 +295,9 @@ test("push still escalates a plain 25h age — the clock-skew guard does not swa
   backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(secondRun.status, 6, `expected the escalation's own exit code. stderr: ${secondRun.stderr}`);
   assert.match(secondRun.stderr, /remote has been unreachable for/);
@@ -345,10 +336,9 @@ test("queueEscalationThresholdMs from the project config file is actually wired 
   backdateQueuedSnapshots(workspaceRoot, CONFIG_WIRING_BACKDATE_MS);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(
     secondRun.status,
@@ -372,25 +362,18 @@ test("queueEscalationThresholdMs from AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHO
   writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
   writeProjectConfig(configPath, createConfig(workspaceRoot, offlineRemoteDir));
 
-  const firstRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { env }
-  );
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], { env });
   assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
 
   backdateQueuedSnapshots(workspaceRoot, CONFIG_WIRING_BACKDATE_MS);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { env, expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    env,
+    expectFailure: true
+  });
 
-  assert.equal(
-    secondRun.status,
-    6,
-    `expected the env override to escalate at 2h old. stderr: ${secondRun.stderr}`
-  );
+  assert.equal(secondRun.status, 6, `expected the env override to escalate at 2h old. stderr: ${secondRun.stderr}`);
   assert.match(secondRun.stderr, /remote has been unreachable for/);
 });
 
@@ -403,10 +386,10 @@ test("an invalid AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS value fails lou
   writeText(path.join(workspaceRoot, "MEMORY.md"), "content\n");
   writeProjectConfig(configPath, createConfig(workspaceRoot, path.join(root, "unused-remote.git")));
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { env, expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    env,
+    expectFailure: true
+  });
 
   assert.equal(result.status, 3, `expected a config error exit code. stderr: ${result.stderr}`);
   assert.match(result.stderr, /AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS/);

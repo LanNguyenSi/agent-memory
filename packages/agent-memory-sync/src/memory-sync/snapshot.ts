@@ -23,9 +23,7 @@ function buildCommitMessage(changedFiles: string[], deletedFiles: string[]): str
     return `${isDelete ? "remove" : "update"} ${all[0]}`;
   }
 
-  const bullets = all
-    .map((file) => (deletedFiles.includes(file) ? `- remove ${file}` : `- update ${file}`))
-    .join("\n");
+  const bullets = all.map((file) => (deletedFiles.includes(file) ? `- remove ${file}` : `- update ${file}`)).join("\n");
 
   return `update ${all.length} memories\n\n${bullets}`;
 }

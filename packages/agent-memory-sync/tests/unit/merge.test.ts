@@ -163,13 +163,23 @@ test("mergeText: appendOnly merge is upgraded to conflict:true when the merged r
 
 test("mergeText: unchanged (local === remote) stays conflict:false even when both already carry markers (nothing changed, not a new conflict)", () => {
   const markerContent = ["<<<<<<< local", "x", "=======", "y", ">>>>>>> remote"].join("\n");
-  const result = mergeText({ base: "irrelevant\n", local: markerContent, remote: markerContent, strategy: "inline-markers" });
+  const result = mergeText({
+    base: "irrelevant\n",
+    local: markerContent,
+    remote: markerContent,
+    strategy: "inline-markers"
+  });
   assert.equal(result.status, "unchanged");
   assert.equal(result.conflict, false);
 });
 
 test("mergeText: genuine single-pass conflict (no clean fast path, no append merge) still builds markers and reports conflict:true, unchanged by this fix", () => {
-  const result = mergeText({ base: "base\n", local: "local replaced\n", remote: "remote replaced\n", strategy: "inline-markers" });
+  const result = mergeText({
+    base: "base\n",
+    local: "local replaced\n",
+    remote: "remote replaced\n",
+    strategy: "inline-markers"
+  });
   assert.equal(result.status, "conflict");
   assert.equal(result.conflict, true);
   assert.match(result.content, /<<<<<<< local/);

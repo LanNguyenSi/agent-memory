@@ -95,10 +95,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
 
   const localFiles = collectLocalSyncFiles(config);
   const localMap = Object.fromEntries(
-    localFiles.map((file: { remoteRelativePath: string; content: string }) => [
-      file.remoteRelativePath,
-      file.content
-    ])
+    localFiles.map((file: { remoteRelativePath: string; content: string }) => [file.remoteRelativePath, file.content])
   );
   const baseMap = stateStore.readBaseSnapshots();
   // A hub-side name that cannot be mapped to a portable local path on this
@@ -145,11 +142,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
     });
   }
 
-  const targetPaths = new Set<string>([
-    ...Object.keys(localMap),
-    ...Object.keys(baseMap),
-    ...Object.keys(remoteMap)
-  ]);
+  const targetPaths = new Set<string>([...Object.keys(localMap), ...Object.keys(baseMap), ...Object.keys(remoteMap)]);
 
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
@@ -306,9 +299,7 @@ async function performPull(config: PullConfig, options: PullOptions) {
   }
 
   const changedFiles = plan.map((entry) => entry.remoteRelativePath);
-  const deletedFiles = plan
-    .filter((entry) => entry.content === null)
-    .map((entry) => entry.remoteRelativePath);
+  const deletedFiles = plan.filter((entry) => entry.content === null).map((entry) => entry.remoteRelativePath);
 
   // AC-003 (task e104c9f2; see the AC-002 mirror-rule comment above for the
   // run pointer): a local file that already carries inline conflict markers
@@ -524,9 +515,7 @@ function snapshotAffectedDestinations(
 
   const written: string[] = [];
   for (const destination of Array.from(affected).sort()) {
-    const files = localFiles.filter(
-      (file) => destinationOf(destinations, file.remoteRelativePath) === destination
-    );
+    const files = localFiles.filter((file) => destinationOf(destinations, file.remoteRelativePath) === destination);
     written.push(
       writePreApplySnapshot({
         stateDir: config.stateDir,

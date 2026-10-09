@@ -240,10 +240,14 @@ test("nextScheduleTick: year-end rollover — '0 0 1 1 *' from Dec 31 midnight f
   assert.equal(runAt.getMinutes(), 0);
 });
 
-test("nextScheduleTick: iteration cap — impossible date '0 0 30 2 *' throws after 525600 iterations", { timeout: 10_000 }, () => {
-  // February never has 30 days; the loop exhausts 525600 iterations and throws.
-  assert.throws(
-    () => nextScheduleTick("0 0 30 2 *", new Date(2026, 0, 1, 0, 0, 0, 0)),
-    (err: Error) => err.message.includes("could not compute next run")
-  );
-});
+test(
+  "nextScheduleTick: iteration cap — impossible date '0 0 30 2 *' throws after 525600 iterations",
+  { timeout: 10_000 },
+  () => {
+    // February never has 30 days; the loop exhausts 525600 iterations and throws.
+    assert.throws(
+      () => nextScheduleTick("0 0 30 2 *", new Date(2026, 0, 1, 0, 0, 0, 0)),
+      (err: Error) => err.message.includes("could not compute next run")
+    );
+  }
+);

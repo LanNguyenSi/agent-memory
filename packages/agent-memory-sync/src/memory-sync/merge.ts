@@ -79,13 +79,7 @@ function mergeText(input: MergeInput): MergeResult {
   }
 
   return {
-    content: [
-      "<<<<<<< local",
-      local || "",
-      "=======",
-      remote || "",
-      ">>>>>>> remote"
-    ].join("\n"),
+    content: ["<<<<<<< local", local || "", "=======", remote || "", ">>>>>>> remote"].join("\n"),
     status: "conflict",
     conflict: true
   };

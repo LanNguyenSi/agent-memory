@@ -186,9 +186,9 @@ agent-memory-sync --version
 
 ## Global options
 
-| Option | Description |
-|--------|-------------|
-| `--help` | Show help and exit |
+| Option      | Description           |
+| ----------- | --------------------- |
+| `--help`    | Show help and exit    |
 | `--version` | Show version and exit |
 
 ## Common per-subcommand options
@@ -196,10 +196,10 @@ agent-memory-sync --version
 `run`, `watch`, and `restore` each register these; they must come after
 the subcommand name.
 
-| Option                  | Description                                                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Option                  | Description                                                                                                                                                                                                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--config PATH`         | Path to config file (default: `$XDG_CONFIG_HOME/agent-memory-sync/config.json`, else `~/.config/agent-memory-sync/config.json`). `run`, `watch` and `restore` refuse an explicitly named path (this flag or `AGENT_MEMORY_SYNC_CONFIG`) that does not exist, exit `3`, instead of running on defaults. |
-| `-o, --output <format>` | Output format: text, json, yaml (default: text)                                                                                 |
-| `-v, --verbose`         | Enable verbose output                                                                                                           |
-| `-q, --quiet`           | Suppress non-error output                                                                                                       |
-| `--no-color`            | Disable colored output                                                                                                          |
+| `-o, --output <format>` | Output format: text, json, yaml (default: text)                                                                                                                                                                                                                                                        |
+| `-v, --verbose`         | Enable verbose output                                                                                                                                                                                                                                                                                  |
+| `-q, --quiet`           | Suppress non-error output                                                                                                                                                                                                                                                                              |
+| `--no-color`            | Disable colored output                                                                                                                                                                                                                                                                                 |

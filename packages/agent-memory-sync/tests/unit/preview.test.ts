@@ -86,9 +86,7 @@ test("summarizeOperation: a null queuedSnapshotId omits the queued= segment", ()
 });
 
 test("summarizeOperation: a non-empty notes array is joined with '; ' and appended as notes=", () => {
-  const summary = summarizeOperation(
-    baseOperation({ notes: ["remote unreachable; queued", "clock skew detected"] })
-  );
+  const summary = summarizeOperation(baseOperation({ notes: ["remote unreachable; queued", "clock skew detected"] }));
   assert.equal(
     summary,
     "operation=push applied=1 merged=0 conflicts=0 notes=remote unreachable; queued; clock skew detected"

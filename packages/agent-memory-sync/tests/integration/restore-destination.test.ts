@@ -89,13 +89,17 @@ test("restore --from-commit brings a destination back and the next push republis
   const goodSha = git(["rev-parse", "HEAD"], goodCheckout).trim();
   const originalBytes = fs.readFileSync(path.join(workspaceRoot, seeded[0]));
 
-  peerDeletes(remoteDir, root, "peer", seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/")));
+  peerDeletes(
+    remoteDir,
+    root,
+    "peer",
+    seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/"))
+  );
 
   // Wedged, exactly as the review measured it.
-  const wedged = runCli(
-    ["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"],
-    { expectFailure: true }
-  );
+  const wedged = runCli(["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"], {
+    expectFailure: true
+  });
   assert.equal(wedged.status, 7);
 
   const restored = runCli([
@@ -151,21 +155,16 @@ test("restore --from-snapshot reproduces the tree the accepting run copied (AC-0
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
   const originalBytes = fs.readFileSync(path.join(workspaceRoot, seeded[0]));
-  peerDeletes(remoteDir, root, "peer-snap", seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/")));
+  peerDeletes(
+    remoteDir,
+    root,
+    "peer-snap",
+    seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/"))
+  );
 
   // The operator accepts the deletion, then finds out it was not what they
   // wanted after all. This is the case the snapshot exists for.
-  runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "sync",
-    "--accept-mass-delete",
-    "--output",
-    "json"
-  ]);
+  runCli(["run", "default", "--config", configPath, "--mode", "sync", "--accept-mass-delete", "--output", "json"]);
   assert.equal(fileExists(path.join(workspaceRoot, seeded[0])), false);
 
   const restored = runCli([
@@ -317,25 +316,14 @@ test("restore rejects both sources at once and a missing destination", () => {
   writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
 
   const both = runCli(
-    [
-      "restore",
-      "default",
-      "logs",
-      "--config",
-      configPath,
-      "--from-commit",
-      "abc1234",
-      "--from-snapshot",
-      "latest"
-    ],
+    ["restore", "default", "logs", "--config", configPath, "--from-commit", "abc1234", "--from-snapshot", "latest"],
     { expectFailure: true }
   );
   assert.equal(both.status, 2, `stderr: ${both.stderr}`);
 
-  const noDestination = runCli(
-    ["restore", "default", "--config", configPath, "--from-snapshot", "latest"],
-    { expectFailure: true }
-  );
+  const noDestination = runCli(["restore", "default", "--config", configPath, "--from-snapshot", "latest"], {
+    expectFailure: true
+  });
   assert.equal(noDestination.status, 2, `stderr: ${noDestination.stderr}`);
   assert.match(noDestination.stderr, /destination/);
 });
@@ -359,11 +347,13 @@ test("restore --from-commit/--from-snapshot require --yes, except for a dry run 
   writeText(path.join(workspaceRoot, "logs", "added-since.md"), "added since\n");
 
   const snapshotDir = path.join(workspaceRoot, ".agent-memory-sync", "default", "snapshots");
-  for (const source of [["--from-commit", sha], ["--from-snapshot", "latest"]]) {
-    const refused = runCli(
-      ["restore", "default", "logs", "--config", configPath, ...source, "--output", "json"],
-      { expectFailure: true }
-    );
+  for (const source of [
+    ["--from-commit", sha],
+    ["--from-snapshot", "latest"]
+  ]) {
+    const refused = runCli(["restore", "default", "logs", "--config", configPath, ...source, "--output", "json"], {
+      expectFailure: true
+    });
     assert.equal(refused.status, 2, `${source[0]}: expected a usage error. stderr: ${refused.stderr}`);
     assert.match(refused.stderr, /--yes/);
     assert.equal(refused.stdout, "");
@@ -572,13 +562,8 @@ test("restore --from-commit keeps and restores a path git would C-quote (AC-007)
   const older = runCli(["restore", goodSha, "--config", configPath, "--yes", "--output", "json"]);
   const olderPayload = JSON.parse(older.stdout);
   assert.ok(
-    olderPayload.restored.some(
-      (file: { remoteRelativePath: string }) => file.remoteRelativePath === "logs/ümlaut.md"
-    ),
+    olderPayload.restored.some((file: { remoteRelativePath: string }) => file.remoteRelativePath === "logs/ümlaut.md"),
     `restore <sha> --yes skipped the umlaut path: ${JSON.stringify(olderPayload.restored)}`
   );
-  assert.deepEqual(
-    fs.readFileSync(path.join(workspaceRoot, "logs", "ümlaut.md")),
-    originalBytes.get("logs/ümlaut.md")
-  );
+  assert.deepEqual(fs.readFileSync(path.join(workspaceRoot, "logs", "ümlaut.md")), originalBytes.get("logs/ümlaut.md"));
 });

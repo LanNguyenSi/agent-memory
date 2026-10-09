@@ -115,9 +115,7 @@ class StateStore {
           baseFiles: readSnapshotTree(path.join(this.queueDir(), entry.name, "base"))
         }
       }))
-      .sort(
-        (left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id)
-      );
+      .sort((left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id));
   }
 
   removeQueuedSnapshot(id: string): void {
@@ -225,11 +223,7 @@ function writeSnapshotTree(rootDir: string, files: Record<string, string | null>
   for (const [relativePath, content] of Object.entries(files)) {
     const markerPath = path.join(rootDir, `${relativePath}.meta.json`);
     mkdirSync(path.dirname(markerPath), { recursive: true });
-    writeFileSync(
-      markerPath,
-      `${JSON.stringify({ deleted: content === null }, null, 2)}\n`,
-      "utf8"
-    );
+    writeFileSync(markerPath, `${JSON.stringify({ deleted: content === null }, null, 2)}\n`, "utf8");
 
     if (content === null) {
       continue;

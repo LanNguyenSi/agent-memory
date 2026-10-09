@@ -286,20 +286,20 @@ test("GitClient.commitStaged: creates the first commit on an unborn branch", () 
 test("GitClient.listTreePaths: a path git would C-quote is returned verbatim", () => {
   const root = sandbox("tree-quoting");
   const repoDir = initRepoWithFiles(root, {
-    "shared/logs/spéc \"quoted\".md": "content\n",
+    'shared/logs/spéc "quoted".md': "content\n",
     "shared/plain.md": "plain\n",
     "outside/other.md": "other\n"
   });
 
   const client = new GitClient("git");
   assert.deepEqual(client.listTreePaths(repoDir, "HEAD", "shared").sort(), [
-    "shared/logs/spéc \"quoted\".md",
+    'shared/logs/spéc "quoted".md',
     "shared/plain.md"
   ]);
   // No subdir: the whole tree, still verbatim.
   assert.deepEqual(client.listTreePaths(repoDir, "HEAD", "").sort(), [
     "outside/other.md",
-    "shared/logs/spéc \"quoted\".md",
+    'shared/logs/spéc "quoted".md',
     "shared/plain.md"
   ]);
 });

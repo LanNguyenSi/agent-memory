@@ -53,10 +53,9 @@ test("push refuses a local file name that contains a backslash, naming the path 
   writeText(path.join(workspaceRoot, "logs", "back\\slash.md"), "backslash entry\n");
   writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 3, `stderr: ${result.stderr}`);
   assert.match(result.stderr, /back\\slash\.md/);
@@ -123,10 +122,7 @@ test("restore --from-commit refuses a backslash-named path from the commit inste
   // Refused before writing: no mangled sibling ("back/slash.md") appeared
   // locally, and the plain file already there is untouched.
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "back")), false);
-  assert.equal(
-    fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"),
-    "plain entry\n"
-  );
+  assert.equal(fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"), "plain entry\n");
 });
 
 // The pull-side half: a hub-side backslash-named path this machine cannot
@@ -166,10 +162,7 @@ test("pull skips a hub-side backslash-named path with a note, applying the rest 
 
   // The other file applied; the backslash-named one was neither mangled nor
   // otherwise written.
-  assert.equal(
-    fs.readFileSync(path.join(workspaceRoot, "logs", "other.md"), "utf8"),
-    "hub-only plain entry\n"
-  );
+  assert.equal(fs.readFileSync(path.join(workspaceRoot, "logs", "other.md"), "utf8"), "hub-only plain entry\n");
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "back")), false);
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "back\\slash.md")), false);
 });
@@ -205,21 +198,19 @@ test("restore --from-commit skips a hub-side backslash path when rebuilding the 
   git(["commit", "-m", "foreign writer adds a backslash-named file after the seed"], seedCheckout);
   git(["push", "origin", "HEAD:main"], seedCheckout);
 
-  const result = runCli(
-    [
-      "restore",
-      "default",
-      "logs",
-      "--config",
-      configPath,
-      "--from-commit",
-      seedSha,
-      "--yes",
-      "--quiet",
-      "--output",
-      "json"
-    ]
-  );
+  const result = runCli([
+    "restore",
+    "default",
+    "logs",
+    "--config",
+    configPath,
+    "--from-commit",
+    seedSha,
+    "--yes",
+    "--quiet",
+    "--output",
+    "json"
+  ]);
   assert.equal(result.status, 0, `stderr: ${result.stderr}`);
   const payload = JSON.parse(result.stdout);
   assert.ok(
@@ -228,15 +219,20 @@ test("restore --from-commit skips a hub-side backslash path when rebuilding the 
   );
 
   // The seed's plain file is restored.
-  assert.equal(
-    fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"),
-    "plain entry\n"
-  );
+  assert.equal(fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"), "plain entry\n");
 
   const stateStore = new StateStore(stateDir, "default");
   const baseSnapshots = stateStore.readBaseSnapshots();
-  assert.equal(Object.prototype.hasOwnProperty.call(baseSnapshots, "logs/back\\slash.md"), false, JSON.stringify(Object.keys(baseSnapshots)));
-  assert.equal(Object.prototype.hasOwnProperty.call(baseSnapshots, "logs/back/slash.md"), false, JSON.stringify(Object.keys(baseSnapshots)));
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(baseSnapshots, "logs/back\\slash.md"),
+    false,
+    JSON.stringify(Object.keys(baseSnapshots))
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(baseSnapshots, "logs/back/slash.md"),
+    false,
+    JSON.stringify(Object.keys(baseSnapshots))
+  );
 });
 
 // An operator-typed --path value carrying a literal backslash is refused
@@ -257,10 +253,9 @@ test("restore <sha> --path with a backslash is refused (exit 3)", () => {
   const checkout = cloneRemote(remoteDir, root, "verify");
   const sha = git(["rev-parse", "HEAD"], checkout).trim();
 
-  const result = runCli(
-    ["restore", sha, "--path", "logs/back\\slash.md", "--config", configPath, "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["restore", sha, "--path", "logs/back\\slash.md", "--config", configPath, "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 3, `stderr: ${result.stderr}`);
   assert.match(result.stderr, /back\\slash\.md/);
@@ -297,10 +292,7 @@ test("legacy restore <sha> --yes with a backslash path in the commit aborts befo
   git(["push", "origin", "HEAD:main"], checkout);
   const sha = git(["rev-parse", "HEAD"], checkout).trim();
 
-  const result = runCli(
-    ["restore", sha, "--yes", "--config", configPath, "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["restore", sha, "--yes", "--config", configPath, "--output", "json"], { expectFailure: true });
 
   assert.equal(result.status, 3, `stderr: ${result.stderr}`);
   assert.match(result.stderr, /back\\slash\.md/);
@@ -308,14 +300,8 @@ test("legacy restore <sha> --yes with a backslash path in the commit aborts befo
 
   // Nothing was written: the local-only edit to the earlier-sorted MEMORY.md
   // survives exactly as it was before this restore ran.
-  assert.equal(
-    fs.readFileSync(path.join(workspaceRoot, "MEMORY.md"), "utf8"),
-    "local edit only\n"
-  );
-  assert.equal(
-    fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"),
-    "plain v1\n"
-  );
+  assert.equal(fs.readFileSync(path.join(workspaceRoot, "MEMORY.md"), "utf8"), "local edit only\n");
+  assert.equal(fs.readFileSync(path.join(workspaceRoot, "logs", "plain.md"), "utf8"), "plain v1\n");
 });
 
 // The destination-restore form's own write loop (restoreDestination,
@@ -360,10 +346,7 @@ test("restore <profile> <destination> --from-commit aborts before writing anythi
   // Nothing was written: the local-only edit to the earlier-sorted aaa.md
   // survives exactly as it was before this restore ran, and the backslash
   // path was not mangled into a sibling file.
-  assert.equal(
-    fs.readFileSync(path.join(workspaceRoot, "logs", "aaa.md"), "utf8"),
-    "LOCAL EDIT ONLY\n"
-  );
+  assert.equal(fs.readFileSync(path.join(workspaceRoot, "logs", "aaa.md"), "utf8"), "LOCAL EDIT ONLY\n");
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "zzz")), false);
 });
 
@@ -400,10 +383,7 @@ test("restore <profile> <destination> --from-commit --dry-run refuses a late-sor
   assert.equal(result.status, 3, `stderr: ${result.stderr}`);
   assert.match(result.stderr, /zzz\\back\.md/);
   assert.match(result.stderr, /fix the name at the hub/i);
-  assert.equal(
-    fs.readFileSync(path.join(workspaceRoot, "logs", "aaa.md"), "utf8"),
-    "LOCAL EDIT ONLY\n"
-  );
+  assert.equal(fs.readFileSync(path.join(workspaceRoot, "logs", "aaa.md"), "utf8"), "LOCAL EDIT ONLY\n");
   assert.equal(fs.existsSync(path.join(workspaceRoot, "logs", "zzz")), false);
   assert.equal(fs.existsSync(path.join(stateDir, "snapshots")), false);
 });
@@ -427,10 +407,9 @@ test("run --mode pull refuses a local file name that contains a backslash, namin
   // the push above so it never reached the remote.
   writeText(path.join(workspaceRoot, "logs", "back\\slash.md"), "local backslash entry\n");
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 3, `stderr: ${result.stderr}`);
   assert.match(result.stderr, /back\\slash\.md/);
@@ -453,10 +432,9 @@ test("a repositorySubdir config value containing a backslash is refused (exit 3)
     repositorySubdir: "sha\\red"
   });
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 3, `stderr: ${result.stderr}`);
   assert.match(result.stderr, /sha\\red/);

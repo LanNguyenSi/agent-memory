@@ -79,7 +79,15 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { readdirSync } = require("node:fs");
 const path = require("node:path");
-const { cloneRemote, createSandbox, fileExists, initBareRemote, readText, runCli, writeText } = require("../helpers/cli.ts");
+const {
+  cloneRemote,
+  createSandbox,
+  fileExists,
+  initBareRemote,
+  readText,
+  runCli,
+  writeText
+} = require("../helpers/cli.ts");
 
 const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 

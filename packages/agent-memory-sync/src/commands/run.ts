@@ -1,14 +1,5 @@
-const {
-  loadConfig,
-  requireRemoteUrl,
-  resolveRunConfig
-} = require("../config/loader");
-const {
-  CliError,
-  RemoteQueueEscalationError,
-  RemoteUnavailableError,
-  formatErrorMessage
-} = require("../errors");
+const { loadConfig, requireRemoteUrl, resolveRunConfig } = require("../config/loader");
+const { CliError, RemoteQueueEscalationError, RemoteUnavailableError, formatErrorMessage } = require("../errors");
 const { acquireStateDirLock } = require("../memory-sync/lock");
 const { hubMarkersPullNote, performPull } = require("../memory-sync/pull");
 const { hubMarkersPushNote, performPush } = require("../memory-sync/push");
@@ -54,10 +45,7 @@ function registerRunCommand(program: import("commander").Command): void {
     .option("--state-dir <path>", "Override the local state directory")
     .option("--schedule <expr>", "Run on a cron-compatible schedule (5 fields)")
     .option("--max-runs <count>", "Limit the number of scheduled runs")
-    .option(
-      "--conflict-strategy <strategy>",
-      "Conflict strategy: inline-markers, local-wins, remote-wins"
-    )
+    .option("--conflict-strategy <strategy>", "Conflict strategy: inline-markers, local-wins, remote-wins")
     .option(
       "--reachability-timeout-ms <ms>",
       "Timeout for the remote reachability precheck before pull/push (default 4000, env AGENT_MEMORY_SYNC_REACHABILITY_TIMEOUT_MS)"
@@ -121,10 +109,8 @@ function registerRunCommand(program: import("commander").Command): void {
           stateDir: options.stateDir,
           schedule: options.schedule,
           conflictStrategy: options.conflictStrategy,
-          reachabilityTimeoutMs: parseOptionalInteger(
-            options.reachabilityTimeoutMs,
-            "--reachability-timeout-ms"
-          ) ?? undefined
+          reachabilityTimeoutMs:
+            parseOptionalInteger(options.reachabilityTimeoutMs, "--reachability-timeout-ms") ?? undefined
         })
       );
 
@@ -221,10 +207,7 @@ function registerRunCommand(program: import("commander").Command): void {
         }
 
         const tick = nextScheduleTick(runConfig.schedule, new Date());
-        writeInfo(
-          `next scheduled run for profile '${runConfig.profile}' at ${tick.runAt}`,
-          outputOptions
-        );
+        writeInfo(`next scheduled run for profile '${runConfig.profile}' at ${tick.runAt}`, outputOptions);
         await delay(tick.waitMs);
       }
 

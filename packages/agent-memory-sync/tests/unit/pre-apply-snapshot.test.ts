@@ -63,7 +63,10 @@ test("a snapshot copies the destination's current tree byte for byte", () => {
   const manifest = JSON.parse(readFileSync(path.join(snapshot.dir, "manifest.json"), "utf8"));
   assert.equal(manifest.destination, "logs");
   assert.deepEqual(manifest.files.sort(), files.map((f) => f.remoteRelativePath).sort());
-  assert.ok(Number.isFinite(Date.parse(manifest.createdAt)), `createdAt is not an ISO timestamp: ${manifest.createdAt}`);
+  assert.ok(
+    Number.isFinite(Date.parse(manifest.createdAt)),
+    `createdAt is not an ISO timestamp: ${manifest.createdAt}`
+  );
 });
 
 test("snapshots live under stateDir/snapshots/<destination> and are listed newest last", () => {
@@ -127,10 +130,10 @@ test("a stored snapshot reads back as the paths and bytes it captured", () => {
   const readBack = readPreApplySnapshot(stateDir, "logs", written.id);
 
   assert.equal(readBack.id, written.id);
-  assert.deepEqual(
-    readBack.files.map((f: { remoteRelativePath: string }) => f.remoteRelativePath).sort(),
-    ["logs/note-0.md", "logs/note-1.md"]
-  );
+  assert.deepEqual(readBack.files.map((f: { remoteRelativePath: string }) => f.remoteRelativePath).sort(), [
+    "logs/note-0.md",
+    "logs/note-1.md"
+  ]);
   for (const file of readBack.files) {
     assert.equal(readFileSync(file.storedPath, "utf8"), `entry ${file.remoteRelativePath.slice(-4, -3)}\n`);
   }

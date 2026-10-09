@@ -220,10 +220,7 @@ test("offline push queues a snapshot and replays it after the remote returns", (
   const queuedPayload = JSON.parse(queuedRun.stdout);
   assert.equal(queuedPayload.runs[0].status, "queued");
   assert.ok(queuedPayload.runs[0].queuedSnapshotId);
-  assert.equal(
-    fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "queue")),
-    true
-  );
+  assert.equal(fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "queue")), true);
 
   writeProjectConfig(configPath, createConfig(workspaceRoot, actualRemoteDir));
   const replayRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
@@ -287,7 +284,11 @@ test("push queues repeatedly while the remote stays unreachable, keeping earlier
 
   const queueDir = path.join(workspaceRoot, ".agent-memory-sync", "default", "queue");
   const queuedEntries = readdirSync(queueDir);
-  assert.equal(queuedEntries.length, 2, `expected both queued snapshots to persist, found: ${queuedEntries.join(", ")}`);
+  assert.equal(
+    queuedEntries.length,
+    2,
+    `expected both queued snapshots to persist, found: ${queuedEntries.join(", ")}`
+  );
 });
 
 test("dry-run push previews an unreachable remote without hanging or touching the queue", () => {
@@ -302,17 +303,7 @@ test("dry-run push previews an unreachable remote without hanging or touching th
     reachabilityTimeoutMs: 500
   });
 
-  const result = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "push",
-    "--dry-run",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--dry-run", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
 
   assert.equal(payload.runs[0].status, "dry-run");

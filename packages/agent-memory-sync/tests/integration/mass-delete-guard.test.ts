@@ -52,11 +52,7 @@ const {
   INACTIVITY_TIMEOUT_MS
 } = require("../helpers/watch-process.ts");
 
-function createConfig(
-  workspaceRoot: string,
-  remoteDir: string,
-  extra: Record<string, unknown> = {}
-) {
+function createConfig(workspaceRoot: string, remoteDir: string, extra: Record<string, unknown> = {}) {
   return {
     rootDir: workspaceRoot,
     remoteUrl: remoteDir,
@@ -131,11 +127,7 @@ function writeStubGitWipingWorkTree(root: string): string {
 // used to mistake for "the remote is unavailable". Every invocation is
 // appended to `logPath` as "<cwd> <subcommand>", so a test can assert which
 // working copies git was asked to touch at all.
-function writeStubGitFailingInPullWorkingCopy(
-  root: string,
-  subcommand: string,
-  logPath: string
-): string {
+function writeStubGitFailingInPullWorkingCopy(root: string, subcommand: string, logPath: string): string {
   const stubPath = path.join(root, `stub-git-fails-pull-${subcommand}.sh`);
   writeText(
     stubPath,
@@ -182,10 +174,9 @@ test("pull: a working copy that comes back empty never deletes local files (AC-0
     gitBinary: writeStubGitWipingWorkTree(root)
   });
 
-  const result = runCli(
-    ["run", "default", "--config", stubConfigPath, "--mode", "pull", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", "pull", "--output", "json"], {
+    expectFailure: true
+  });
 
   // Not a silent success and not a generic crash: a named, non-zero refusal.
   assert.notEqual(result.status, 0);
@@ -232,10 +223,9 @@ test("push: a working copy that comes back empty never publishes mass deletions 
   // One genuine local edit, so the push has real work to do.
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
 
-  const result = runCli(
-    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /unreliable checkout/);
@@ -270,10 +260,9 @@ test("sync: a generic git failure in the pull phase does not fall back to a push
   });
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
-  const result = runCli(
-    ["run", "default", "--config", stubConfigPath, "--mode", "sync", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", "sync", "--output", "json"], {
+    expectFailure: true
+  });
 
   // Fails loudly with the git error, rather than reporting a clean push.
   assert.notEqual(result.status, 0);
@@ -317,16 +306,7 @@ test("sync: the remote-unavailable-during-pull diagnostic is written without --v
   });
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
-  const result = runCli([
-    "run",
-    "default",
-    "--config",
-    stubConfigPath,
-    "--mode",
-    "sync",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", "sync", "--output", "json"]);
 
   assert.match(result.stderr, /remote unavailable during pull/);
 
@@ -354,16 +334,7 @@ test("pull: a local file with no base snapshot is kept and counted as protected 
   // never seen it.
   writeText(path.join(workspaceRoot, "logs", "local-only.md"), "local only\n");
 
-  const result = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
 
   assert.deepEqual(payload.runs[0].protectedFiles, ["logs/local-only.md"]);
@@ -398,16 +369,7 @@ test("pull: a missing base directory protects every local file under it (AC-002)
     force: true
   });
 
-  const result = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
 
   assert.deepEqual(
@@ -438,10 +400,9 @@ test("push: a plan deleting more than 20 files is refused (AC-003)", () => {
     fs.rmSync(path.join(workspaceRoot, relativePath));
   }
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /21 file\(s\)/);
@@ -467,10 +428,9 @@ test("push: a plan deleting more than 10 percent of a destination is refused (AC
     fs.rmSync(path.join(workspaceRoot, relativePath));
   }
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /3 of 12/);
@@ -510,11 +470,7 @@ test("push: --allow-mass-delete applies a refused plan (AC-003)", () => {
   const payload = JSON.parse(result.stdout);
 
   assert.equal(payload.runs[0].status, "applied");
-  assert.deepEqual(payload.runs[0].deletedFiles, [
-    "logs/note-000.md",
-    "logs/note-001.md",
-    "logs/note-002.md"
-  ]);
+  assert.deepEqual(payload.runs[0].deletedFiles, ["logs/note-000.md", "logs/note-001.md", "logs/note-002.md"]);
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-flagged"), 9);
 });
 
@@ -542,10 +498,9 @@ test("push: massDeleteGuard thresholds are read from the profile (AC-003)", () =
     fs.rmSync(path.join(workspaceRoot, relativePath));
   }
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /limit of 2 file\(s\)/);
@@ -572,16 +527,7 @@ test("push: a single-file deletion is never refused by the proportional rule (AC
 
   fs.rmSync(path.join(workspaceRoot, seeded[0]));
 
-  const result = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "push",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
 
   assert.equal(payload.runs[0].status, "applied");
@@ -835,10 +781,7 @@ for (const count of [50, 400]) {
       assert.match(result.stderr, /1 still present/);
 
       // Nothing was published: the remote still holds every log file.
-      assert.equal(
-        remoteLogFileCount(scenario.remoteDir, scenario.root, `inspect-${mode}-${count}`),
-        count
-      );
+      assert.equal(remoteLogFileCount(scenario.remoteDir, scenario.root, `inspect-${mode}-${count}`), count);
 
       // And nothing was removed locally either, which is the half `--mode
       // sync` reaches through pull's own rmSync loop.
@@ -879,17 +822,7 @@ test("push: --allow-mass-delete does not bypass the unreliable-checkout refusal 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
 
   const result = runCli(
-    [
-      "run",
-      "default",
-      "--config",
-      stubConfigPath,
-      "--mode",
-      "push",
-      "--allow-mass-delete",
-      "--output",
-      "json"
-    ],
+    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--allow-mass-delete", "--output", "json"],
     { expectFailure: true }
   );
 
@@ -923,10 +856,9 @@ test("push: a working copy emptied between the merge and the commit is refused (
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
 
-  const result = runCli(
-    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
   assert.match(result.stderr, /30 file\(s\) under 'logs'/);
@@ -955,16 +887,7 @@ test("sync: a protected local file is counted in both the JSON and the text summ
   // never seen it: local-only, a push candidate, never a pull deletion.
   writeText(path.join(workspaceRoot, "logs", "local-only.md"), "local only\n");
 
-  const jsonResult = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "sync",
-    "--output",
-    "json"
-  ]);
+  const jsonResult = runCli(["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"]);
   const payload = JSON.parse(jsonResult.stdout);
 
   assert.equal(payload.runs[0].kind, "sync");
@@ -1002,10 +925,9 @@ test("push --dry-run: an over-threshold plan is refused rather than previewed (A
     fs.rmSync(path.join(workspaceRoot, relativePath));
   }
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--dry-run", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--dry-run", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
   assert.match(result.stderr, /3 of 12/);
@@ -1014,10 +936,7 @@ test("push --dry-run: an over-threshold plan is refused rather than previewed (A
 
   // The preview's throwaway working copy is removed on the refusal path
   // too, not only when the preview completes (R2 low).
-  assert.equal(
-    fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "tmp", "push-preview")),
-    false
-  );
+  assert.equal(fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "tmp", "push-preview")), false);
 });
 
 // R1 medium, the reporting half: once a run really does remove paths, the
@@ -1127,10 +1046,9 @@ test("push: staged deletions outside the repository subdir are counted and refus
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
 
-  const result = runCli(
-    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 5, `expected the mass-delete refusal's exit code. stderr: ${result.stderr}`);
   assert.match(result.stderr, /50 file\(s\)/);
@@ -1175,10 +1093,9 @@ test("watch does not accept --accept-mass-delete; run does (AC-007)", () => {
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
   writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
 
-  const rejected = runCli(
-    ["watch", "default", "--config", configPath, "--accept-mass-delete", "--max-runs", "1"],
-    { expectFailure: true }
-  );
+  const rejected = runCli(["watch", "default", "--config", configPath, "--accept-mass-delete", "--max-runs", "1"], {
+    expectFailure: true
+  });
   assert.notEqual(rejected.status, 0);
   assert.match(rejected.stderr, /unknown option '--accept-mass-delete'/);
 });
@@ -1246,10 +1163,9 @@ for (const mode of ["push", "sync"]) {
 
     writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
 
-    const result = runCli(
-      ["run", "default", "--config", stubConfigPath, "--mode", mode, "--output", "json"],
-      { expectFailure: true }
-    );
+    const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", mode, "--output", "json"], {
+      expectFailure: true
+    });
 
     // The remote still holds every log file, whatever the exit code: a wipe
     // after the measurement must not be publishable.
@@ -1335,17 +1251,7 @@ test("push: a refusal after an accepted adoption counts what the run started wit
   // holds are then refused by the plan guard, which --accept-mass-delete
   // does not override.
   const result = runCli(
-    [
-      "run",
-      "default",
-      "--config",
-      stubConfigPath,
-      "--mode",
-      "push",
-      "--accept-mass-delete",
-      "--output",
-      "json"
-    ],
+    ["run", "default", "--config", stubConfigPath, "--mode", "push", "--accept-mass-delete", "--output", "json"],
     { expectFailure: true }
   );
 
@@ -1373,10 +1279,7 @@ test("push --dry-run: queued snapshots are measured one commit at a time (AC-003
   writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\n");
   const seeded = seedLogFiles(workspaceRoot, 100);
   writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir, guarded));
-  writeProjectConfig(
-    offlineConfigPath,
-    createConfig(workspaceRoot, path.join(root, "absent-remote.git"), guarded)
-  );
+  writeProjectConfig(offlineConfigPath, createConfig(workspaceRoot, path.join(root, "absent-remote.git"), guarded));
 
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
@@ -1384,9 +1287,7 @@ test("push --dry-run: queued snapshots are measured one commit at a time (AC-003
   for (const relativePath of seeded.slice(0, 12)) {
     fs.rmSync(path.join(workspaceRoot, relativePath));
   }
-  const queuedA = runCli(
-    ["run", "default", "--config", offlineConfigPath, "--mode", "push", "--output", "json"]
-  );
+  const queuedA = runCli(["run", "default", "--config", offlineConfigPath, "--mode", "push", "--output", "json"]);
   assert.equal(JSON.parse(queuedA.stdout).runs[0].status, "queued");
 
   // Snapshot B: the first batch is back byte-identical, a disjoint batch of
@@ -1397,35 +1298,20 @@ test("push --dry-run: queued snapshots are measured one commit at a time (AC-003
   for (const relativePath of seeded.slice(12, 23)) {
     fs.rmSync(path.join(workspaceRoot, relativePath));
   }
-  const queuedB = runCli(
-    ["run", "default", "--config", offlineConfigPath, "--mode", "push", "--output", "json"]
-  );
+  const queuedB = runCli(["run", "default", "--config", offlineConfigPath, "--mode", "push", "--output", "json"]);
   assert.equal(JSON.parse(queuedB.stdout).runs[0].status, "queued");
   assert.equal(fs.readdirSync(path.join(workspaceRoot, ".agent-memory-sync", "default", "queue")).length, 2);
 
   // 12 and 11 are each under the limit of 20; 23 is not. The preview must
   // measure them the way the real push does.
-  const result = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "push",
-    "--dry-run",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--dry-run", "--output", "json"]);
 
   assert.equal(result.status, 0, `expected a clean preview. stderr: ${result.stderr}`);
   assert.equal(JSON.parse(result.stdout).runs[0].status, "dry-run");
 
   // A preview publishes nothing and leaves no working copy behind.
   assert.equal(remoteLogFileCount(remoteDir, root, "inspect-dry-run-queued"), 100);
-  assert.equal(
-    fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "tmp", "push-preview")),
-    false
-  );
+  assert.equal(fileExists(path.join(workspaceRoot, ".agent-memory-sync", "default", "tmp", "push-preview")), false);
 });
 
 // The preview measures the index for the same reason the real push does, and
@@ -1492,10 +1378,9 @@ for (const mode of ["push", "sync"]) {
     // One genuine local edit, so the run has real work to do.
     writeText(path.join(workspaceRoot, "MEMORY.md"), "memory root\nedited\n");
 
-    const result = runCli(
-      ["run", "default", "--config", stubConfigPath, "--mode", mode, "--output", "json"],
-      { expectFailure: true }
-    );
+    const result = runCli(["run", "default", "--config", stubConfigPath, "--mode", mode, "--output", "json"], {
+      expectFailure: true
+    });
 
     assert.equal(
       result.status,
@@ -1561,17 +1446,7 @@ for (const mode of ["push", "sync", "pull"]) {
     }
 
     const result = runCli(
-      [
-        "run",
-        "default",
-        "--config",
-        stubConfigPath,
-        "--mode",
-        mode,
-        "--accept-mass-delete",
-        "--output",
-        "json"
-      ],
+      ["run", "default", "--config", stubConfigPath, "--mode", mode, "--accept-mass-delete", "--output", "json"],
       { expectFailure: true }
     );
 
@@ -1645,6 +1520,9 @@ test("pull: a remote that legitimately rewrote 30 of 50 files applies cleanly (a
     assert.equal(readText(path.join(workspaceRoot, relativePath)), `rewritten ${relativePath}\n`);
   }
   for (const relativePath of seeded.slice(30)) {
-    assert.equal(readText(path.join(workspaceRoot, relativePath)), readText(path.join(checkout, "shared", relativePath)));
+    assert.equal(
+      readText(path.join(workspaceRoot, relativePath)),
+      readText(path.join(checkout, "shared", relativePath))
+    );
   }
 });

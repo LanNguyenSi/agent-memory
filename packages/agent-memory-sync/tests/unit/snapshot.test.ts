@@ -23,10 +23,7 @@ test("buildCommitMessage: a single deleted file renders 'remove <file>'", () => 
 
 test("buildCommitMessage: multiple files render a bulleted, sorted 'update N memories' summary distinguishing updates from removals", () => {
   const message = buildCommitMessage(["b.md", "a.md"], ["c.md"]);
-  assert.equal(
-    message,
-    "update 3 memories\n\n- update a.md\n- update b.md\n- remove c.md"
-  );
+  assert.equal(message, "update 3 memories\n\n- update a.md\n- update b.md\n- remove c.md");
 });
 
 test("buildCommitMessage: a file present in both changedFiles and deletedFiles is deduplicated and marked as removed", () => {

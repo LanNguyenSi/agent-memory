@@ -71,7 +71,17 @@ function goOnline(spoke: Spoke, remoteDir: string) {
 }
 
 function runMode(spoke: Spoke, mode: string, extra: string[] = []) {
-  const result = runCli(["run", spoke.name, "--config", spoke.configPath, "--mode", mode, "--output", "json", ...extra]);
+  const result = runCli([
+    "run",
+    spoke.name,
+    "--config",
+    spoke.configPath,
+    "--mode",
+    mode,
+    "--output",
+    "json",
+    ...extra
+  ]);
   return JSON.parse(result.stdout).runs[0];
 }
 
@@ -224,7 +234,10 @@ test("push skips a markered hub path whose local copy changed: the hub stays, th
   assert.equal(push.status, "applied");
   assert.deepEqual(push.conflictFiles, ["notes/H.md"]);
   assert.equal(push.appliedFiles.includes("notes/H.md"), false);
-  assert.ok(push.notes.some((note: string) => note.includes("notes/H.md")), JSON.stringify(push.notes));
+  assert.ok(
+    push.notes.some((note: string) => note.includes("notes/H.md")),
+    JSON.stringify(push.notes)
+  );
   assert.equal(readHub(root, remoteDir, "notes/H.md"), THREE_MARKERS, "the hub file must be unchanged");
   assert.equal(readText(notePath(s, "H.md")), "base\nlocal append\n", "the local file must be untouched");
   assert.equal(readBase(s)["notes/H.md"], baseBefore["notes/H.md"], "the base entry must not move");

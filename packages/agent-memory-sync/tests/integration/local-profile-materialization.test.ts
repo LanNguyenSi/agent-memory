@@ -32,8 +32,10 @@ const PROFILES_DIR = path.resolve(process.cwd(), "profiles");
 function materializeTemplate(templateFile: string, fakeUser: string, fakeSlug: string): Record<string, unknown> {
   const templateText = readText(path.join(PROFILES_DIR, templateFile));
   const filledInText = templateText
-    .split("<claude-code-slug-for-this-machine>").join(fakeSlug)
-    .split("<user>").join(fakeUser);
+    .split("<claude-code-slug-for-this-machine>")
+    .join(fakeSlug)
+    .split("<user>")
+    .join(fakeUser);
   return JSON.parse(filledInText);
 }
 

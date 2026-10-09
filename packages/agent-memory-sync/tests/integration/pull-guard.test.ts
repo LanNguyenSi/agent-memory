@@ -165,12 +165,16 @@ test("pull: a remote commit deleting the whole corpus is refused and applies wit
   writeProjectConfig(configPath, logsOnlyConfig(workspaceRoot, remoteDir));
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  peerDeletes(remoteDir, root, "peer-406", seeded.map((p) => p.replace(/\\/g, "/")));
-
-  const refused = runCli(
-    ["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"],
-    { expectFailure: true }
+  peerDeletes(
+    remoteDir,
+    root,
+    "peer-406",
+    seeded.map((p) => p.replace(/\\/g, "/"))
   );
+
+  const refused = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /406/);
@@ -252,10 +256,9 @@ test("pull: deletions spread across destinations trip the plan-wide total (AC-00
   const removed = [...seeded];
   peerDeletes(remoteDir, root, "peer-total", removed);
 
-  const refused = runCli(
-    ["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"],
-    { expectFailure: true }
-  );
+  const refused = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(refused.status, 9, `expected the pull guard's exit code. stderr: ${refused.stderr}`);
   assert.match(refused.stderr, /24 file\(s\)/);
@@ -310,10 +313,9 @@ test("sync: a genuine remote deletion is wedged at exit 7 until it is accepted (
     seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/"))
   );
 
-  const wedged = runCli(
-    ["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"],
-    { expectFailure: true }
-  );
+  const wedged = runCli(["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"], {
+    expectFailure: true
+  });
   assert.equal(wedged.status, 7, `expected the checkout refusal's exit code. stderr: ${wedged.stderr}`);
   assert.match(wedged.stderr, /--accept-mass-delete/);
   assert.equal(fileExists(path.join(workspaceRoot, seeded[0])), true);
@@ -368,10 +370,9 @@ test("push: --accept-mass-delete adopts the remote's deletion instead of republi
     seeded.slice(0, 30).map((p) => p.replace(/\\/g, "/"))
   );
 
-  const wedged = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const wedged = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
   assert.equal(wedged.status, 7, `stderr: ${wedged.stderr}`);
 
   const accepted = runCli([
@@ -598,10 +599,9 @@ for (const mode of ["push", "sync"]) {
     assert.equal(fs.readdirSync(path.join(inspection, "shared", "logs")).length, 20);
 
     // The real run still wedges afterwards, since the preview adopted nothing.
-    const stillWedged = runCli(
-      ["run", "default", "--config", configPath, "--mode", mode, "--output", "json"],
-      { expectFailure: true }
-    );
+    const stillWedged = runCli(["run", "default", "--config", configPath, "--mode", mode, "--output", "json"], {
+      expectFailure: true
+    });
     assert.equal(stillWedged.status, 7, `stderr: ${stillWedged.stderr}`);
   });
 }

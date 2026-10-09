@@ -188,7 +188,10 @@ test("push tolerates an ownerScoped directory whose own <profile>.json does not 
   // machineStateSource exists (so the directory-existence check passes) but
   // has no <profile>.json in it yet — only a peer's file.
   writeText(path.join(machineStateSource, "someone-elses.json"), '{"v":1}\n');
-  writeProjectConfig(configPath, ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource));
+  writeProjectConfig(
+    configPath,
+    ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource)
+  );
 
   const result = runCli(["run", "this-machine", "--config", configPath, "--mode", "push", "--output", "json"]);
   const payload = JSON.parse(result.stdout).runs[0];
@@ -226,7 +229,10 @@ test("push stays silent (no warning) for an ownerScoped directory that exists bu
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
   mkdirSync(machineStateSource, { recursive: true });
-  writeProjectConfig(configPath, ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource));
+  writeProjectConfig(
+    configPath,
+    ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource)
+  );
 
   const result = runCli(["run", "this-machine", "--config", configPath, "--mode", "push", "--output", "json"]);
   const payload = JSON.parse(result.stdout).runs[0];

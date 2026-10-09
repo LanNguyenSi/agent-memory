@@ -185,7 +185,8 @@ function filterOwnerScopedBaseMap(
   const ownerScopedDestinations = config.syncPaths
     .filter(
       (entry) =>
-        entry.ownerScoped && resolveSyncPathKind(resolveWorkspacePath(config.rootDir, entry.source), entry) === "directory"
+        entry.ownerScoped &&
+        resolveSyncPathKind(resolveWorkspacePath(config.rootDir, entry.source), entry) === "directory"
     )
     .map((entry) => normalizeRemoteRelativePath(entry.destination || entry.source));
 
@@ -363,9 +364,7 @@ function toRepositoryRelativePath(config: RunConfig, remoteRelativePath: string)
 }
 
 function normalizeRemoteRelativePath(value: string): string {
-  const normalized = assertPortablePathSegment(value, "sync destination")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
+  const normalized = assertPortablePathSegment(value, "sync destination").replace(/^\/+/, "").replace(/\/+$/, "");
   if (!normalized || normalized.startsWith("..")) {
     throw new CliError(`sync destination '${value}' is invalid.`, 3);
   }

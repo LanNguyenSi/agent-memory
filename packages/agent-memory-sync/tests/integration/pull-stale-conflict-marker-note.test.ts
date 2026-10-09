@@ -25,14 +25,10 @@ const {
   readText,
   runCli,
   writeProjectConfig,
-  writeText,
+  writeText
 } = require("../helpers/cli.ts");
 
-function plainFileConfig(
-  workspaceRoot: string,
-  remoteDir: string,
-  stateDir: string,
-) {
+function plainFileConfig(workspaceRoot: string, remoteDir: string, stateDir: string) {
   return {
     profile: "default",
     rootDir: workspaceRoot,
@@ -41,9 +37,7 @@ function plainFileConfig(
     repositorySubdir: "shared",
     stateDir,
     conflictStrategy: "inline-markers",
-    syncPaths: [
-      { source: "MEMORY.md", destination: "MEMORY.md", kind: "file" },
-    ],
+    syncPaths: [{ source: "MEMORY.md", destination: "MEMORY.md", kind: "file" }]
   };
 }
 
@@ -52,7 +46,7 @@ function ownerScopedPullConfig(
   remoteDir: string,
   stateDir: string,
   profile: string,
-  machineStateSource: string,
+  machineStateSource: string
 ) {
   return {
     profile,
@@ -67,9 +61,9 @@ function ownerScopedPullConfig(
         source: machineStateSource,
         destination: "machine-state",
         kind: "directory",
-        ownerScoped: true,
-      },
-    ],
+        ownerScoped: true
+      }
+    ]
   };
 }
 
@@ -78,7 +72,7 @@ const STALE_MARKER_CONTENT = [
   "an earlier local half",
   "=======",
   "an earlier remote half",
-  ">>>>>>> remote",
+  ">>>>>>> remote"
 ].join("\n");
 
 test("run --mode pull reports a note for a local memory file that still carries conflict markers and is left untouched", () => {
@@ -89,22 +83,10 @@ test("run --mode pull reports a note for a local memory file that still carries 
   const configPath = path.join(root, "config.json");
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "clean\n");
-  writeProjectConfig(
-    configPath,
-    plainFileConfig(workspaceRoot, remoteDir, stateDir),
-  );
+  writeProjectConfig(configPath, plainFileConfig(workspaceRoot, remoteDir, stateDir));
 
   // Establish base == remote == "clean\n" via a seeding push.
-  const seed = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "push",
-    "--output",
-    "json",
-  ]);
+  const seed = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
   assert.equal(JSON.parse(seed.stdout).runs[0].status, "applied");
 
   // Local acquires stale conflict markers with nothing else touching the
@@ -113,52 +95,26 @@ test("run --mode pull reports a note for a local memory file that still carries 
   // untouched by the plan.
   writeText(path.join(workspaceRoot, "MEMORY.md"), STALE_MARKER_CONTENT);
 
-  const jsonResult = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
+  const jsonResult = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const jsonPayload = JSON.parse(jsonResult.stdout).runs[0];
 
   assert.equal(
     readText(path.join(workspaceRoot, "MEMORY.md")),
     STALE_MARKER_CONTENT,
-    "sanity: pull must leave the file untouched",
+    "sanity: pull must leave the file untouched"
   );
-  assert.ok(
-    !jsonPayload.appliedFiles.includes("MEMORY.md"),
-    "sanity: the file must not be in appliedFiles",
-  );
+  assert.ok(!jsonPayload.appliedFiles.includes("MEMORY.md"), "sanity: the file must not be in appliedFiles");
   const matchingNotes = (jsonPayload.notes || []).filter(
-    (note: string) =>
-      note ===
-      "stale conflict markers in MEMORY.md; resolve by editing the file",
+    (note: string) => note === "stale conflict markers in MEMORY.md; resolve by editing the file"
   );
   assert.equal(
     matchingNotes.length,
     1,
-    `expected exactly one stale-marker note naming MEMORY.md: ${JSON.stringify(jsonPayload.notes)}`,
+    `expected exactly one stale-marker note naming MEMORY.md: ${JSON.stringify(jsonPayload.notes)}`
   );
 
-  const textResult = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "text",
-  ]);
-  assert.match(
-    textResult.stdout,
-    /notes=stale conflict markers in MEMORY\.md; resolve by editing the file/,
-  );
+  const textResult = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "text"]);
+  assert.match(textResult.stdout, /notes=stale conflict markers in MEMORY\.md; resolve by editing the file/);
 });
 
 test("run --mode sync also reports the stale-marker note (pull's notes carry through the combined payload)", () => {
@@ -169,46 +125,23 @@ test("run --mode sync also reports the stale-marker note (pull's notes carry thr
   const configPath = path.join(root, "config.json");
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "clean\n");
-  writeProjectConfig(
-    configPath,
-    plainFileConfig(workspaceRoot, remoteDir, stateDir),
-  );
+  writeProjectConfig(configPath, plainFileConfig(workspaceRoot, remoteDir, stateDir));
 
-  const seed = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "push",
-    "--output",
-    "json",
-  ]);
+  const seed = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
   assert.equal(JSON.parse(seed.stdout).runs[0].status, "applied");
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), STALE_MARKER_CONTENT);
 
-  const syncResult = runCli([
-    "run",
-    "default",
-    "--config",
-    configPath,
-    "--mode",
-    "sync",
-    "--output",
-    "json",
-  ]);
+  const syncResult = runCli(["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"]);
   const syncPayload = JSON.parse(syncResult.stdout).runs[0];
 
   const matchingNotes = (syncPayload.notes || []).filter(
-    (note: string) =>
-      note ===
-      "stale conflict markers in MEMORY.md; resolve by editing the file",
+    (note: string) => note === "stale conflict markers in MEMORY.md; resolve by editing the file"
   );
   assert.equal(
     matchingNotes.length,
     1,
-    `expected exactly one stale-marker note in the combined sync payload: ${JSON.stringify(syncPayload.notes)}`,
+    `expected exactly one stale-marker note in the combined sync payload: ${JSON.stringify(syncPayload.notes)}`
   );
 });
 
@@ -222,69 +155,36 @@ test("negative control: no stale-marker note fires for a peer file whose local m
 
   writeProjectConfig(
     configPath,
-    ownerScopedPullConfig(
-      workspaceRoot,
-      remoteDir,
-      stateDir,
-      "mac-mini",
-      machineStateSource,
-    ),
+    ownerScopedPullConfig(workspaceRoot, remoteDir, stateDir, "mac-mini", machineStateSource)
   );
 
   const peerCheckout = path.join(root, "peer-seed");
   git(["clone", remoteDir, peerCheckout], root);
   git(["config", "user.name", "peer"], peerCheckout);
   git(["config", "user.email", "peer@example.invalid"], peerCheckout);
-  writeText(
-    path.join(peerCheckout, "shared", "machine-state", "linux.json"),
-    "linux state v1\n",
-  );
+  writeText(path.join(peerCheckout, "shared", "machine-state", "linux.json"), "linux state v1\n");
   git(["add", "."], peerCheckout);
   git(["commit", "-m", "seed linux.json"], peerCheckout);
   git(["push", "origin", "HEAD:main"], peerCheckout);
 
-  const seed = runCli([
-    "run",
-    "mac-mini",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
-  assert.ok(
-    JSON.parse(seed.stdout).runs[0].appliedFiles.includes(
-      "machine-state/linux.json",
-    ),
-  );
+  const seed = runCli(["run", "mac-mini", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  assert.ok(JSON.parse(seed.stdout).runs[0].appliedFiles.includes("machine-state/linux.json"));
 
   // Local acquires markers on the peer file, base == remote unchanged: the
   // AC-002 mirror rule overwrites this on the very next pull, so it must
   // never be reported as a "left untouched" stale-marker note.
   writeText(path.join(machineStateSource, "linux.json"), STALE_MARKER_CONTENT);
 
-  const pull = runCli([
-    "run",
-    "mac-mini",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
+  const pull = runCli(["run", "mac-mini", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const payload = JSON.parse(pull.stdout).runs[0];
 
   assert.ok(
     payload.appliedFiles.includes("machine-state/linux.json"),
-    `sanity: the mirror rule must overwrite this file: ${JSON.stringify(payload.appliedFiles)}`,
+    `sanity: the mirror rule must overwrite this file: ${JSON.stringify(payload.appliedFiles)}`
   );
   assert.ok(
-    !(payload.notes || []).some((note: string) =>
-      note.includes("machine-state/linux.json"),
-    ),
-    `expected no stale-marker note for a file the plan overwrites: ${JSON.stringify(payload.notes)}`,
+    !(payload.notes || []).some((note: string) => note.includes("machine-state/linux.json")),
+    `expected no stale-marker note for a file the plan overwrites: ${JSON.stringify(payload.notes)}`
   );
 });
 
@@ -298,13 +198,7 @@ test("D-002: a profile positional that does not match this machine's own file ge
 
   writeProjectConfig(
     configPath,
-    ownerScopedPullConfig(
-      workspaceRoot,
-      remoteDir,
-      stateDir,
-      "wrong-profile",
-      machineStateSource,
-    ),
+    ownerScopedPullConfig(workspaceRoot, remoteDir, stateDir, "wrong-profile", machineStateSource)
   );
 
   // This machine's actual own file already sits locally under
@@ -317,53 +211,30 @@ test("D-002: a profile positional that does not match this machine's own file ge
   // destination, so the file stays protected (Guard 2) across both calls
   // below and the note fires identically each time.
   mkdirSync(machineStateSource, { recursive: true });
-  writeText(
-    path.join(machineStateSource, "mac-mini.json"),
-    "this machine's own content\n",
-  );
+  writeText(path.join(machineStateSource, "mac-mini.json"), "this machine's own content\n");
 
   const expectedNote =
     "profile 'wrong-profile': own file 'wrong-profile.json' not found among 1 file(s) in " +
     `'${machineStateSource}'; this machine will publish no 'machine-state' state - check the profile positional matches this machine`;
 
-  const jsonResult = runCli([
-    "run",
-    "wrong-profile",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
+  const jsonResult = runCli(["run", "wrong-profile", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const jsonPayload = JSON.parse(jsonResult.stdout).runs[0];
 
   assert.ok(
     jsonPayload.protectedFiles.includes("machine-state/mac-mini.json"),
-    `sanity: the mismatched own file stays protected: ${JSON.stringify(jsonPayload.protectedFiles)}`,
+    `sanity: the mismatched own file stays protected: ${JSON.stringify(jsonPayload.protectedFiles)}`
   );
-  const matchingNotes = (jsonPayload.notes || []).filter(
-    (note: string) => note === expectedNote,
-  );
+  const matchingNotes = (jsonPayload.notes || []).filter((note: string) => note === expectedNote);
   assert.equal(
     matchingNotes.length,
     1,
-    `expected exactly one profile-mismatch note: ${JSON.stringify(jsonPayload.notes)}`,
+    `expected exactly one profile-mismatch note: ${JSON.stringify(jsonPayload.notes)}`
   );
 
-  const textResult = runCli([
-    "run",
-    "wrong-profile",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "text",
-  ]);
+  const textResult = runCli(["run", "wrong-profile", "--config", configPath, "--mode", "pull", "--output", "text"]);
   assert.ok(
     textResult.stdout.includes(expectedNote),
-    `expected the profile-mismatch note in the text summary: ${textResult.stdout}`,
+    `expected the profile-mismatch note in the text summary: ${textResult.stdout}`
   );
 });
 
@@ -377,13 +248,7 @@ test("D-002: profile mismatch overwrite shape - the mismatched own file is mirro
 
   writeProjectConfig(
     configPath,
-    ownerScopedPullConfig(
-      workspaceRoot,
-      remoteDir,
-      stateDir,
-      "wrong-profile",
-      machineStateSource,
-    ),
+    ownerScopedPullConfig(workspaceRoot, remoteDir, stateDir, "wrong-profile", machineStateSource)
   );
 
   // Seed base == remote == v1 for mac-mini.json under the CORRECT profile
@@ -392,89 +257,53 @@ test("D-002: profile mismatch overwrite shape - the mismatched own file is mirro
   git(["clone", remoteDir, peerSeed], root);
   git(["config", "user.name", "peer"], peerSeed);
   git(["config", "user.email", "peer@example.invalid"], peerSeed);
-  writeText(
-    path.join(peerSeed, "shared", "machine-state", "mac-mini.json"),
-    "v1\n",
-  );
+  writeText(path.join(peerSeed, "shared", "machine-state", "mac-mini.json"), "v1\n");
   git(["add", "."], peerSeed);
   git(["commit", "-m", "seed mac-mini.json"], peerSeed);
   git(["push", "origin", "HEAD:main"], peerSeed);
 
-  const seed = runCli([
-    "run",
-    "mac-mini",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
-  assert.ok(
-    JSON.parse(seed.stdout).runs[0].appliedFiles.includes(
-      "machine-state/mac-mini.json",
-    ),
-  );
-  assert.equal(
-    readText(path.join(machineStateSource, "mac-mini.json")),
-    "v1\n",
-  );
+  const seed = runCli(["run", "mac-mini", "--config", configPath, "--mode", "pull", "--output", "json"]);
+  assert.ok(JSON.parse(seed.stdout).runs[0].appliedFiles.includes("machine-state/mac-mini.json"));
+  assert.equal(readText(path.join(machineStateSource, "mac-mini.json")), "v1\n");
 
   // The hub moves on ...
   const peerUpdate = path.join(root, "peer-update");
   git(["clone", remoteDir, peerUpdate], root);
   git(["config", "user.name", "peer"], peerUpdate);
   git(["config", "user.email", "peer@example.invalid"], peerUpdate);
-  writeText(
-    path.join(peerUpdate, "shared", "machine-state", "mac-mini.json"),
-    "v2 from hub\n",
-  );
+  writeText(path.join(peerUpdate, "shared", "machine-state", "mac-mini.json"), "v2 from hub\n");
   git(["add", "."], peerUpdate);
   git(["commit", "-m", "hub updates mac-mini.json"], peerUpdate);
   git(["push", "origin", "HEAD:main"], peerUpdate);
 
   // ... and, independently, local also diverges.
-  writeText(
-    path.join(machineStateSource, "mac-mini.json"),
-    "v3 stale local content\n",
-  );
+  writeText(path.join(machineStateSource, "mac-mini.json"), "v3 stale local content\n");
 
   // Now pull under the MISMATCHED profile positional: mac-mini.json reads
   // as a peer file (wrong-profile.json is the expected own filename), so
   // the AC-002 mirror rule overwrites it from the remote instead of 3-way
   // merging the local divergence.
-  const pull = runCli([
-    "run",
-    "wrong-profile",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
+  const pull = runCli(["run", "wrong-profile", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const payload = JSON.parse(pull.stdout).runs[0];
 
   assert.equal(
     readText(path.join(machineStateSource, "mac-mini.json")),
     "v2 from hub\n",
-    "the mismatched own file, now classified as a peer file, is mirrored from the remote",
+    "the mismatched own file, now classified as a peer file, is mirrored from the remote"
   );
   assert.ok(
     payload.appliedFiles.includes("machine-state/mac-mini.json"),
-    `expected machine-state/mac-mini.json in appliedFiles: ${JSON.stringify(payload.appliedFiles)}`,
+    `expected machine-state/mac-mini.json in appliedFiles: ${JSON.stringify(payload.appliedFiles)}`
   );
 
   const expectedMismatchNote =
     "profile 'wrong-profile': own file 'wrong-profile.json' not found among 1 file(s) in " +
     `'${machineStateSource}'; this machine will publish no 'machine-state' state - check the profile positional matches this machine`;
-  const matchingNotes = (payload.notes || []).filter(
-    (note: string) => note === expectedMismatchNote,
-  );
+  const matchingNotes = (payload.notes || []).filter((note: string) => note === expectedMismatchNote);
   assert.equal(
     matchingNotes.length,
     1,
-    `expected exactly one mismatch note despite the file being mirrored: ${JSON.stringify(payload.notes)}`,
+    `expected exactly one mismatch note despite the file being mirrored: ${JSON.stringify(payload.notes)}`
   );
 });
 
@@ -488,49 +317,31 @@ test("D-006: --mode sync reports the profile-mismatch note exactly once (pull's 
 
   writeProjectConfig(
     configPath,
-    ownerScopedPullConfig(
-      workspaceRoot,
-      remoteDir,
-      stateDir,
-      "wrong-profile",
-      machineStateSource,
-    ),
+    ownerScopedPullConfig(workspaceRoot, remoteDir, stateDir, "wrong-profile", machineStateSource)
   );
 
   mkdirSync(machineStateSource, { recursive: true });
-  writeText(
-    path.join(machineStateSource, "mac-mini.json"),
-    "this machine's own content\n",
-  );
+  writeText(path.join(machineStateSource, "mac-mini.json"), "this machine's own content\n");
 
   const expectedNote =
     "profile 'wrong-profile': own file 'wrong-profile.json' not found among 1 file(s) in " +
     `'${machineStateSource}'; this machine will publish no 'machine-state' state - check the profile positional matches this machine`;
 
-  const syncResult = runCli([
-    "run",
-    "wrong-profile",
-    "--config",
-    configPath,
-    "--mode",
-    "sync",
-    "--output",
-    "json",
-  ]);
+  const syncResult = runCli(["run", "wrong-profile", "--config", configPath, "--mode", "sync", "--output", "json"]);
   const payload = JSON.parse(syncResult.stdout).runs[0];
 
   const anyWording = (payload.notes || []).filter((note: string) =>
-    note.includes("own file 'wrong-profile.json' not found among 1 file(s)"),
+    note.includes("own file 'wrong-profile.json' not found among 1 file(s)")
   );
   assert.equal(
     anyWording.length,
     1,
-    `expected exactly one profile-mismatch note in the combined sync payload, whatever its wording (pull's loop and push's warning must not each contribute their own copy): ${JSON.stringify(payload.notes)}`,
+    `expected exactly one profile-mismatch note in the combined sync payload, whatever its wording (pull's loop and push's warning must not each contribute their own copy): ${JSON.stringify(payload.notes)}`
   );
   assert.equal(
     anyWording[0],
     expectedNote,
-    `expected the single surviving note to use the shared (hyphen) wording, not an em-dash variant: ${JSON.stringify(payload.notes)}`,
+    `expected the single surviving note to use the shared (hyphen) wording, not an em-dash variant: ${JSON.stringify(payload.notes)}`
   );
 });
 
@@ -544,13 +355,7 @@ test("D-003: a base-less protected peer file left with stale markers gets the pe
 
   writeProjectConfig(
     configPath,
-    ownerScopedPullConfig(
-      workspaceRoot,
-      remoteDir,
-      stateDir,
-      "mac-mini",
-      machineStateSource,
-    ),
+    ownerScopedPullConfig(workspaceRoot, remoteDir, stateDir, "mac-mini", machineStateSource)
   );
 
   // A peer's file this workspace already has locally (e.g. carried over
@@ -561,30 +366,21 @@ test("D-003: a base-less protected peer file left with stale markers gets the pe
   mkdirSync(machineStateSource, { recursive: true });
   writeText(path.join(machineStateSource, "linux.json"), STALE_MARKER_CONTENT);
 
-  const pull = runCli([
-    "run",
-    "mac-mini",
-    "--config",
-    configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
+  const pull = runCli(["run", "mac-mini", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const payload = JSON.parse(pull.stdout).runs[0];
 
   assert.ok(
     payload.protectedFiles.includes("machine-state/linux.json"),
-    `sanity: expected the base-less peer file to be protected: ${JSON.stringify(payload.protectedFiles)}`,
+    `sanity: expected the base-less peer file to be protected: ${JSON.stringify(payload.protectedFiles)}`
   );
   const matchingNotes = (payload.notes || []).filter(
     (note: string) =>
       note ===
-      "stale conflict markers in machine-state/linux.json; the remote owns this file, fix it at the hub or restore --from-commit",
+      "stale conflict markers in machine-state/linux.json; the remote owns this file, fix it at the hub or restore --from-commit"
   );
   assert.equal(
     matchingNotes.length,
     1,
-    `expected exactly one peer-specific stale-marker note: ${JSON.stringify(payload.notes)}`,
+    `expected exactly one peer-specific stale-marker note: ${JSON.stringify(payload.notes)}`
   );
 });

@@ -27,10 +27,7 @@ test("run exits with code 2 for an invalid cron expression", () => {
     remoteUrl: path.join(root, "unused.git")
   });
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--schedule", "* *"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--schedule", "* *"], { expectFailure: true });
 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /cron expression/i);

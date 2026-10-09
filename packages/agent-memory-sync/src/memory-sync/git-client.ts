@@ -60,11 +60,7 @@ class GitClient {
   }
 
   lookupRemoteHead(remoteUrl: string, branch: string, cwd: string): string | null {
-    const result = this.run(
-      ["ls-remote", "--heads", remoteUrl, branch],
-      cwd,
-      true
-    );
+    const result = this.run(["ls-remote", "--heads", remoteUrl, branch], cwd, true);
 
     if (result.exitCode !== 0) {
       // RemoteUnavailableError, not plain CliError: this is one of the two
@@ -176,10 +172,7 @@ class GitClient {
       return [];
     }
 
-    const result = this.run(
-      ["diff", "--cached", "--name-status", "--no-renames", "-z", "--diff-filter=D"],
-      repoDir
-    );
+    const result = this.run(["diff", "--cached", "--name-status", "--no-renames", "-z", "--diff-filter=D"], repoDir);
 
     const fields = result.stdout.split("\0");
     const deletions: string[] = [];
@@ -351,10 +344,7 @@ class GitClient {
     }
     const result = this.run(args, repoDir, true);
     if (result.exitCode !== 0) {
-      throw new CliError(
-        `could not list tree for '${ref}'. ${result.stderr.trim() || "Unknown error."}`,
-        4
-      );
+      throw new CliError(`could not list tree for '${ref}'. ${result.stderr.trim() || "Unknown error."}`, 4);
     }
 
     return result.stdout.split("\0").filter(Boolean);
@@ -391,10 +381,7 @@ class GitClient {
         return result;
       }
 
-      throw new CliError(
-        `git command failed: ${this.gitBinary} ${args.join(" ")}.`,
-        4
-      );
+      throw new CliError(`git command failed: ${this.gitBinary} ${args.join(" ")}.`, 4);
     }
   }
 }

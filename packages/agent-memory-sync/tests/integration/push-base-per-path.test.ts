@@ -58,7 +58,17 @@ function createSpoke(
 }
 
 function runMode(spoke: Spoke, mode: "push" | "pull", extra: string[] = []) {
-  const result = runCli(["run", spoke.name, "--config", spoke.configPath, "--mode", mode, "--output", "json", ...extra]);
+  const result = runCli([
+    "run",
+    spoke.name,
+    "--config",
+    spoke.configPath,
+    "--mode",
+    mode,
+    "--output",
+    "json",
+    ...extra
+  ]);
   return JSON.parse(result.stdout).runs[0];
 }
 
@@ -150,7 +160,10 @@ test("a genuine local edit of F against a newer hub version is held back and nev
   const result = runMode(b, "push");
   assert.equal(result.status, "applied");
   assert.deepEqual(result.conflictFiles, ["notes/F.md"]);
-  assert.ok(result.notes.some((note: string) => note.includes("notes/F.md")), JSON.stringify(result.notes));
+  assert.ok(
+    result.notes.some((note: string) => note.includes("notes/F.md")),
+    JSON.stringify(result.notes)
+  );
 
   assert.equal(readHub(root, remoteDir, "notes/F.md"), "f v2 from a\n", "the peer's version must stay on the hub");
   assert.equal(readText(notePath(b, "F.md")), "f v1\nedit from b\n", "the local edit stays local");
