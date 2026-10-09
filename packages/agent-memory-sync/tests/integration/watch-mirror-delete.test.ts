@@ -6,8 +6,7 @@
 // workspace has simply never pulled yet — and (b) blindly overwrote any
 // differing remote file with the local version, with no 3-way merge/conflict
 // handling. See docs/machine-setup.md's former mirror-delete warnings
-// (rolled back by this change) and
-// .ai/runs/2026-07-23-watch-mirror-delete/01-plan.md.
+// (rolled back by this change).
 //
 // The fix routes watch's push through the same base-snapshot-aware
 // `performPush` (src/memory-sync/push.ts) that `run --mode sync/push`
@@ -126,7 +125,19 @@ test("watch refuses a truncating checkout on two ticks without publishing or alt
   });
 
   const child = spawnWatch(
-    ["watch", "default", "--config", configPath, "--debounce-ms", "300", "--max-runs", "2", "--verbose", "--output", "json"],
+    [
+      "watch",
+      "default",
+      "--config",
+      configPath,
+      "--debounce-ms",
+      "300",
+      "--max-runs",
+      "2",
+      "--verbose",
+      "--output",
+      "json"
+    ],
     process.env
   );
   let stderr = "";
@@ -477,7 +488,7 @@ function writeStubGitFailingOnCommit(root: string): string {
   return stubPath;
 }
 
-// THE boundary test AC1 actually depends on. Before this rework, performPush
+// THE boundary test the first acceptance criterion depends on. Before this rework, performPush
 // wrapped everything from prepareWorkingCopy through the final state-store
 // writes in one catch-all that swallowed ANY thrown error into
 // enqueueCurrentSnapshot's "queued, exit 0" outcome (see the removed
@@ -568,7 +579,7 @@ function writeStubGitFailingOnFetch(root: string): string {
   return stubPath;
 }
 
-// THE boundary test AC3 (agent-tasks 11424b5e) depends on. Mirrors the
+// THE boundary test the third acceptance criterion (agent-tasks 11424b5e) depends on. Mirrors the
 // commit-failure test above almost exactly, with one deliberate difference:
 // the remote MUST already be seeded with a real commit before the stub is
 // installed, so `lookupRemoteHead`'s `git ls-remote` (never intercepted by
@@ -643,7 +654,7 @@ test("watch tick updates the local base snapshot to the post-merge remote conten
   assert.equal(baseMeta.deleted, false);
 });
 
-// R2 medium: a tick whose only outcome is a deletion reported "watch tick
+// A tick whose only outcome is a deletion reported "watch tick
 // produced no remote changes" while the remote really did shrink, because
 // the report gated on appliedFiles alone and a deletion is never an applied
 // file. An operator reading a launchd log had no signal at all that the tick
@@ -673,9 +684,9 @@ test("watch tick reports a delete-only tick as a deletion, not as no remote chan
   assert.equal(readText(path.join(inspection, "shared", "MEMORY.md")), "base\n");
 });
 
-// AC-004: the watch job and the sync job may not operate on one stateDir at
+// The watch job and the sync job may not operate on one stateDir at
 // the same time. A tick that finds the lock held defers instead of failing:
-// the watcher is the process that has to survive (the 2026-09-11 incident
+// the watcher is the process that has to survive (the memory-corpus wipe incident
 // was noticed at all only because watch was still running), and its pending
 // changes must survive with it rather than being consumed by a tick that
 // could not push them.

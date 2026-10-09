@@ -66,8 +66,7 @@ class RemoteQueueEscalationError extends CliError {
 // from a usage error (2), a config error (3), a git/remote failure (4) and
 // the queue escalation (6) in a launchd/systemd log.
 //
-// Origin: the 2026-09-11 wipe (agent-tasks cda5b12c, pandora run
-// .ai/runs/2026-09-11-memory-sync-wipe). A sync tick whose pull
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c). A sync tick whose pull
 // had just emptied the local workspace pushed the deletion of the whole
 // tracked corpus, and the peer machine mirrored it one tick later. Nothing
 // in the push path asked whether deleting the entire tracked corpus at once
@@ -83,7 +82,7 @@ class MassDeleteRefusedError extends CliError {
 // be trusted to represent the remote: git reported success, but a sync
 // destination the base snapshot knows to hold files came back missing, or
 // present but emptied to zero bytes (src/memory-sync/guards.ts). In the
-// 2026-09-11 incident that was the stateDir/tmp wipe race (StateStore.clearTemp
+// memory-corpus wipe incident that was the stateDir/tmp wipe race (StateStore.clearTemp
 // removes the WHOLE tmp root, and the watch and sync jobs share one
 // stateDir), which is indistinguishable from a genuine remote deletion at
 // the file level and was read as one; agent-tasks 56e20494 added the

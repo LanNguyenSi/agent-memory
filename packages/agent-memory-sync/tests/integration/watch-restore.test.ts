@@ -113,7 +113,7 @@ test("watch produces a single-file commit message when only one path changed", a
   // The result line this tick must produce is the pushed-snapshot one: it
   // edited exactly one file against a reachable remote. Accepting the
   // queued or the no-changes line here would let a tick that silently
-  // stopped pushing satisfy the ordering assertion below (R2 medium).
+  // stopped pushing satisfy the ordering assertion below.
   const pushStartIndex = stderr.indexOf("watch tick pushing snapshot");
   const resultIndex = stderr.search(/pushed snapshot [0-9a-f]{7} \(1 file\(s\) applied\)/);
   assert.ok(pushStartIndex >= 0, `push-start line missing from stderr: ${stderr}`);
@@ -266,16 +266,7 @@ test("restore --path writes a single file byte-identical from a snapshot SHA", (
 
   assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "snapshot 2\n");
 
-  const result = runCli([
-    "restore",
-    snapshot1Sha,
-    "--config",
-    configPath,
-    "--path",
-    "MEMORY.md",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["restore", snapshot1Sha, "--config", configPath, "--path", "MEMORY.md", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.command, "restore");
   assert.equal(payload.sha, snapshot1Sha);
@@ -302,15 +293,7 @@ test("restore --yes restores the full snapshot tree", () => {
   writeText(path.join(workspaceRoot, "logs", "2026-05-01.md"), "log v2\n");
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const result = runCli([
-    "restore",
-    snapshot1Sha,
-    "--config",
-    configPath,
-    "--yes",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["restore", snapshot1Sha, "--config", configPath, "--yes", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.restored.length, 2);
 
@@ -329,10 +312,7 @@ test("restore without --yes/--path/--dry-run is rejected", () => {
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
   const snapshotSha = git(["rev-parse", "HEAD"], cloneRemote(remoteDir, root, "rev1")).trim();
 
-  const result = runCli(
-    ["restore", snapshotSha, "--config", configPath, "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["restore", snapshotSha, "--config", configPath, "--output", "json"], { expectFailure: true });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /requires --yes/);
 });
@@ -351,15 +331,7 @@ test("restore --dry-run lists targets without writing", () => {
   writeText(path.join(workspaceRoot, "MEMORY.md"), "v2\n");
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const result = runCli([
-    "restore",
-    snapshotSha,
-    "--config",
-    configPath,
-    "--dry-run",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["restore", snapshotSha, "--config", configPath, "--dry-run", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.dryRun, true);
   assert.equal(payload.restored.length, 1);
@@ -379,19 +351,9 @@ test("restore --path rejects path-traversal payloads", () => {
   const snapshotSha = git(["rev-parse", "HEAD"], cloneRemote(remoteDir, root, "rev1")).trim();
 
   for (const payload of ["logs/../../etc/passwd", "../escape.md", "logs//double"]) {
-    const result = runCli(
-      [
-        "restore",
-        snapshotSha,
-        "--config",
-        configPath,
-        "--path",
-        payload,
-        "--output",
-        "json"
-      ],
-      { expectFailure: true }
-    );
+    const result = runCli(["restore", snapshotSha, "--config", configPath, "--path", payload, "--output", "json"], {
+      expectFailure: true
+    });
     assert.notEqual(result.status, 0, `payload '${payload}' should be rejected`);
     assert.match(result.stderr, /invalid|cannot map/i);
   }
@@ -407,13 +369,12 @@ test("restore rejects an unknown sha with a loud non-zero exit", () => {
   writeProjectConfig(configPath, createConfig(workspaceRoot, remoteDir));
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const result = runCli(
-    ["restore", "deadbeef", "--config", configPath, "--yes", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["restore", "deadbeef", "--config", configPath, "--yes", "--output", "json"], {
+    expectFailure: true
+  });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /fetch|deadbeef|not.+exist/i);
-  // Pins the AC-3 hint: `deadbeef` is short (8 hex chars), and unresolvable
+  // Pins the short-sha hint: `deadbeef` is short (8 hex chars), and unresolvable
   // both locally and via an explicit remote fetch (see the short-sha tests
   // below for the resolvable case), so the error should say outright that a
   // full 40-character sha is required instead of leaving the reader to
@@ -453,16 +414,7 @@ test("restore <short-sha> resolves against the already-fetched branch history an
   writeText(path.join(workspaceRoot, "MEMORY.md"), "snapshot 2\n");
   runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
 
-  const result = runCli([
-    "restore",
-    shortSha,
-    "--config",
-    configPath,
-    "--path",
-    "MEMORY.md",
-    "--output",
-    "json"
-  ]);
+  const result = runCli(["restore", shortSha, "--config", configPath, "--path", "MEMORY.md", "--output", "json"]);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.restored.length, 1);
   assert.equal(readText(path.join(workspaceRoot, "MEMORY.md")), "snapshot 1\n");
@@ -487,10 +439,9 @@ test("restore <short-sha> that is not reachable from the configured branch fails
   // A well-formed but short hex string that is not a prefix of any object
   // reachable from the branch (nor known to the remote at all) — neither
   // local resolution nor the fallback remote fetchRef can succeed.
-  const result = runCli(
-    ["restore", "0123abc", "--config", configPath, "--yes", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["restore", "0123abc", "--config", configPath, "--yes", "--output", "json"], {
+    expectFailure: true
+  });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /40.character sha/i);
 });

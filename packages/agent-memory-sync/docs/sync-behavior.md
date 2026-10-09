@@ -82,7 +82,7 @@ each refusal reports on exit.
   machine did not create it and cannot rename it, so `pull` does not abort
   the run for it. A note in the result names the hub path; every other
   file in the run still pulls, and the run still exits `0`. `restore
-  --from-commit` restoring the backslash-named path itself to a local
+--from-commit` restoring the backslash-named path itself to a local
   destination is still refused outright: every source path is mapped and
   validated before the destination's pre-apply snapshot is taken or any
   file is written, so an unmappable backslash path anywhere in the source
@@ -137,7 +137,7 @@ is about to change.
 ## Unmapped remote paths and base snapshots
 
 A remote path with no configured `syncPaths` mapping (the `skippedFiles`
-case above) is never recorded into either machine's *base snapshot*
+case above) is never recorded into either machine's _base snapshot_
 store, the local record of "what the remote last looked like" that `pull`
 and `push` both use to detect changes.
 
@@ -180,7 +180,7 @@ filtered at three call sites, all permanently load-bearing:
   advance described above; the owner-scoped filter is deliberately not
   applied to this write, only to push's read side, so a peer's deletion of
   its own `ownerScoped` file still propagates).
-- `push` also filters its own base snapshot *read* (and any already-queued
+- `push` also filters its own base snapshot _read_ (and any already-queued
   snapshot's stored `baseFiles`) before the 3-way merge runs, guarding
   against a store restored from an old backup or otherwise edited outside
   `pull`/`push`'s own code paths.
@@ -200,7 +200,7 @@ instead of being actively removed from the remote on the next run.
 ## Queue escalation
 
 The queue-instead-of-crash handling is deliberately silent for a remote
-that is merely *offline*. But a remote that is *correctly* classified
+that is merely _offline_. But a remote that is _correctly_ classified
 `RemoteUnavailableError` can still be **permanently** wrong (a bad
 `remoteUrl`, a renamed repository path, a host that accepts an SSH/TCP
 connection but cannot serve the repository), which without a second
@@ -211,7 +211,7 @@ Every enqueue checks the age of the OLDEST currently-queued snapshot
 (`stateDir/queue/<id>/manifest.json`'s `createdAt`) against
 `queueEscalationThresholdMs` (default 24h). Once the oldest queued
 snapshot is older than the threshold, meaning the remote has been
-*continuously* unreachable for that long, the tick throws instead: a
+_continuously_ unreachable for that long, the tick throws instead: a
 clear message on stderr and exit code `6`. The snapshot itself is never
 lost; it stays queued and is replayed automatically once the remote is
 reachable again. 24h is sized against this package's own committed

@@ -37,13 +37,13 @@ interface LocalSyncFile {
 interface CollectLocalSyncFilesOptions {
   // Applies the ownerScoped filter (see SyncPathConfig.ownerScoped above).
   // Pull must NEVER set this — pull is the one place a peer's owner file is
-  // supposed to be materialized locally (D-004,
-  // .ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md); only
+  // supposed to be materialized locally (agent-tasks
+  // 06d09cde); only
   // push's own "what do I offer as my local snapshot" collection sets it, so
   // a machine never re-offers a peer's file it merely pulled as if it were
   // its own change (the Defect B echo/last-writer-wins race).
   ownerFilter?: boolean;
-  // Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde):
+  // Follow-up fix (agent-tasks 06d09cde):
   // when an ownerScoped directory has OTHER files but not this machine's own
   // `<profile>.json`, the pre-fix code silently offered nothing for that
   // destination — a real data-loss path, reachable whenever the resolved
@@ -185,7 +185,8 @@ function filterOwnerScopedBaseMap(
   const ownerScopedDestinations = config.syncPaths
     .filter(
       (entry) =>
-        entry.ownerScoped && resolveSyncPathKind(resolveWorkspacePath(config.rootDir, entry.source), entry) === "directory"
+        entry.ownerScoped &&
+        resolveSyncPathKind(resolveWorkspacePath(config.rootDir, entry.source), entry) === "directory"
     )
     .map((entry) => normalizeRemoteRelativePath(entry.destination || entry.source));
 
@@ -267,7 +268,7 @@ interface ResolvedSyncPathEntry {
   kind: "file" | "directory";
   // Carried through from SyncPathConfig.ownerScoped so a caller that only
   // has the resolved entries (e.g. pull.ts's peer-file mirror rule, task
-  // e104c9f2 / pandora run .ai/runs/2026-09-11-sync-peer-file-conflict) can
+  // e104c9f2) can
   // find an ownerScoped directory destination without re-reading
   // config.syncPaths and re-deriving kind itself.
   ownerScoped: boolean;
@@ -363,9 +364,7 @@ function toRepositoryRelativePath(config: RunConfig, remoteRelativePath: string)
 }
 
 function normalizeRemoteRelativePath(value: string): string {
-  const normalized = assertPortablePathSegment(value, "sync destination")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
+  const normalized = assertPortablePathSegment(value, "sync destination").replace(/^\/+/, "").replace(/\/+$/, "");
   if (!normalized || normalized.startsWith("..")) {
     throw new CliError(`sync destination '${value}' is invalid.`, 3);
   }

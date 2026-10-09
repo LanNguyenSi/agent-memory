@@ -11,7 +11,17 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
-const { cloneRemote, createSandbox, fileExists, git, initBareRemote, readText, runCli, writeProjectConfig, writeText } = require("../helpers/cli.ts");
+const {
+  cloneRemote,
+  createSandbox,
+  fileExists,
+  git,
+  initBareRemote,
+  readText,
+  runCli,
+  writeProjectConfig,
+  writeText
+} = require("../helpers/cli.ts");
 
 function directoryRootConfig(workspaceRoot: string, remoteDir: string, stateDir: string) {
   return {
@@ -51,14 +61,26 @@ test("push skips hidden files and dot-directories under rootDir (.DS_Store, nest
   assert.equal(payload.runs[0].status, "applied");
   const applied: string[] = payload.runs[0].appliedFiles;
 
-  assert.ok(applied.some((f) => f.endsWith("MEMORY.md")), `expected MEMORY.md in appliedFiles: ${JSON.stringify(applied)}`);
+  assert.ok(
+    applied.some((f) => f.endsWith("MEMORY.md")),
+    `expected MEMORY.md in appliedFiles: ${JSON.stringify(applied)}`
+  );
   assert.ok(
     applied.some((f) => f.endsWith("visible-nested.md")),
     `expected sub/visible-nested.md in appliedFiles: ${JSON.stringify(applied)}`
   );
-  assert.ok(!applied.some((f) => f.includes(".DS_Store")), `hidden file leaked into appliedFiles: ${JSON.stringify(applied)}`);
-  assert.ok(!applied.some((f) => f.includes(".hidden-secret")), `hidden file leaked into appliedFiles: ${JSON.stringify(applied)}`);
-  assert.ok(!applied.some((f) => f.includes(".git")), `.git directory contents leaked into appliedFiles: ${JSON.stringify(applied)}`);
+  assert.ok(
+    !applied.some((f) => f.includes(".DS_Store")),
+    `hidden file leaked into appliedFiles: ${JSON.stringify(applied)}`
+  );
+  assert.ok(
+    !applied.some((f) => f.includes(".hidden-secret")),
+    `hidden file leaked into appliedFiles: ${JSON.stringify(applied)}`
+  );
+  assert.ok(
+    !applied.some((f) => f.includes(".git")),
+    `.git directory contents leaked into appliedFiles: ${JSON.stringify(applied)}`
+  );
 
   const inspectionDir = cloneRemote(remoteDir, root, "inspect-hidden");
   assert.equal(fileExists(path.join(inspectionDir, "shared", "memory", ".DS_Store")), false);

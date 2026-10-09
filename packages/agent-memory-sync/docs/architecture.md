@@ -53,14 +53,14 @@ Commands are registered on a `Command` instance. Each subcommand has its own Com
 import { Command } from "commander";
 
 export function registerRun(program: Command): void {
-    program
-        .command("run")
-        .description("Execute the primary action")
-        .option("--dry-run", "Preview without changes", false)
-        .option("-o, --output <format>", "Output format", "text")
-        .action(async (options) => {
-            await executeRun(options);
-        });
+  program
+    .command("run")
+    .description("Execute the primary action")
+    .option("--dry-run", "Preview without changes", false)
+    .option("-o, --output <format>", "Output format", "text")
+    .action(async (options) => {
+      await executeRun(options);
+    });
 }
 ```
 
@@ -88,6 +88,7 @@ Commands receive config as a parameter; they do not read it directly. This keeps
 testable without touching the filesystem.
 
 Config file path resolution order:
+
 1. Value of `--config` flag
 2. `$AGENT_MEMORY_SYNC_CONFIG` environment variable
 3. `$XDG_CONFIG_HOME/agent-memory-sync/config.json`

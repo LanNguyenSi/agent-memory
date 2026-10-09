@@ -61,6 +61,12 @@ jobs:
       - name: Lint
         run: npm run lint --if-present
 
+      # Prettier gate, scoped to agent-memory-sync (the only package with a
+      # prettier config).
+      - name: Format
+        if: matrix.package == 'agent-memory-sync'
+        run: npm run format:check
+
       - name: Test + coverage gate
         # test:coverage runs the suite under node --test --experimental-test-coverage
         # with --test-coverage-{lines,branches,functions} thresholds, so coverage

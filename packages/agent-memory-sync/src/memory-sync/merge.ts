@@ -14,8 +14,7 @@ interface MergeResult {
 // Detects a previous pass's inline conflict markers surviving inside a
 // winning payload. Used to keep every conflict:false return path below
 // honest: none of them may hand back marker-carrying content while still
-// claiming "clean". See
-// .ai/runs/2026-08-03-sync-conflict-markers-echo/01-plan.md (Teil 1) for the
+// claiming "clean". The
 // pull-then-push cascade this closes: a genuine conflict on pull writes
 // markers to the local file and a clean base; the very next push then saw
 // remote === base (nothing else changed the remote in between) and took the
@@ -32,8 +31,7 @@ interface MergeResult {
 // with 7+ `=` (a setext H1 underline, an `====`-style section divider) or
 // `>>>>>>> ` (a deeply nested blockquote/reply-quote line) — content agent
 // memory files carry routinely and that earlier revisions of this check
-// mis-flagged as conflict:true. Fix-Runde 05-review-findings.md MEDIUM
-// finding #2 (agent-tasks 06d09cde).
+// mis-flagged as conflict:true. Fixed in agent-tasks 06d09cde.
 function hasConflictMarkers(content: string | null): boolean {
   if (content === null) {
     return false;
@@ -68,8 +66,7 @@ function mergeText(input: MergeInput): MergeResult {
   // conflict:false return must hold for marker-free content). Unreachable
   // today via the deployed inline-markers strategy, but local-wins/
   // remote-wins are still a public MergeInput.strategy value the honesty
-  // invariant must hold for. Fix-Runde 05-review-findings.md LOW finding #4
-  // (agent-tasks 06d09cde).
+  // invariant must hold for. Fixed in agent-tasks 06d09cde.
   if (strategy === "local-wins") {
     return { content: local, status: "conflict", conflict: hasConflictMarkers(local) };
   }
@@ -79,13 +76,7 @@ function mergeText(input: MergeInput): MergeResult {
   }
 
   return {
-    content: [
-      "<<<<<<< local",
-      local || "",
-      "=======",
-      remote || "",
-      ">>>>>>> remote"
-    ].join("\n"),
+    content: ["<<<<<<< local", local || "", "=======", remote || "", ">>>>>>> remote"].join("\n"),
     status: "conflict",
     conflict: true
   };

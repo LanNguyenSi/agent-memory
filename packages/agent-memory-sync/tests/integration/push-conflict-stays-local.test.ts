@@ -52,7 +52,17 @@ function createSpoke(
 }
 
 function runMode(spoke: Spoke, mode: string, extra: string[] = []) {
-  const result = runCli(["run", spoke.name, "--config", spoke.configPath, "--mode", mode, "--output", "json", ...extra]);
+  const result = runCli([
+    "run",
+    spoke.name,
+    "--config",
+    spoke.configPath,
+    "--mode",
+    mode,
+    "--output",
+    "json",
+    ...extra
+  ]);
   return JSON.parse(result.stdout).runs[0];
 }
 
@@ -127,7 +137,10 @@ test("a held-back path keeps its base entry and stays held back on every later p
     const push = runMode(s, "push");
     assert.deepEqual(push.conflictFiles, ["notes/H.md"]);
     assert.equal(push.appliedFiles.includes("notes/H.md"), false);
-    assert.ok(push.notes.some((note: string) => note.includes("notes/H.md")), JSON.stringify(push.notes));
+    assert.ok(
+      push.notes.some((note: string) => note.includes("notes/H.md")),
+      JSON.stringify(push.notes)
+    );
     assert.equal(readBase(s)["notes/H.md"], baseAfterPull, "the base entry must not move");
     assert.equal(readHub(root, remoteDir, "notes/H.md"), "remote v2\n");
   }

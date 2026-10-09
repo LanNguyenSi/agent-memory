@@ -34,25 +34,22 @@ test("json output keeps the top-level run schema stable", () => {
   // pull additionally carries `skippedFiles` and `protectedFiles`, pinned
   // by the pull-shaped assertion further down.
   const run = payload.runs[0];
-  assert.deepEqual(
-    Object.keys(run).sort(),
-    [
-      "appliedFiles",
-      "conflictFiles",
-      "deletedFiles",
-      "kind",
-      "mergedFiles",
-      "notes",
-      "queuedSnapshotId",
-      "remoteHeadAfter",
-      "remoteHeadBefore",
-      "snapshots",
-      "status"
-    ]
-  );
+  assert.deepEqual(Object.keys(run).sort(), [
+    "appliedFiles",
+    "conflictFiles",
+    "deletedFiles",
+    "kind",
+    "mergedFiles",
+    "notes",
+    "queuedSnapshotId",
+    "remoteHeadAfter",
+    "remoteHeadBefore",
+    "snapshots",
+    "status"
+  ]);
 
   // The pull-shaped run: the same keys plus `protectedFiles` (local files
-  // kept because their base snapshot is missing, AC-002) and `skippedFiles`.
+  // kept because their base snapshot is missing) and `skippedFiles`.
   const pulled = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"]);
   const pullPayload = JSON.parse(pulled.stdout);
   assert.deepEqual(Object.keys(pullPayload).sort(), ["command", "dryRun", "mode", "profile", "runs", "schedule"]);

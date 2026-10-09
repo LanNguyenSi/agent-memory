@@ -8,13 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { existsSync, mkdirSync, rmSync } = require("node:fs");
 const path = require("node:path");
-const {
-  createSandbox,
-  initBareRemote,
-  runCli,
-  writeProjectConfig,
-  writeText,
-} = require("../helpers/cli.ts");
+const { createSandbox, initBareRemote, runCli, writeProjectConfig, writeText } = require("../helpers/cli.ts");
 
 interface Spoke {
   name: string;
@@ -37,9 +31,9 @@ function writeSpokeConfig(spoke: Spoke, remoteUrl: string) {
       {
         source: path.join(spoke.workspace, "notes"),
         destination: "notes",
-        kind: "directory",
-      },
-    ],
+        kind: "directory"
+      }
+    ]
   });
 }
 
@@ -50,7 +44,7 @@ function createSpoke(root: string, remoteDir: string, name: string): Spoke {
     workspace,
     stateDir: path.join(root, `state-${name}`),
     configPath: path.join(root, `config-${name}.json`),
-    root,
+    root
   };
   mkdirSync(path.join(workspace, "notes"), { recursive: true });
   writeSpokeConfig(spoke, remoteDir);
@@ -67,22 +61,13 @@ function runPush(spoke: Spoke, extra: string[] = []) {
     "push",
     "--output",
     "json",
-    ...extra,
+    ...extra
   ]);
   return JSON.parse(result.stdout).runs[0];
 }
 
 function runPull(spoke: Spoke) {
-  runCli([
-    "run",
-    spoke.name,
-    "--config",
-    spoke.configPath,
-    "--mode",
-    "pull",
-    "--output",
-    "json",
-  ]);
+  runCli(["run", spoke.name, "--config", spoke.configPath, "--mode", "pull", "--output", "json"]);
 }
 
 function notePath(spoke: Spoke, name: string): string {
@@ -114,53 +99,20 @@ test("an adopted held-back path the adoption snapshot holds no copy of says so a
   writeSpokeConfig(s, remoteDir);
   const accepted = runPush(s, ["--accept-mass-delete"]);
   assert.equal(accepted.status, "applied");
+  assert.equal(accepted.snapshots.length, 1, "one pre-apply snapshot was taken");
   assert.equal(
-    accepted.snapshots.length,
-    1,
-    "one pre-apply snapshot was taken",
-  );
-  assert.equal(
-    existsSync(
-      path.join(
-        s.stateDir,
-        "snapshots",
-        "notes",
-        accepted.snapshots[0],
-        "files",
-        "notes",
-        "T0.md",
-      ),
-    ),
-    false,
+    existsSync(path.join(s.stateDir, "snapshots", "notes", accepted.snapshots[0], "files", "notes", "T0.md")),
+    false
   );
 
-  const note = accepted.notes.find((entry: string) =>
-    entry.includes("notes/T0.md"),
-  );
+  const note = accepted.notes.find((entry: string) => entry.includes("notes/T0.md"));
   assert.ok(note, JSON.stringify(accepted.notes));
   assert.ok(
-    note.includes("holds no copy of notes/T0.md") &&
-      note.includes("no local copy when the adoption ran"),
-    `the note says the snapshot holds no copy: ${note}`,
+    note.includes("holds no copy of notes/T0.md") && note.includes("no local copy when the adoption ran"),
+    `the note says the snapshot holds no copy: ${note}`
   );
-  assert.equal(
-    note.includes("files/notes/T0.md"),
-    false,
-    `the note names no snapshot file: ${note}`,
-  );
-  assert.equal(
-    note.includes("copy that one file"),
-    false,
-    `the note advises no copy step: ${note}`,
-  );
-  assert.equal(
-    note.includes("restore"),
-    false,
-    `the note advises no restore fallback: ${note}`,
-  );
-  assert.equal(
-    note.includes("<id>"),
-    false,
-    `the note is not the dry-run wording: ${note}`,
-  );
+  assert.equal(note.includes("files/notes/T0.md"), false, `the note names no snapshot file: ${note}`);
+  assert.equal(note.includes("copy that one file"), false, `the note advises no copy step: ${note}`);
+  assert.equal(note.includes("restore"), false, `the note advises no restore fallback: ${note}`);
+  assert.equal(note.includes("<id>"), false, `the note is not the dry-run wording: ${note}`);
 });

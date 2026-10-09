@@ -166,10 +166,7 @@ function defaultConfigPath(): string {
 // `config set` read through readPersistedConfig, which has its own
 // permissive fallback, so `config set` can still create a brand-new file at
 // a path that does not exist yet.
-async function loadConfig(
-  overridePath?: string,
-  options: { requireExisting?: boolean } = {}
-): Promise<LoadedConfig> {
+async function loadConfig(overridePath?: string, options: { requireExisting?: boolean } = {}): Promise<LoadedConfig> {
   const configPath = resolveConfigPath(overridePath);
   if (!existsSync(configPath)) {
     if (options.requireExisting && (overridePath || process.env.AGENT_MEMORY_SYNC_CONFIG)) {
@@ -206,13 +203,8 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
   const profile = merged.profile || "default";
   const rootDir = path.resolve(merged.rootDir || process.cwd());
   const agentId = sanitizeSegment(process.env.AGENT_MEMORY_SYNC_AGENT_ID || hostname());
-  const repositorySubdir = normalizeRelativePath(
-    merged.repositorySubdir || path.posix.join("agents", agentId)
-  );
-  const stateDir = path.resolve(
-    rootDir,
-    merged.stateDir || path.join(".agent-memory-sync", profile)
-  );
+  const repositorySubdir = normalizeRelativePath(merged.repositorySubdir || path.posix.join("agents", agentId));
+  const stateDir = path.resolve(rootDir, merged.stateDir || path.join(".agent-memory-sync", profile));
 
   return {
     ...merged,
@@ -248,10 +240,7 @@ function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = 
 
 function requireRemoteUrl(config: RunConfig): RunConfig {
   if (!config.remoteUrl) {
-    throw new CliError(
-      "remote URL is not configured. Set 'remoteUrl' in the config file or pass --remote.",
-      3
-    );
+    throw new CliError("remote URL is not configured. Set 'remoteUrl' in the config file or pass --remote.", 3);
   }
 
   return config;
@@ -323,10 +312,7 @@ function listConfigKeys(): string[] {
 }
 
 function resolveConfigPath(overridePath?: string): string {
-  const candidate =
-    overridePath ||
-    process.env.AGENT_MEMORY_SYNC_CONFIG ||
-    defaultConfigPath();
+  const candidate = overridePath || process.env.AGENT_MEMORY_SYNC_CONFIG || defaultConfigPath();
 
   return path.resolve(candidate);
 }
@@ -369,14 +355,10 @@ function readEnvConfig(): UserConfig {
     config.schedule = env.AGENT_MEMORY_SYNC_SCHEDULE;
   }
   if (env.AGENT_MEMORY_SYNC_CONFLICT_STRATEGY) {
-    config.conflictStrategy = validateConflictStrategy(
-      env.AGENT_MEMORY_SYNC_CONFLICT_STRATEGY as ConflictStrategy
-    );
+    config.conflictStrategy = validateConflictStrategy(env.AGENT_MEMORY_SYNC_CONFLICT_STRATEGY as ConflictStrategy);
   }
   if (env.AGENT_MEMORY_SYNC_SYNC_PATHS) {
-    config.syncPaths = normalizeSyncPathConfigList(
-      JSON.parse(env.AGENT_MEMORY_SYNC_SYNC_PATHS) as SyncPathConfig[]
-    );
+    config.syncPaths = normalizeSyncPathConfigList(JSON.parse(env.AGENT_MEMORY_SYNC_SYNC_PATHS) as SyncPathConfig[]);
   }
   if (env.AGENT_MEMORY_SYNC_GIT_BINARY) {
     config.gitBinary = env.AGENT_MEMORY_SYNC_GIT_BINARY;
@@ -442,10 +424,7 @@ function readEnvConfig(): UserConfig {
       }
       config.reachabilityCheckCommand = normalizeReachabilityCheckCommand(parsedValue as string[] | null);
     } catch (error) {
-      warnUnparsableReachabilityCheckCommandEnv(
-        env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND,
-        error
-      );
+      warnUnparsableReachabilityCheckCommandEnv(env.AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND, error);
     }
   }
 
@@ -640,16 +619,11 @@ function normalizeMassDeleteGuard(value?: MassDeleteGuardConfig | null): Require
     );
   }
 
-  const maxRatio =
-    typeof value.maxRatio === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxRatio : value.maxRatio;
-  const maxFiles =
-    typeof value.maxFiles === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxFiles : value.maxFiles;
+  const maxRatio = typeof value.maxRatio === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxRatio : value.maxRatio;
+  const maxFiles = typeof value.maxFiles === "undefined" ? DEFAULT_MASS_DELETE_GUARD.maxFiles : value.maxFiles;
 
   if (typeof maxRatio !== "number" || !Number.isFinite(maxRatio) || maxRatio <= 0 || maxRatio > 1) {
-    throw new CliError(
-      "config key 'massDeleteGuard.maxRatio' must be a number greater than 0 and at most 1.",
-      3
-    );
+    throw new CliError("config key 'massDeleteGuard.maxRatio' must be a number greater than 0 and at most 1.", 3);
   }
 
   if (!Number.isInteger(maxFiles) || maxFiles <= 0) {
@@ -676,10 +650,7 @@ function normalizeReachabilityCheckCommand(value?: string[] | null): string[] | 
 
 function validateConfigKey(key: string): void {
   if (!listConfigKeys().includes(key)) {
-    throw new CliError(
-      `config key '${key}' is not supported. Supported keys: ${listConfigKeys().join(", ")}.`,
-      3
-    );
+    throw new CliError(`config key '${key}' is not supported. Supported keys: ${listConfigKeys().join(", ")}.`, 3);
   }
 }
 
@@ -702,24 +673,15 @@ function parseConfigValue(key: string, value: string): unknown {
     case "lockStaleMs":
       return validatePositiveInteger(Number(value), "lockStaleMs", DEFAULT_LOCK_STALE_MS);
     case "snapshotGenerations":
-      return validatePositiveInteger(
-        Number(value),
-        "snapshotGenerations",
-        DEFAULT_SNAPSHOT_GENERATIONS,
-        "generations"
-      );
+      return validatePositiveInteger(Number(value), "snapshotGenerations", DEFAULT_SNAPSHOT_GENERATIONS, "generations");
     case "queueEscalationThresholdMs":
       return value === "null"
         ? null
         : validatePositiveInteger(Number(value), "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
     case "massDeleteGuard":
-      return value === "null"
-        ? null
-        : normalizeMassDeleteGuard(JSON.parse(value) as MassDeleteGuardConfig);
+      return value === "null" ? null : normalizeMassDeleteGuard(JSON.parse(value) as MassDeleteGuardConfig);
     case "reachabilityCheckCommand":
-      return value === "null"
-        ? null
-        : normalizeReachabilityCheckCommand(JSON.parse(value) as string[]);
+      return value === "null" ? null : normalizeReachabilityCheckCommand(JSON.parse(value) as string[]);
     default:
       return value;
   }
@@ -753,9 +715,7 @@ function normalizeRelativePath(value: string): string {
   // separator, so a blanket replace here would silently retarget every file
   // under this subdir at a mangled hub path, the same failure mode the
   // sync-path check exists to refuse (agent-tasks 73ea60bf).
-  const normalized = assertPortablePathSegment(value, "repository subdir")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
+  const normalized = assertPortablePathSegment(value, "repository subdir").replace(/^\/+/, "").replace(/\/+$/, "");
   if (!normalized || normalized.startsWith("..")) {
     throw new CliError(`repository subdir '${value}' is invalid.`, 3);
   }

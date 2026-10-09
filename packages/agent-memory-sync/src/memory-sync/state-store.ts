@@ -115,9 +115,7 @@ class StateStore {
           baseFiles: readSnapshotTree(path.join(this.queueDir(), entry.name, "base"))
         }
       }))
-      .sort(
-        (left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id)
-      );
+      .sort((left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id));
   }
 
   removeQueuedSnapshot(id: string): void {
@@ -189,8 +187,7 @@ class StateStore {
   // created via GitClient.createTempRepoDir(stateDir, label).
   //
   // The label is required. This used to remove the WHOLE tmp root, which is
-  // how the 2026-09-11 wipe started (agent-tasks cda5b12c, pandora run
-  // .ai/runs/2026-09-11-memory-sync-wipe): `watch` and `run --mode sync` share a
+  // how the memory-corpus wipe started (agent-tasks cda5b12c): `watch` and `run --mode sync` share a
   // stateDir, and watch's post-push cleanup deleted the sync run's freshly
   // checked-out working copy under tmp/pull while git had already reported
   // success. The pull then read an empty tree and resolved every path to a
@@ -225,11 +222,7 @@ function writeSnapshotTree(rootDir: string, files: Record<string, string | null>
   for (const [relativePath, content] of Object.entries(files)) {
     const markerPath = path.join(rootDir, `${relativePath}.meta.json`);
     mkdirSync(path.dirname(markerPath), { recursive: true });
-    writeFileSync(
-      markerPath,
-      `${JSON.stringify({ deleted: content === null }, null, 2)}\n`,
-      "utf8"
-    );
+    writeFileSync(markerPath, `${JSON.stringify({ deleted: content === null }, null, 2)}\n`, "utf8");
 
     if (content === null) {
       continue;

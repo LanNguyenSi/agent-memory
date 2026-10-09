@@ -35,12 +35,7 @@ const {
   writeText
 } = require("../helpers/cli.ts");
 
-function twoEntryConfig(
-  workspaceRoot: string,
-  remoteDir: string,
-  stateDir: string,
-  machineStateSource: string
-) {
+function twoEntryConfig(workspaceRoot: string, remoteDir: string, stateDir: string, machineStateSource: string) {
   return {
     rootDir: workspaceRoot,
     remoteUrl: remoteDir,

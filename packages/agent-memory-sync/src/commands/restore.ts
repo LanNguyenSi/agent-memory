@@ -1,10 +1,6 @@
 const { mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
-const {
-  loadConfig,
-  requireRemoteUrl,
-  resolveRunConfig
-} = require("../config/loader");
+const { loadConfig, requireRemoteUrl, resolveRunConfig } = require("../config/loader");
 const { CliError, RestoreSourceNotFoundError } = require("../errors");
 const { acquireStateDirLock } = require("../memory-sync/lock");
 const {
@@ -58,8 +54,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
     //
     // The first is the form this command shipped with and keeps working
     // unchanged; the second is the destination-shaped recovery the
-    // 2026-09-11 wipe needed (agent-tasks cda5b12c, pandora run
-    // .ai/runs/2026-09-11-memory-sync-wipe).
+    // memory-corpus wipe needed (agent-tasks cda5b12c).
     .argument(
       "[target]",
       "Commit SHA to restore from, or the configuration profile when --from-commit/--from-snapshot is given",
@@ -72,10 +67,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
     .option("--branch <name>", "Override the remote branch")
     .option("--repository-subdir <path>", "Override the subdirectory inside the remote repository")
     .option("--state-dir <path>", "Override the local state directory")
-    .option(
-      "--path <relative>",
-      "Restore only this remote-relative path (relative to repositorySubdir)"
-    )
+    .option("--path <relative>", "Restore only this remote-relative path (relative to repositorySubdir)")
     .option(
       "--from-commit <sha>",
       "Restore a whole sync destination from this commit, and move the base snapshot for it to the " +
@@ -219,7 +211,11 @@ function registerRestoreCommand(program: import("commander").Command): void {
         // package's own destination-restore path (restoreDestination) maps
         // and validates its own sourceFiles list the same way, before its
         // pre-apply snapshot or write loop runs (agent-tasks 73ea60bf).
-        const resolvedTargets: Array<{ repoRelativePath: string; remoteRelativePath: string; absoluteLocalPath: string }> = [];
+        const resolvedTargets: Array<{
+          repoRelativePath: string;
+          remoteRelativePath: string;
+          absoluteLocalPath: string;
+        }> = [];
         for (const repoRelativePath of targetRepoPaths) {
           const remoteRelativePath = repoRelativePath.slice(runConfig.repositorySubdir.length + 1);
           const absoluteLocalPath = mapRemotePathToLocalAbsolute(runConfig, remoteRelativePath);
@@ -249,7 +245,10 @@ function registerRestoreCommand(program: import("commander").Command): void {
           }
 
           if (options.dryRun) {
-            writeDryRun(`would restore ${remoteRelativePath} -> ${absoluteLocalPath} (${content.length} bytes)`, outputOptions);
+            writeDryRun(
+              `would restore ${remoteRelativePath} -> ${absoluteLocalPath} (${content.length} bytes)`,
+              outputOptions
+            );
           } else {
             mkdirSync(path.dirname(absoluteLocalPath), { recursive: true });
             writeFileSync(absoluteLocalPath, content, "utf8");
@@ -272,9 +271,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
         };
 
         writeResult(payload, runConfig.outputFormat, () =>
-          restored
-            .map((entry) => `${options.dryRun ? "[dry-run] " : ""}${entry.remoteRelativePath}`)
-            .join("\n")
+          restored.map((entry) => `${options.dryRun ? "[dry-run] " : ""}${entry.remoteRelativePath}`).join("\n")
         );
       } finally {
         stateStore.clearTemp(RESTORE_TEMP_LABEL);
@@ -282,7 +279,6 @@ function registerRestoreCommand(program: import("commander").Command): void {
       }
     });
 }
-
 
 type RestoreMode =
   | { kind: "file"; sha: string }
@@ -294,11 +290,7 @@ type RestoreMode =
 // `restore <profile> <destination> --from-commit <sha>` would otherwise be
 // told apart by guessing whether the first word looks like a sha, and a
 // profile named like one would silently take the wrong branch.
-function resolveRestoreMode(
-  target: string,
-  destination: string | undefined,
-  options: RestoreOptions
-): RestoreMode {
+function resolveRestoreMode(target: string, destination: string | undefined, options: RestoreOptions): RestoreMode {
   const wantsCommit = typeof options.fromCommit === "string" && options.fromCommit.length > 0;
   const wantsSnapshot = typeof options.fromSnapshot !== "undefined" && options.fromSnapshot !== false;
 
@@ -378,9 +370,8 @@ async function restoreDestination(
 
   // Everything the destination currently holds, read before anything is
   // written: the copy below and the removals further down both depend on it.
-  const currentFiles = collectLocalSyncFiles(runConfig).filter(
-    (file: { remoteRelativePath: string }) =>
-      belongsToDestination(file.remoteRelativePath, mode.destination)
+  const currentFiles = collectLocalSyncFiles(runConfig).filter((file: { remoteRelativePath: string }) =>
+    belongsToDestination(file.remoteRelativePath, mode.destination)
   );
 
   const gitClient = new GitClient(runConfig.gitBinary);
@@ -412,11 +403,7 @@ async function restoreDestination(
         remoteRelativePath,
         read: () =>
           Buffer.from(
-            gitClient.showAtRef(
-              repoDir,
-              resolvedSha,
-              `${runConfig.repositorySubdir}/${remoteRelativePath}`
-            ) || "",
+            gitClient.showAtRef(repoDir, resolvedSha, `${runConfig.repositorySubdir}/${remoteRelativePath}`) || "",
             "utf8"
           )
       }));
@@ -464,10 +451,7 @@ async function restoreDestination(
           3
         );
       }
-      throw new CliError(
-        `cannot map '${file.remoteRelativePath}' to a local sync target. Update syncPaths.`,
-        3
-      );
+      throw new CliError(`cannot map '${file.remoteRelativePath}' to a local sync target. Update syncPaths.`, 3);
     }
     return { ...file, absolutePath };
   });
@@ -523,9 +507,7 @@ async function restoreDestination(
     destination: mode.destination,
     dryRun: options.dryRun,
     source:
-      mode.kind === "commit"
-        ? { kind: "commit", commit: resolvedSha }
-        : { kind: "snapshot", snapshot: resolvedSha },
+      mode.kind === "commit" ? { kind: "commit", commit: resolvedSha } : { kind: "snapshot", snapshot: resolvedSha },
     restored: sourceFiles.map((file) => file.remoteRelativePath).sort(),
     removed: removable.map((file: { remoteRelativePath: string }) => file.remoteRelativePath).sort(),
     notes

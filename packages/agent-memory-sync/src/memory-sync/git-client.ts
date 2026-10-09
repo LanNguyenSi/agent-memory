@@ -60,11 +60,7 @@ class GitClient {
   }
 
   lookupRemoteHead(remoteUrl: string, branch: string, cwd: string): string | null {
-    const result = this.run(
-      ["ls-remote", "--heads", remoteUrl, branch],
-      cwd,
-      true
-    );
+    const result = this.run(["ls-remote", "--heads", remoteUrl, branch], cwd, true);
 
     if (result.exitCode !== 0) {
       // RemoteUnavailableError, not plain CliError: this is one of the two
@@ -118,8 +114,7 @@ class GitClient {
     // IS a directory boundary). On darwin/linux path.relative/readdirSync
     // never put a "\" in their output as a separator, so a "\" that shows up
     // here is part of a real hub-side file or directory name; the replace
-    // used to flatten it into a mangled "/" path silently (pandora
-    // .ai/runs/2026-09-11-memory-sync-wipe review R5, agent-tasks 73ea60bf).
+    // used to flatten it into a mangled "/" path silently (agent-tasks 73ea60bf).
     return walkFiles(absoluteDir).map((absolutePath) => {
       const relative = path.relative(repoDir, absolutePath);
       return process.platform === "win32" ? relative.replace(/\\/g, "/") : relative;
@@ -142,8 +137,7 @@ class GitClient {
   // Repository-relative paths the INDEX currently records as deletions
   // against HEAD, i.e. the deletions the next commit would actually carry.
   //
-  // Origin (agent-tasks cda5b12c, pandora run
-  // .ai/runs/2026-09-11-memory-sync-wipe): the push-side mass-delete
+  // Origin (agent-tasks cda5b12c): the push-side mass-delete
   // guard used to count the deletions its own 3-way merge plan intended,
   // which is not the same set as the deletions `git add -A` commits. A path
   // the working copy was already missing (a temp checkout wiped underneath
@@ -176,10 +170,7 @@ class GitClient {
       return [];
     }
 
-    const result = this.run(
-      ["diff", "--cached", "--name-status", "--no-renames", "-z", "--diff-filter=D"],
-      repoDir
-    );
+    const result = this.run(["diff", "--cached", "--name-status", "--no-renames", "-z", "--diff-filter=D"], repoDir);
 
     const fields = result.stdout.split("\0");
     const deletions: string[] = [];
@@ -215,8 +206,7 @@ class GitClient {
   // working copy changed in between, and that window is real: a temporary
   // checkout wiped underneath this process after the measurement was staged
   // by the second add and published as a total deletion at exit 0, with the
-  // guard reporting no deletions at all (agent-tasks cda5b12c, pandora run
-  // .ai/runs/2026-09-11-memory-sync-wipe, review round 3). The state-dir
+  // guard reporting no deletions at all (agent-tasks cda5b12c). The state-dir
   // lock keeps other processes out of stateDir; it cannot close a window
   // inside one process. So the commit takes the index as measured and
   // nothing else: a wipe after the stage never reaches it, and a wipe before
@@ -351,10 +341,7 @@ class GitClient {
     }
     const result = this.run(args, repoDir, true);
     if (result.exitCode !== 0) {
-      throw new CliError(
-        `could not list tree for '${ref}'. ${result.stderr.trim() || "Unknown error."}`,
-        4
-      );
+      throw new CliError(`could not list tree for '${ref}'. ${result.stderr.trim() || "Unknown error."}`, 4);
     }
 
     return result.stdout.split("\0").filter(Boolean);
@@ -391,10 +378,7 @@ class GitClient {
         return result;
       }
 
-      throw new CliError(
-        `git command failed: ${this.gitBinary} ${args.join(" ")}.`,
-        4
-      );
+      throw new CliError(`git command failed: ${this.gitBinary} ${args.join(" ")}.`, 4);
     }
   }
 }

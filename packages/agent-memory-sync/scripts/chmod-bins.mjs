@@ -34,9 +34,7 @@ for (const rel of targets) {
 }
 
 if (failed > 0) {
-  console.error(
-    `chmod-bins: ${failed} bin target(s) missing; did the build produce them?`,
-  );
+  console.error(`chmod-bins: ${failed} bin target(s) missing; did the build produce them?`);
   process.exit(1);
 }
 

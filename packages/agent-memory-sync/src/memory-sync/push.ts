@@ -96,8 +96,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
   // file, materialized locally by a prior pull, getting offered back as
   // this machine's own change) can originate. Pull's own collectLocalSyncFiles
   // call (src/memory-sync/pull.ts) deliberately omits this option — see
-  // config.ts's CollectLocalSyncFilesOptions and D-004 in
-  // .ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md.
+  // config.ts's CollectLocalSyncFilesOptions (agent-tasks 06d09cde).
   const ownerScopedWarnings: string[] = [];
   const currentLocalFiles = collectLocalSyncFiles(config, {
     ownerFilter: true,
@@ -130,20 +129,17 @@ async function performPush(config: PushConfig, options: PushOptions) {
   // never had a local copy of. See filterUnmappedBaseMap's own comment in
   // config.ts for the full writeup, including why removing any one of its
   // three call sites (this read, and both writes) reopens the bug.
-  let currentBaseMap = filterUnmappedBaseMap(
-    config,
-    filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots())
-  );
+  let currentBaseMap = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, stateStore.readBaseSnapshots()));
 
   const queuedSnapshots = stateStore.listQueuedSnapshots();
   const snapshots = [
-    // Fix-Runde MEDIUM finding #3 (05-review-findings.md, agent-tasks
+    // Follow-up fix (agent-tasks
     // 06d09cde): a snapshot enqueued BEFORE this machine's profile picked up
     // ownerScoped:true (or before this fix shipped at all) can still carry a
     // peer's ownerScoped file in its stored localFiles/baseFiles — it was
     // captured verbatim from an older, unfiltered collectLocalSyncFiles/
     // readBaseSnapshots() call. Replaying it verbatim would re-introduce
-    // exactly the echo Fix 2/D-002-D-004 closed for the "current" snapshot,
+    // exactly the echo the ownerScoped fix closed for the "current" snapshot,
     // just via the queue instead of a live collection. Route both maps
     // through the same filterOwnerScopedBaseMap used for currentBaseMap
     // below so a stale queued peer file is stripped here too, not just on
@@ -158,16 +154,21 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // a filtered write, is exactly the kind of external input the read-side
     // filter is permanent defense-in-depth against. Never treat this call
     // as redundant just because push's own write is filtered too.
-    ...queuedSnapshots.map((entry: { id: string; data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> } }) => {
-      const baseFiles = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles));
-      return {
-        id: entry.id,
-        localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
-        baseFiles,
-        guardBaseFiles: baseFiles,
-        message: `sync(queue): replay ${entry.id}`
-      };
-    }),
+    ...queuedSnapshots.map(
+      (entry: {
+        id: string;
+        data: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> };
+      }) => {
+        const baseFiles = filterUnmappedBaseMap(config, filterOwnerScopedBaseMap(config, entry.data.baseFiles));
+        return {
+          id: entry.id,
+          localFiles: filterOwnerScopedBaseMap(config, entry.data.localFiles) as Record<string, string>,
+          baseFiles,
+          guardBaseFiles: baseFiles,
+          message: `sync(queue): replay ${entry.id}`
+        };
+      }
+    ),
     {
       id: "current",
       localFiles: currentLocalMap,
@@ -359,12 +360,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
       // was published as a total deletion the guard had measured as none.
       gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
       if (!isLast) {
-        recordBaseAdvance(
-          config,
-          baseDelta,
-          snapshot,
-          collectRemoteFiles(config, gitClient, workingCopy.repoDir)
-        );
+        recordBaseAdvance(config, baseDelta, snapshot, collectRemoteFiles(config, gitClient, workingCopy.repoDir));
       }
     }
 
@@ -454,7 +450,11 @@ async function performPush(config: PushConfig, options: PushOptions) {
         queuedSnapshotId,
         notes: [
           ...(queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []),
-          ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedBasePaths, snapshotIds: preApplySnapshots, dryRun: false })
+          ...heldBackNotes(config, heldBack, {
+            adoptedPaths: adoptedBasePaths,
+            snapshotIds: preApplySnapshots,
+            dryRun: false
+          })
         ]
       },
       ownerScopedWarnings
@@ -503,7 +503,7 @@ function resolveQueueEscalationThresholdMs(value: number | null | undefined): nu
   return value ?? DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS;
 }
 
-// Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde):
+// Follow-up fix (agent-tasks 06d09cde):
 // merges collectLocalSyncFiles' ownerScoped "own file missing among peer
 // files" warnings (see config.ts's CollectLocalSyncFilesResult.warnings)
 // into whatever `notes` array a given result already carries, on every
@@ -591,10 +591,7 @@ const QUEUE_ESCALATION_SANITY_CEILING_MULTIPLE = 30;
 // diagnostic note (string) instead of throwing when the computed age is past
 // the clock-skew sanity ceiling above; returns null when there is nothing to
 // report.
-function checkQueueEscalation(
-  stateStore: InstanceType<typeof StateStore>,
-  thresholdMs: number | null
-): string | null {
+function checkQueueEscalation(stateStore: InstanceType<typeof StateStore>, thresholdMs: number | null): string | null {
   if (thresholdMs === null) {
     return null;
   }
@@ -669,11 +666,7 @@ function previewPush(
   try {
     const gitClient = new GitClient(config.gitBinary);
     previewRepoDir = gitClient.createTempRepoDir(config.stateDir, "push-preview");
-    const workingCopy = gitClient.prepareWorkingCopy(
-      config.remoteUrl,
-      config.branch,
-      previewRepoDir
-    );
+    const workingCopy = gitClient.prepareWorkingCopy(config.remoteUrl, config.branch, previewRepoDir);
 
     const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
     const runStartTracked = listRunStartTracked(config, gitClient, workingCopy);
@@ -739,7 +732,9 @@ function previewPush(
     for (const [index, plannedSnapshot] of previewSnapshots.entries()) {
       const isLast = index === previewSnapshots.length - 1;
       const snapshot =
-        index > 0 ? { ...plannedSnapshot, baseFiles: applyBaseDelta(plannedSnapshot.baseFiles, baseDelta) } : plannedSnapshot;
+        index > 0
+          ? { ...plannedSnapshot, baseFiles: applyBaseDelta(plannedSnapshot.baseFiles, baseDelta) }
+          : plannedSnapshot;
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
       const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
       assertNoMassDelete({
@@ -764,12 +759,7 @@ function previewPush(
       // identical to the real run's.
       gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
       if (!isLast) {
-        recordBaseAdvance(
-          config,
-          baseDelta,
-          snapshot,
-          collectRemoteFiles(config, gitClient, workingCopy.repoDir)
-        );
+        recordBaseAdvance(config, baseDelta, snapshot, collectRemoteFiles(config, gitClient, workingCopy.repoDir));
       }
     }
 
@@ -823,10 +813,7 @@ function applySnapshotToWorkingCopy(
   repoDir: string,
   snapshot: { localFiles: Record<string, string>; baseFiles: Record<string, string | null> }
 ) {
-  const targetPaths = new Set<string>([
-    ...Object.keys(snapshot.localFiles),
-    ...Object.keys(snapshot.baseFiles)
-  ]);
+  const targetPaths = new Set<string>([...Object.keys(snapshot.localFiles), ...Object.keys(snapshot.baseFiles)]);
   const appliedFiles: string[] = [];
   const mergedFiles: string[] = [];
   const conflictFiles: string[] = [];
@@ -1085,8 +1072,8 @@ function listRunStartTracked(
 // carry, as remote-relative paths (the key space the guards, the base
 // snapshot store and the result payload all use).
 //
-// This is the mass-delete guard's real numerator (agent-tasks cda5b12c,
-// pandora run .ai/runs/2026-09-11-memory-sync-wipe). `git add -A` stages
+// This is the mass-delete guard's real numerator (agent-tasks cda5b12c).
+// `git add -A` stages
 // every path the working copy lacks, whether the merge plan asked for it or
 // not, so the plan is not what gets committed and must not be what gets
 // checked. This is also the ONLY stage of the working copy per snapshot:
@@ -1133,10 +1120,7 @@ function newBaseDelta(): BaseDelta {
   return { set: {}, removed: new Set() };
 }
 
-function applyBaseDelta(
-  base: Record<string, string | null>,
-  delta: BaseDelta
-): Record<string, string | null> {
+function applyBaseDelta(base: Record<string, string | null>, delta: BaseDelta): Record<string, string | null> {
   const result = withoutKeys(base, Array.from(delta.removed));
   return { ...result, ...delta.set };
 }

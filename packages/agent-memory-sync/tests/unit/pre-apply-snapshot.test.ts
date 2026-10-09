@@ -1,7 +1,6 @@
 // Unit coverage for the pre-apply snapshots (src/memory-sync/pre-apply-snapshot.ts).
 //
-// Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
-// run .ai/runs/2026-09-11-memory-sync-wipe). The local corpus was removed
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c). The local corpus was removed
 // from disk before anything had a copy of it, and the only surviving copy
 // was the remote's own history. A pull that is about to delete or overwrite
 // files in a destination now copies that destination first.
@@ -63,7 +62,10 @@ test("a snapshot copies the destination's current tree byte for byte", () => {
   const manifest = JSON.parse(readFileSync(path.join(snapshot.dir, "manifest.json"), "utf8"));
   assert.equal(manifest.destination, "logs");
   assert.deepEqual(manifest.files.sort(), files.map((f) => f.remoteRelativePath).sort());
-  assert.ok(Number.isFinite(Date.parse(manifest.createdAt)), `createdAt is not an ISO timestamp: ${manifest.createdAt}`);
+  assert.ok(
+    Number.isFinite(Date.parse(manifest.createdAt)),
+    `createdAt is not an ISO timestamp: ${manifest.createdAt}`
+  );
 });
 
 test("snapshots live under stateDir/snapshots/<destination> and are listed newest last", () => {
@@ -127,10 +129,10 @@ test("a stored snapshot reads back as the paths and bytes it captured", () => {
   const readBack = readPreApplySnapshot(stateDir, "logs", written.id);
 
   assert.equal(readBack.id, written.id);
-  assert.deepEqual(
-    readBack.files.map((f: { remoteRelativePath: string }) => f.remoteRelativePath).sort(),
-    ["logs/note-0.md", "logs/note-1.md"]
-  );
+  assert.deepEqual(readBack.files.map((f: { remoteRelativePath: string }) => f.remoteRelativePath).sort(), [
+    "logs/note-0.md",
+    "logs/note-1.md"
+  ]);
   for (const file of readBack.files) {
     assert.equal(readFileSync(file.storedPath, "utf8"), `entry ${file.remoteRelativePath.slice(-4, -3)}\n`);
   }
@@ -166,7 +168,7 @@ test("reading a snapshot that does not exist fails loudly", () => {
   assert.deepEqual(readdirSync(root), []);
 });
 
-// R3 low: the byte-for-byte test above used UTF-8-safe content, so a copy
+// The byte-for-byte test above used UTF-8-safe content, so a copy
 // that decoded and re-encoded the file on the way in passed it. A lone 0xFF
 // byte is not valid UTF-8 and comes out as EF BF BD from any text round trip.
 test("a snapshot preserves bytes that are not valid UTF-8", () => {

@@ -157,7 +157,17 @@
   "reachabilityTimeoutMs": 5000,
   "syncPaths": [
     { "source": ".", "destination": "memory", "kind": "directory" },
-    { "source": "/Users/<user>/.harness/machine-state", "destination": "machine-state", "kind": "directory", "ownerScoped": true },
-    { "source": "/Users/<user>/.harness/frictions", "destination": "frictions", "kind": "directory", "ownerScoped": true }
+    {
+      "source": "/Users/<user>/.harness/machine-state",
+      "destination": "machine-state",
+      "kind": "directory",
+      "ownerScoped": true
+    },
+    {
+      "source": "/Users/<user>/.harness/frictions",
+      "destination": "frictions",
+      "kind": "directory",
+      "ownerScoped": true
+    }
   ]
 }

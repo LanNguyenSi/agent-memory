@@ -15,8 +15,7 @@ function summarizeOperation(operation: {
   skippedFiles?: string[];
   // Local files a pull kept because no base snapshot records them and the
   // remote does not have them: local-only files, candidates for the next
-  // push, never pull deletions (agent-tasks cda5b12c, pandora run
-  // .ai/runs/2026-09-11-memory-sync-wipe). Reported so a
+  // push, never pull deletions (agent-tasks cda5b12c). Reported so a
   // run that protected files says so, rather than leaving the operator to
   // infer it from a count that did not change.
   protectedFiles?: string[];

@@ -25,14 +25,13 @@ const { GitClient } = require("../../src/memory-sync/git-client");
 
 const createdSandboxes: string[] = [];
 test.after(() => {
-  for (const dir of createdSandboxes)
-    rmSync(dir, { recursive: true, force: true });
+  for (const dir of createdSandboxes) rmSync(dir, { recursive: true, force: true });
 });
 
 function sandbox(name: string): string {
   const root = path.join(
     tmpdir(),
-    `agent-memory-sync-temp-clone-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    `agent-memory-sync-temp-clone-${name}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
   );
   mkdirSync(root, { recursive: true });
   createdSandboxes.push(root);
@@ -43,7 +42,7 @@ function git(args: string[], cwd: string): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"]
   });
 }
 
@@ -76,11 +75,7 @@ function seedRemote(root: string): string {
   git(["config", "user.name", "test-runner"], seed);
   git(["config", "user.email", "test-runner@example.invalid"], seed);
   for (let index = 0; index < 400; index += 1) {
-    writeFileSync(
-      path.join(seed, `note-${index}.md`),
-      `entry ${index}\n`,
-      "utf8",
-    );
+    writeFileSync(path.join(seed, `note-${index}.md`), `entry ${index}\n`, "utf8");
   }
   contentsInObjectDir17(3).forEach((content, index) => {
     writeFileSync(path.join(seed, `pad-${index}.md`), content, "utf8");
@@ -98,20 +93,16 @@ function seedRemote(root: string): string {
 // (after marking the test skipped) without running `body` when git does not
 // honour GIT_CONFIG_GLOBAL (git < 2.32): the race would then not be exercised
 // and the test would pass vacuously.
-function withEagerAutoGc(
-  t: { skip: (message?: string) => void },
-  root: string,
-  body: () => void,
-): boolean {
+function withEagerAutoGc(t: { skip: (message?: string) => void }, root: string, body: () => void): boolean {
   const configPath = path.join(root, "eager-gc.gitconfig");
   writeFileSync(
     configPath,
     "[gc]\n\tauto = 1\n[fetch]\n\tunpackLimit = 100000\n[transfer]\n\tunpackLimit = 100000\n",
-    "utf8",
+    "utf8"
   );
   const saved = {
     GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM
   };
   process.env.GIT_CONFIG_GLOBAL = configPath;
   process.env.GIT_CONFIG_NOSYSTEM = "1";
@@ -119,14 +110,14 @@ function withEagerAutoGc(
     let gcAuto = "";
     try {
       gcAuto = execFileSync("git", ["config", "--global", "--get", "gc.auto"], {
-        encoding: "utf8",
+        encoding: "utf8"
       }).trim();
     } catch {
       gcAuto = "";
     }
     if (gcAuto !== "1") {
       t.skip(
-        `eager gc config not in effect (global gc.auto=${gcAuto || "unset"}); this test needs git >= 2.32 for GIT_CONFIG_GLOBAL`,
+        `eager gc config not in effect (global gc.auto=${gcAuto || "unset"}); this test needs git >= 2.32 for GIT_CONFIG_GLOBAL`
       );
       return false;
     }
@@ -148,23 +139,15 @@ test("GitClient.prepareWorkingCopy: the temp clone turns git's auto-maintenance 
   const remoteDir = seedRemote(root);
   const client = new GitClient("git");
 
-  const { repoDir } = client.prepareWorkingCopy(
-    remoteDir,
-    "main",
-    client.createTempRepoDir(root, "pull"),
-  );
+  const { repoDir } = client.prepareWorkingCopy(remoteDir, "main", client.createTempRepoDir(root, "pull"));
 
-  assert.equal(
-    git(["config", "--local", "--get", "gc.auto"], repoDir).trim(),
-    "0",
-  );
-  assert.equal(
-    git(["config", "--local", "--get", "maintenance.auto"], repoDir).trim(),
-    "false",
-  );
+  assert.equal(git(["config", "--local", "--get", "gc.auto"], repoDir).trim(), "0");
+  assert.equal(git(["config", "--local", "--get", "maintenance.auto"], repoDir).trim(), "false");
 });
 
-test("GitClient.prepareWorkingCopy: a temp clone can be removed right away even when the machine's git config makes gc eager", (t: { skip: (message?: string) => void }) => {
+test("GitClient.prepareWorkingCopy: a temp clone can be removed right away even when the machine's git config makes gc eager", (t: {
+  skip: (message?: string) => void;
+}) => {
   const root = sandbox("race");
   const remoteDir = seedRemote(root);
   const client = new GitClient("git");
@@ -178,18 +161,12 @@ test("GitClient.prepareWorkingCopy: a temp clone can be removed right away even 
       try {
         rmSync(repoDir, { recursive: true, force: true });
       } catch (error: unknown) {
-        failures.push(
-          `${(error as { code?: string }).code}: ${(error as Error).message}`,
-        );
+        failures.push(`${(error as { code?: string }).code}: ${(error as Error).message}`);
         rmSync(repoDir, { recursive: true, force: true });
       }
     }
   });
   if (!ran) return;
 
-  assert.deepEqual(
-    failures,
-    [],
-    `${failures.length} of ${iterations} removals raced a background git process`,
-  );
+  assert.deepEqual(failures, [], `${failures.length} of ${iterations} removals raced a background git process`);
 });

@@ -57,10 +57,7 @@ test("oldestQueuedSnapshotAgeMs: reports the OLDEST of several queued snapshots,
   ids.forEach((id: string, index: number) => {
     const manifestPath = path.join(store.queueDir(), id, "manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({ ...manifest, createdAt: timestamps[index].toISOString() }, null, 2)
-    );
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, createdAt: timestamps[index].toISOString() }, null, 2));
   });
 
   const referenceTime = newer.getTime();
@@ -113,10 +110,9 @@ test("oldestQueuedSnapshotAgeMs: clears back to null after removeQueuedSnapshot 
   assert.equal(store.oldestQueuedSnapshotAgeMs(), null);
 });
 
-// The 2026-09-11 wipe began with StateStore.clearTemp() removing the WHOLE
+// The memory-corpus wipe began with StateStore.clearTemp() removing the WHOLE
 // stateDir/tmp tree while a concurrent run held a checked-out working copy
-// under it (agent-tasks cda5b12c, pandora run
-// .ai/runs/2026-09-11-memory-sync-wipe). A caller may only clear the subtree
+// under it (agent-tasks cda5b12c). A caller may only clear the subtree
 // it created.
 test("clearTemp removes only the caller's own label", () => {
   const root = sandbox("clear-temp-scope");

@@ -1,5 +1,5 @@
 // Unit tests for the deletion guards (src/memory-sync/guards.ts), the two
-// checks added after the 2026-09-11 memory-corpus wipe (agent-tasks
+// checks added after the memory-corpus wipe (agent-tasks
 // cda5b12c). The integration suite
 // (tests/integration/mass-delete-guard.test.ts) drives them through the CLI
 // against a real bare repo; this file pins the threshold arithmetic itself,
@@ -57,7 +57,7 @@ function paths(destination: string, count: number, offset = 0): string[] {
   return result;
 }
 
-// Three directory destinations, for the plan-wide total rule (D-007): the
+// Three directory destinations, for the plan-wide total rule: the
 // per-destination rules cannot see a plan that stays under the limit in each
 // destination separately, so the case needs more than one of them.
 function threeDestinationConfig() {
@@ -83,10 +83,7 @@ test("resolveMassDeleteGuard: a partial override keeps the default for the other
 });
 
 test("findMassDelete: an empty plan is never a mass delete", () => {
-  assert.equal(
-    findMassDelete(config(), tracked("memory", 400), [], DEFAULT_MASS_DELETE_GUARD),
-    null
-  );
+  assert.equal(findMassDelete(config(), tracked("memory", 400), [], DEFAULT_MASS_DELETE_GUARD), null);
 });
 
 test("findMassDelete: the absolute rule fires at 21 deletions, not at 20", () => {
@@ -117,23 +114,13 @@ test("findMassDelete: a single deletion never trips the proportional rule, howev
 });
 
 test("findMassDelete: two deletions out of two tracked files are refused", () => {
-  const finding = findMassDelete(
-    config(),
-    tracked("logs", 2),
-    paths("logs", 2),
-    DEFAULT_MASS_DELETE_GUARD
-  );
+  const finding = findMassDelete(config(), tracked("logs", 2), paths("logs", 2), DEFAULT_MASS_DELETE_GUARD);
   assert.deepEqual(finding, { destination: "logs", deleted: 2, tracked: 2, rule: "proportional" });
 });
 
 test("findMassDelete: the whole incident shape (404 tracked, 406 deleted) is refused", () => {
   const baseMap = tracked("memory", 404);
-  const finding = findMassDelete(
-    config(),
-    baseMap,
-    paths("memory", 404),
-    DEFAULT_MASS_DELETE_GUARD
-  );
+  const finding = findMassDelete(config(), baseMap, paths("memory", 404), DEFAULT_MASS_DELETE_GUARD);
   assert.deepEqual(finding, { destination: "memory", deleted: 404, tracked: 404, rule: "absolute" });
 });
 
@@ -163,9 +150,9 @@ test("findMassDelete: a tombstone in the base map is not a tracked file", () => 
   assert.deepEqual(finding, { destination: "logs", deleted: 3, tracked: 4, rule: "proportional" });
 });
 
-// D-007 (R1 medium): the absolute rule is per destination, so a plan that
+// The absolute rule is per destination, so a plan that
 // deletes 20 files in each of three destinations deletes 60 files while
-// tripping nothing. AC-003's text is unqualified about the count.
+// tripping nothing. The requirement is unqualified about the count.
 test("findMassDelete: 20 deletions in each of three destinations trip the plan-wide total", () => {
   const guardConfig = threeDestinationConfig();
   const baseMap = {
@@ -198,12 +185,7 @@ test("findMassDelete: 15 plus 10 deletions across two destinations trip the plan
   const baseMap = { ...tracked("memory", 400), ...tracked("logs", 400) };
 
   assert.deepEqual(
-    findMassDelete(
-      guardConfig,
-      baseMap,
-      [...paths("memory", 15), ...paths("logs", 10)],
-      DEFAULT_MASS_DELETE_GUARD
-    ),
+    findMassDelete(guardConfig, baseMap, [...paths("memory", 15), ...paths("logs", 10)], DEFAULT_MASS_DELETE_GUARD),
     { destination: null, deleted: 25, tracked: 800, rule: "total" }
   );
 });
@@ -214,22 +196,12 @@ test("findMassDelete: the plan-wide total fires strictly above maxFiles, not at 
 
   // Exactly 20 in total is at the limit, not over it.
   assert.equal(
-    findMassDelete(
-      guardConfig,
-      baseMap,
-      [...paths("memory", 10), ...paths("logs", 10)],
-      DEFAULT_MASS_DELETE_GUARD
-    ),
+    findMassDelete(guardConfig, baseMap, [...paths("memory", 10), ...paths("logs", 10)], DEFAULT_MASS_DELETE_GUARD),
     null
   );
 
   assert.deepEqual(
-    findMassDelete(
-      guardConfig,
-      baseMap,
-      [...paths("memory", 11), ...paths("logs", 10)],
-      DEFAULT_MASS_DELETE_GUARD
-    ),
+    findMassDelete(guardConfig, baseMap, [...paths("memory", 11), ...paths("logs", 10)], DEFAULT_MASS_DELETE_GUARD),
     { destination: null, deleted: 21, tracked: 800, rule: "total" }
   );
 });
@@ -324,10 +296,7 @@ test("findUnreliableCheckout: a remote with no commits is never an anomaly", () 
 });
 
 test("findUnreliableCheckout: a destination that tracked a single file is an ordinary deletion", () => {
-  assert.equal(
-    findUnreliableCheckout(config(), tracked("logs", 1), {}, "c6be19d"),
-    null
-  );
+  assert.equal(findUnreliableCheckout(config(), tracked("logs", 1), {}, "c6be19d"), null);
 });
 
 test("findUnreliableCheckout: one destination still present does not excuse another that vanished", () => {
@@ -348,7 +317,7 @@ test("findUnreliableCheckout: a fully present checkout passes", () => {
   assert.equal(findUnreliableCheckout(config(), baseMap, { ...baseMap }, "c6be19d"), null);
 });
 
-// R1 critical (D-006): the original check fired only on a destination that
+// The original check fired only on a destination that
 // came back with EXACTLY zero files, so a working copy that kept a single
 // file walked past it and its deletion plan was published. A partial wipe is
 // not a milder failure than a total one, and the same thresholds that decide
@@ -420,7 +389,7 @@ test("findUnreliableCheckout: profile thresholds apply to the checkout check too
   );
 });
 
-// agent-tasks 56e20494 (review R2 of cda5b12c, head 0bf5eb0): a stub git
+// agent-tasks 56e20494 (follow-up review of cda5b12c): a stub git
 // that truncates every checked-out file to zero bytes passed this check
 // entirely, because every base-tracked path was still "present" - it just
 // held no content. Truncates every value in `map` (a tracked() result) to
@@ -481,7 +450,7 @@ test("findUnreliableCheckout: a mix of missing and emptied files combines toward
   });
 });
 
-// D-013 negative control: a file that was ALREADY empty at base is not
+// Negative control: a file that was ALREADY empty at base is not
 // "emptied" by staying empty - there is nothing for the checkout to have
 // lost.
 test("findUnreliableCheckout: a file that was already empty at base is never counted as emptied", () => {
@@ -489,7 +458,7 @@ test("findUnreliableCheckout: a file that was already empty at base is never cou
   assert.equal(findUnreliableCheckout(config(), baseMap, { ...baseMap }, "c6be19d"), null);
 });
 
-// D-013 negative control (the acceptance criterion's own case): the remote
+// Negative control (the acceptance criterion's own case): the remote
 // legitimately rewrote a large share of a destination to different,
 // non-empty content. This must apply exactly like any other content change,
 // never as an anomaly - "emptied" requires zero length, not merely a
@@ -572,7 +541,7 @@ test("assertReliableCheckout: an emptied checkout names the emptied count and th
 });
 
 // Structural closure for the wording class this file keeps having to patch
-// one report at a time (agent-tasks 56e20494 review round 3): every shape
+// one report at a time (agent-tasks 56e20494): every shape
 // describeUnreliableCheckout can produce for a threshold-breaching finding,
 // pinned in one place so a future wording change has to update all four
 // rows or fail here, rather than only the row someone happened to touch.
@@ -638,7 +607,7 @@ test("assertReliableCheckout: the unreliable-checkout message is exact for every
         assert.equal(error.exitCode, 7, name);
         assert.match(error.message, expected, name);
         // Never "all" unless every emptied file is emptied - the wording
-        // this whole test exists to pin (agent-tasks 56e20494 round 3).
+        // this whole test exists to pin (agent-tasks 56e20494).
         if (name === "emptied only, partial (25 of 50)") {
           assert.doesNotMatch(error.message, /has all/, name);
         }
@@ -648,10 +617,10 @@ test("assertReliableCheckout: the unreliable-checkout message is exact for every
   }
 });
 
-// D-008: the refusal used to end with "re-run with --allow-mass-delete",
+// The refusal used to end with "re-run with --allow-mass-delete",
 // which is a blanket bypass of both guards on both the pull and the push
 // side, i.e. the one instruction that turns a wiped working copy into a
-// published wipe. D-004: the flag is an override of the PLAN guard only, so
+// published wipe. The flag is an override of the PLAN guard only, so
 // it must not reach this check at all.
 test("assertReliableCheckout: the refusal never recommends --allow-mass-delete", () => {
   assert.throws(
@@ -715,18 +684,12 @@ test("findMassDelete: deletions no destination claims count toward the plan-wide
   });
 
   // Negative control: exactly 20 is at the limit, not over it.
-  assert.equal(
-    findMassDelete(guardConfig, baseMap, [], DEFAULT_MASS_DELETE_GUARD, outsidePaths(20)),
-    null
-  );
+  assert.equal(findMassDelete(guardConfig, baseMap, [], DEFAULT_MASS_DELETE_GUARD, outsidePaths(20)), null);
 
   // They add to the mapped deletions rather than replacing them: 15 inside
   // 'memory' is acceptable on its own (under both per-destination rules) and
   // 6 outside is acceptable on its own, 21 together is not.
-  assert.equal(
-    findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD),
-    null
-  );
+  assert.equal(findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD), null);
   assert.deepEqual(
     findMassDelete(guardConfig, baseMap, paths("memory", 15), DEFAULT_MASS_DELETE_GUARD, outsidePaths(6)),
     { destination: null, deleted: 21, tracked: 400, rule: "total" }
@@ -762,7 +725,7 @@ test("assertNoMassDelete: allowMassDelete also covers unclaimed paths", () => {
   });
 });
 
-// AC-007, the pull side: the same thresholds, asked about the plan a pull is
+// The pull side: the same thresholds, asked about the plan a pull is
 // about to APPLY to the local workspace rather than about the plan a push is
 // about to publish. Distinct error and exit code, since the answer an
 // operator gives to "delete this much of my local corpus" is a different

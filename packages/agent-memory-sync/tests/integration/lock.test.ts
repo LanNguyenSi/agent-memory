@@ -1,5 +1,5 @@
-// The stateDir lock through the CLI (AC-004 of the 2026-09-11 wipe,
-// agent-tasks cda5b12c, pandora run .ai/runs/2026-09-11-memory-sync-wipe).
+// The stateDir lock through the CLI (memory-corpus wipe guard,
+// agent-tasks cda5b12c).
 //
 // The incident's mechanism was two processes on one stateDir: a periodic
 // `run --mode sync` tick and a `watch` tick, with nothing serialising them,
@@ -75,10 +75,9 @@ test("run: a held lock stops the run with the documented code, before anything i
     acquiredAt: new Date().toISOString()
   });
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "sync", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(result.status, 8, `expected the lock refusal's exit code. stderr: ${result.stderr}`);
   assert.match(result.stderr, new RegExp(`pid ${process.pid}`));
@@ -149,10 +148,9 @@ test("run: the lock is released again on a clean run and on a refused one", () =
   // A run that throws on its way through must not leave the lock behind
   // either: the next tick would find a lock nobody holds and wait out the
   // whole staleness window for it.
-  const failed = runCli(
-    ["run", "default", "--config", badConfigPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const failed = runCli(["run", "default", "--config", badConfigPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
   assert.notEqual(failed.status, 0);
   assert.equal(fs.existsSync(lockFilePath(stateDir)), false);
 });
@@ -178,10 +176,7 @@ test("restore: a held lock stops the restore with the documented code", () => {
     acquiredAt: new Date().toISOString()
   });
 
-  const result = runCli(
-    ["restore", sha, "--config", configPath, "--yes", "--output", "json"],
-    { expectFailure: true }
-  );
+  const result = runCli(["restore", sha, "--config", configPath, "--yes", "--output", "json"], { expectFailure: true });
 
   assert.equal(result.status, 8, `expected the lock refusal's exit code. stderr: ${result.stderr}`);
   assert.match(result.stderr, new RegExp(`pid ${process.pid}`));

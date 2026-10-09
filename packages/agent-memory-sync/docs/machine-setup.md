@@ -8,7 +8,7 @@ This document wires together the pieces already documented individually
   other machine syncs against.
 - **MacBook** (and any further machines) — fallbacks. They push debounced
   snapshots via `watch` and pull periodically via a scheduled `run --mode
-  sync` (see below — **both are required**, not just `watch`).
+sync` (see below — **both are required**, not just `watch`).
 - **All machines share ONE remote tree, via `repositorySubdir`, not via the
   profile name.** Every profile under `profiles/` (the committed
   `*.example.json` templates, and every machine's real, local-only profile
@@ -22,7 +22,7 @@ This document wires together the pieces already documented individually
   saw each other's pushes, caught by a live cross-machine E2E test
   (`pull` reporting `applied=0`). The `memory` entry in every profile's
   `syncPaths` — a `source: "."` directory entry with `destination:
-  "memory"` — covers the whole `rootDir` (flat `.md` files, no fixed
+"memory"` — covers the whole `rootDir` (flat `.md` files, no fixed
   subdirectory layout), so it syncs to `pandora/memory/...` in the bare
   repo, including any file added later (profiles carry further,
   independent `syncPaths` entries beyond this one — see (e) and (f)
@@ -65,7 +65,7 @@ This document wires together the pieces already documented individually
   queue-instead-of-crash behavior above is deliberately quiet for a machine
   that is merely offline (closed overnight, on a flight, a weekend without
   connectivity) — but a remote that is `RemoteUnavailableError` for a
-  *permanent* reason (a typo'd `remoteUrl`, a renamed bare-repo path on the
+  _permanent_ reason (a typo'd `remoteUrl`, a renamed bare-repo path on the
   mini, an SSH host that accepts the connection but can no longer serve
   `git-upload-pack`) would otherwise look identical: queued, exit `0`,
   every tick, forever, never actually syncing again. Every enqueue now
@@ -75,7 +75,7 @@ This document wires together the pieces already documented individually
   `queueEscalationThresholdMs` (config file /
   `AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS`, default 24h). Below the
   threshold, nothing changes. Once the oldest queued snapshot is older than
-  the threshold — meaning the remote has been *continuously* unreachable for
+  the threshold — meaning the remote has been _continuously_ unreachable for
   that long, not merely on this one tick, since a successful push clears the
   whole queue at once — the tick throws instead of returning a clean
   "queued" result: a clear message on stderr and a non-zero exit (`6`), the
@@ -92,7 +92,7 @@ This document wires together the pieces already documented individually
   section for the full rationale.
 - **`watch` is edge-triggered and does not pull — this is why the periodic
   sync job is required, not optional.** `watch` only commits+pushes when
-  *this* machine's local files change; it never reads from the remote. Its
+  _this_ machine's local files change; it never reads from the remote. Its
   push reuses the same base-snapshot-aware `performPush`
   (`src/memory-sync/push.ts`) that `run --mode sync/push` uses: a 3-way
   merge (`mergeText` in `src/memory-sync/merge.ts`) over this workspace's
@@ -254,7 +254,7 @@ over ordinary `git push`/`git fetch`/`git ls-remote`; there is no
 server-side hook or service to install.
 
 Prerequisite: an SSH host alias named `mini` in `~/.ssh/config` on every
-*other* client machine (the mini does not need an alias for itself), e.g.:
+_other_ client machine (the mini does not need an alias for itself), e.g.:
 
 ```
 Host mini
@@ -298,7 +298,7 @@ see the next paragraph before assuming it controls where state files land.
 `"profile"` field / `[profile]` argument (`macbook`, `mac-mini`, ...) is,
 for `stateDir` specifically, only a fallback: `resolveRunConfig()` derives a
 default `stateDir` of `.agent-memory-sync/<profile>` (relative to `rootDir`)
-*when `stateDir` is not set explicitly*. Every profile under `profiles/`
+_when `stateDir` is not set explicitly_. Every profile under `profiles/`
 (template and real alike) sets `stateDir` explicitly (a machine-specific
 absolute path outside `rootDir`; see any profile's `"//"` field for why), so
 `"profile"` has no effect on `stateDir`, or on any other file path, for
@@ -375,7 +375,7 @@ empty/stale local workspace as if it were authoritative.
 ## c) Setting up a third (Linux) machine
 
 1. Build the CLI on the new machine (README.md's Install / quick start section): `npm install
-   && npm run build` in `packages/agent-memory-sync`.
+&& npm run build` in `packages/agent-memory-sync`.
 2. Add the `mini` SSH host alias to `~/.ssh/config` (same as in (a) above)
    and verify with the `ssh -o BatchMode=yes ...` probe.
 3. Copy `profiles/linux.example.json` to e.g. `profiles/linux.json`
@@ -399,9 +399,9 @@ empty/stale local workspace as if it were authoritative.
    - `ExecStart=/usr/local/bin/agent-memory-sync watch <profile-name> --verbose`
      (positional profile name — same reasoning as (b) above; the unit's
      example `ExecStart` only shows the bare `watch` form, so add the name)
-   Then `systemctl --user daemon-reload && systemctl --user enable --now
-   agent-memory-sync-watch.service` (or as a system unit under `/etc/systemd`
-   as written, with `User=` set to whichever account should own it).
+     Then `systemctl --user daemon-reload && systemctl --user enable --now
+agent-memory-sync-watch.service` (or as a system unit under `/etc/systemd`
+     as written, with `User=` set to whichever account should own it).
 
 6. **Required, not optional** (see the "edge-triggered" note in (b) above):
    install a periodic sync timer alongside `watch` — `watch` only pushes on
@@ -451,7 +451,7 @@ empty/stale local workspace as if it were authoritative.
    `Type=oneshot` service fired by a `.timer`, not a `Restart=on-failure`
    daemon, the timer keeps firing it again every 15 minutes regardless of
    that failure, so expect one failure line in `journalctl -u
-   agent-memory-sync-sync.service` per tick until the remote is fixed — that
+agent-memory-sync-sync.service` per tick until the remote is fixed — that
    repeated visibility is the intended outcome of escalation, not log spam
    to suppress. Install with:
    `systemctl daemon-reload && systemctl enable --now agent-memory-sync-sync.timer`.
@@ -533,13 +533,13 @@ real run would adopt and changes nothing.
 
 ### When a run refuses instead of syncing
 
-| Exit | What the run decided | What to do |
-|---|---|---|
-| `5` | This push would delete more than the guard allows. | Check whether the local tree was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`. |
-| `7` | The fetched working copy is missing too much of what the base snapshot tracks, so it may not represent the remote at all. | Re-run once no other run is touching `stateDir/tmp`. If the remote really did drop those files, run `run` once with `--accept-mass-delete` (the destination is copied first), or recover it with `restore --from-commit <sha> --yes`. |
-| `8` | Another run holds this state directory's lock. | Wait and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically; only remove `<stateDir>/lock.json` by hand if neither applies. |
-| `9` | A remote change would delete more of a destination than the guard allows. | Confirm the deletion is genuine, then run `run` once with `--accept-mass-delete`. |
-| `10` | A `restore` source was not found: no pre-apply snapshot for the destination, or the commit holds nothing under it. | List `<stateDir>/snapshots/<destination>/`, or pick a commit that still had the files (`git log` against the bare repo). |
+| Exit | What the run decided                                                                                                      | What to do                                                                                                                                                                                                                            |
+| ---- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `5`  | This push would delete more than the guard allows.                                                                        | Check whether the local tree was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`.                                                                                                           |
+| `7`  | The fetched working copy is missing too much of what the base snapshot tracks, so it may not represent the remote at all. | Re-run once no other run is touching `stateDir/tmp`. If the remote really did drop those files, run `run` once with `--accept-mass-delete` (the destination is copied first), or recover it with `restore --from-commit <sha> --yes`. |
+| `8`  | Another run holds this state directory's lock.                                                                            | Wait and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically; only remove `<stateDir>/lock.json` by hand if neither applies.                                              |
+| `9`  | A remote change would delete more of a destination than the guard allows.                                                 | Confirm the deletion is genuine, then run `run` once with `--accept-mass-delete`.                                                                                                                                                     |
+| `10` | A `restore` source was not found: no pre-apply snapshot for the destination, or the commit holds nothing under it.        | List `<stateDir>/snapshots/<destination>/`, or pick a commit that still had the files (`git log` against the bare repo).                                                                                                              |
 
 The two flags are not interchangeable. `--allow-mass-delete` answers "yes,
 publish these deletions" and never overrides an untrustworthy working copy;
@@ -584,7 +584,12 @@ the committed templates they were copied from (`profiles/mac-mini.example.json`,
 described at the top of this document:
 
 ```json
-{ "source": "/Users/<user>/.harness/machine-state", "destination": "machine-state", "kind": "directory", "ownerScoped": true }
+{
+  "source": "/Users/<user>/.harness/machine-state",
+  "destination": "machine-state",
+  "kind": "directory",
+  "ownerScoped": true
+}
 ```
 
 Unlike the `memory` entry, `source` here is an **absolute path outside
@@ -611,7 +616,7 @@ mechanism that makes push only ever offer this machine's own
 `<profile>.json`, never a peer's file this machine merely pulled (see
 `collectLocalSyncFiles`'s `ownerFilter` option in
 `src/memory-sync/config.ts`). A machine never writes to another
-machine's file — this makes *content* conflicts on this path structurally
+machine's file — this makes _content_ conflicts on this path structurally
 impossible (`inline-markers` conflict resolution is never invoked here in
 practice, unlike the `memory` tree where concurrent edits are expected).
 In practice stale inline markers could once reach a peer's file on this path
@@ -644,7 +649,7 @@ peer's file down into this machine's own `machine-state/` directory; only a
 reading whatever the last successful `pull`/`sync` fetched, not necessarily
 each peer's very latest write — keeping the periodic
 `run --mode sync` job's interval short is what keeps that staleness window
-small. One more edge: `watch` only detects the *first-ever* local write into
+small. One more edge: `watch` only detects the _first-ever_ local write into
 `machine-state/` if the parent directory (`~/.harness`) already existed when
 `watch` started; on a truly fresh machine the first snapshot travels only
 via the periodic sync or after a `watch` restart.

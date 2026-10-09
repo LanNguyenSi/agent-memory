@@ -1,6 +1,6 @@
 // Regression guard for the MEDIUM review finding on
 // ../helpers/watch-process.ts's `detached: true` + negated-pid
-// process.kill(-pid, sig) group-kill (task c71de504, review round 2):
+// process.kill(-pid, sig) group-kill (task c71de504):
 // reverting either half silently — `detached: true` alone, or the
 // negated-pid kill alone — leaves every other existing test green, because
 // process.kill(-pid, sig) then throws ESRCH (no such process group), which
@@ -48,7 +48,19 @@ test("stopWatchProcessGroup actually kills the whole watch process group, not ju
   // A watch that will never tick: no trigger edit is ever applied, so the
   // child just sits armed (or still arming) until we force it down below.
   const child = spawnWatch(
-    ["watch", "default", "--config", configPath, "--debounce-ms", "300", "--max-runs", "1", "--verbose", "--output", "json"],
+    [
+      "watch",
+      "default",
+      "--config",
+      configPath,
+      "--debounce-ms",
+      "300",
+      "--max-runs",
+      "1",
+      "--verbose",
+      "--output",
+      "json"
+    ],
     process.env
   );
 

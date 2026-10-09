@@ -13,15 +13,11 @@ function runCli(
   args: string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv; expectFailure?: boolean } = {}
 ): { stdout: string; stderr: string; status: number } {
-  const result = spawnSync(
-    path.resolve(process.cwd(), "node_modules", ".bin", "tsx"),
-    ["src/main.ts", ...args],
-    {
-      cwd: options.cwd || process.cwd(),
-      env: options.env || process.env,
-      encoding: "utf8"
-    }
-  );
+  const result = spawnSync(path.resolve(process.cwd(), "node_modules", ".bin", "tsx"), ["src/main.ts", ...args], {
+    cwd: options.cwd || process.cwd(),
+    env: options.env || process.env,
+    encoding: "utf8"
+  });
 
   if (!options.expectFailure && result.status !== 0) {
     throw new Error(result.stderr || `CLI exited with code ${result.status}`);

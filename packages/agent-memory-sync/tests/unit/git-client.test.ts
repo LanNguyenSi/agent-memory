@@ -117,7 +117,7 @@ test("GitClient.push: a git failure unrelated to rejection surfaces the generic 
   );
 });
 
-// GitClient.listStagedDeletions (agent-tasks cda5b12c, D-006): the
+// GitClient.listStagedDeletions (agent-tasks cda5b12c): the
 // mass-delete guard's real numerator. The push path stages its working copy
 // and asks the INDEX which deletions the next commit would carry, because
 // the merge plan and `git add -A` do not agree about a path the working copy
@@ -210,7 +210,7 @@ test("GitClient.listStagedDeletions: a working copy with no commit yet reports n
   assert.deepEqual(client.listStagedDeletions(repoDir), []);
 });
 
-// GitClient.commitStaged (agent-tasks cda5b12c, D-017): the push measures
+// GitClient.commitStaged (agent-tasks cda5b12c): the push measures
 // the index and then commits exactly that index. A commit that re-staged on
 // its way in would carry whatever the working copy looked like at commit
 // time, which is how a wipe landing after the measurement was published.
@@ -277,7 +277,7 @@ test("GitClient.commitStaged: creates the first commit on an unborn branch", () 
   assert.equal(client.revParseHead(repoDir), sha);
 });
 
-// GitClient.listTreePaths (agent-tasks cda5b12c, D-022): the restore paths'
+// GitClient.listTreePaths (agent-tasks cda5b12c): the restore paths'
 // idea of "what the commit holds". Without -z, git C-quotes a path carrying
 // a byte above 0x7F, a double quote, a backslash or a control character, and
 // the quoted form fails every caller's `startsWith(subdir/)` filter, so the
@@ -286,20 +286,20 @@ test("GitClient.commitStaged: creates the first commit on an unborn branch", () 
 test("GitClient.listTreePaths: a path git would C-quote is returned verbatim", () => {
   const root = sandbox("tree-quoting");
   const repoDir = initRepoWithFiles(root, {
-    "shared/logs/spéc \"quoted\".md": "content\n",
+    'shared/logs/spéc "quoted".md': "content\n",
     "shared/plain.md": "plain\n",
     "outside/other.md": "other\n"
   });
 
   const client = new GitClient("git");
   assert.deepEqual(client.listTreePaths(repoDir, "HEAD", "shared").sort(), [
-    "shared/logs/spéc \"quoted\".md",
+    'shared/logs/spéc "quoted".md',
     "shared/plain.md"
   ]);
   // No subdir: the whole tree, still verbatim.
   assert.deepEqual(client.listTreePaths(repoDir, "HEAD", "").sort(), [
     "outside/other.md",
-    "shared/logs/spéc \"quoted\".md",
+    'shared/logs/spéc "quoted".md',
     "shared/plain.md"
   ]);
 });

@@ -1,8 +1,7 @@
 // Rotating copies of a sync destination, taken immediately before a pull
 // applies anything destructive to it.
 //
-// Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
-// run .ai/runs/2026-09-11-memory-sync-wipe). The pull deleted the local
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c). The pull deleted the local
 // corpus from disk, the follow-up push published the deletion, and from that
 // point the only surviving copy of those files was the remote's own history:
 // recovery meant reading a bare repository's log. The guards in ./guards.ts
@@ -181,9 +180,7 @@ function writePreApplySnapshot(input: {
 }
 
 function resolveGenerations(value?: number | null): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0
-    ? value
-    : DEFAULT_SNAPSHOT_GENERATIONS;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : DEFAULT_SNAPSHOT_GENERATIONS;
 }
 
 function rotate(stateDir: string, destination: string, generations: number): void {
@@ -202,8 +199,7 @@ function readPreApplySnapshot(
   id: string
 ): { id: string; dir: string; createdAt: string; files: Array<{ remoteRelativePath: string; storedPath: string }> } {
   const available = listPreApplySnapshots(stateDir, destination);
-  const selected =
-    id === "latest" ? available[available.length - 1] : available.find((entry) => entry.id === id);
+  const selected = id === "latest" ? available[available.length - 1] : available.find((entry) => entry.id === id);
 
   if (!selected) {
     throw new RestoreSourceNotFoundError(

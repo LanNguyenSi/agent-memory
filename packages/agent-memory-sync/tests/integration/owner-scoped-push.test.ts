@@ -1,4 +1,4 @@
-// Repro B (agent-tasks 06d09cde / .ai/runs/2026-08-03-sync-conflict-markers-echo).
+// Repro B (agent-tasks 06d09cde).
 //
 // Defect: a directory-kind syncPaths entry (e.g. machine-state, frictions)
 // has no ownership concept — collectLocalSyncFiles (src/memory-sync/config.ts)
@@ -8,12 +8,11 @@
 // (an echo) and can win a last-writer-wins race against the peer's own,
 // newer push.
 //
-// Fix (Teil 2, D-002/D-003/D-004 in
-// .ai/runs/2026-08-03-sync-conflict-markers-echo/03-decisions.md): an
+// Fix (second half of agent-tasks 06d09cde): an
 // optional `ownerScoped: true` on a directory syncPaths entry restricts what
 // PUSH offers from that directory to exactly `<profile>.json` — this
 // machine's own file, named after its own `profile` config field. Pull is
-// untouched (D-004) — a peer's file is still pulled/materialized locally,
+// untouched — a peer's file is still pulled/materialized locally,
 // exactly like today.
 //
 // This test proves the echo is eliminated even in the adversarial case where
@@ -98,7 +97,7 @@ test(
 
     // Machine B: profile "machine-b", pulls — this materializes A's file
     // locally under B's own machine-state source directory (pull is
-    // unaffected by ownerScoped, D-004).
+    // unaffected by ownerScoped).
     const workspaceB = path.join(root, "workspace-b");
     const stateDirB = path.join(root, "state-b");
     const configPathB = path.join(root, "config-b.json");
@@ -144,8 +143,8 @@ test(
       !pushBPayload.conflictFiles.includes("machine-state/machine-a.json"),
       `B must not even attempt a merge over A's file: ${JSON.stringify(pushBPayload.conflictFiles)}`
     );
-    // Negative control for the Fix-Runde HIGH finding's warning (05-review-
-    // findings.md, agent-tasks 06d09cde): B's own file (machine-b.json) IS
+    // Negative control for the own-file warning (agent-tasks
+    // 06d09cde): B's own file (machine-b.json) IS
     // present alongside A's stale copy, so no "own file not found" warning
     // should fire here — the warning is for the missing-own-file case only,
     // see the dedicated tests below.
@@ -166,7 +165,7 @@ test(
   }
 );
 
-// Fix-Runde HIGH finding (05-review-findings.md, agent-tasks 06d09cde): the
+// Follow-up fix (agent-tasks 06d09cde): the
 // original version of this test (title unchanged below, semantics extended)
 // pinned tolerance — no exception — for a missing own file. It did NOT pin
 // that this is a real, silent data-loss path whenever `config.profile`
@@ -174,7 +173,7 @@ test(
 // (e.g. the CLI's [profile] positional defaulting to 'default' when a real
 // machine invocation omits it — run.ts/loader.ts's override order). The
 // tolerance (no exception) is preserved unchanged; a visible warning is now
-// also asserted, per D-007 (03-decisions.md): fix the silence, not the CLI
+// also asserted, as decided for the fix: fix the silence, not the CLI
 // resolution semantics.
 test("push tolerates an ownerScoped directory whose own <profile>.json does not exist locally yet, and now emits a visible warning when peer files are present", () => {
   const root = createSandbox("owner-scoped-missing-own-file");
@@ -188,7 +187,10 @@ test("push tolerates an ownerScoped directory whose own <profile>.json does not 
   // machineStateSource exists (so the directory-existence check passes) but
   // has no <profile>.json in it yet — only a peer's file.
   writeText(path.join(machineStateSource, "someone-elses.json"), '{"v":1}\n');
-  writeProjectConfig(configPath, ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource));
+  writeProjectConfig(
+    configPath,
+    ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource)
+  );
 
   const result = runCli(["run", "this-machine", "--config", configPath, "--mode", "push", "--output", "json"]);
   const payload = JSON.parse(result.stdout).runs[0];
@@ -226,7 +228,10 @@ test("push stays silent (no warning) for an ownerScoped directory that exists bu
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "seed\n");
   mkdirSync(machineStateSource, { recursive: true });
-  writeProjectConfig(configPath, ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource));
+  writeProjectConfig(
+    configPath,
+    ownerScopedConfig(workspaceRoot, remoteDir, stateDir, "this-machine", machineStateSource)
+  );
 
   const result = runCli(["run", "this-machine", "--config", configPath, "--mode", "push", "--output", "json"]);
   const payload = JSON.parse(result.stdout).runs[0];

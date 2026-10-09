@@ -1,7 +1,6 @@
 // Deletion guards for the pull and push paths.
 //
-// Origin: the 2026-09-11 memory-corpus wipe (agent-tasks cda5b12c, pandora
-// run .ai/runs/2026-09-11-memory-sync-wipe). A periodic `run --mode sync`
+// Origin: the memory-corpus wipe (agent-tasks cda5b12c). A periodic `run --mode sync`
 // tick prepared a working copy under stateDir/tmp/pull while a concurrent
 // `watch` tick called StateStore.clearTemp(), which removes the WHOLE
 // stateDir/tmp tree. git had already reported a successful fetch+checkout,
@@ -29,11 +28,7 @@
 //                           across the whole plan, stops and asks instead of
 //                           publishing the removal.
 const { resolveSyncPathEntries } = require("./config");
-const {
-  MassDeleteRefusedError,
-  RemoteDeletionRefusedError,
-  UnreliableCheckoutError
-} = require("../errors");
+const { MassDeleteRefusedError, RemoteDeletionRefusedError, UnreliableCheckoutError } = require("../errors");
 
 interface MassDeleteGuardConfig {
   maxRatio: number;
@@ -55,7 +50,7 @@ interface MassDeleteGuardConfig {
 //
 // The measured corpus sizes and deletion counts these numbers were chosen
 // against belong to the incident record, not to shipped source: see the
-// CHANGELOG entry for this change and the pandora run it points to.
+// CHANGELOG entry for this change.
 const DEFAULT_MASS_DELETE_GUARD: MassDeleteGuardConfig = {
   maxRatio: 0.1,
   maxFiles: 20
@@ -129,10 +124,7 @@ function destinationOf(destinations: string[], remoteRelativePath: string): stri
 // null value is a tombstone (StateStore's `.meta.json` deleted marker), not a
 // tracked file, so it never inflates the denominator of the proportional
 // rule.
-function countByDestination(
-  destinations: string[],
-  map: Record<string, string | null>
-): Map<string, number> {
+function countByDestination(destinations: string[], map: Record<string, string | null>): Map<string, number> {
   const counts = new Map<string, number>();
   for (const destination of destinations) {
     counts.set(destination, 0);
@@ -216,11 +208,7 @@ function findMassDelete(
       return { destination, deleted, tracked, rule: "absolute" };
     }
 
-    if (
-      deleted >= MIN_PROPORTIONAL_DELETIONS &&
-      tracked > 0 &&
-      deleted > tracked * guard.maxRatio
-    ) {
+    if (deleted >= MIN_PROPORTIONAL_DELETIONS && tracked > 0 && deleted > tracked * guard.maxRatio) {
       return { destination, deleted, tracked, rule: "proportional" };
     }
   }
@@ -257,8 +245,7 @@ function describeMassDelete(
 ): string {
   if (finding.rule === "total") {
     const mapped = finding.deleted - unmappedDeleted;
-    const outside =
-      unmappedDeleted > 0 ? `, plus ${unmappedDeleted} outside '${config.repositorySubdir}/'` : "";
+    const outside = unmappedDeleted > 0 ? `, plus ${unmappedDeleted} outside '${config.repositorySubdir}/'` : "";
     return (
       `refusing to push a plan that deletes ${finding.deleted} file(s) across all sync destinations ` +
       `(${mapped} of ${finding.tracked} tracked${outside}), over the mass-delete limit of ` +
@@ -307,13 +294,7 @@ function assertNoMassDelete(input: {
 
   const unmappedDeletedPaths = input.unmappedDeletedPaths || [];
   const guard = resolveMassDeleteGuard(input.config.massDeleteGuard);
-  const finding = findMassDelete(
-    input.config,
-    input.baseMap,
-    input.deletedPaths,
-    guard,
-    unmappedDeletedPaths
-  );
+  const finding = findMassDelete(input.config, input.baseMap, input.deletedPaths, guard, unmappedDeletedPaths);
   if (!finding) {
     return;
   }
@@ -469,11 +450,7 @@ function findUnreliableCheckout(
       return { destination, tracked, present, lost, emptied, rule: "absolute" };
     }
 
-    if (
-      unreliable >= MIN_PROPORTIONAL_DELETIONS &&
-      tracked > 0 &&
-      unreliable > tracked * guard.maxRatio
-    ) {
+    if (unreliable >= MIN_PROPORTIONAL_DELETIONS && tracked > 0 && unreliable > tracked * guard.maxRatio) {
       return { destination, tracked, present, lost, emptied, rule: "proportional" };
     }
   }
@@ -568,8 +545,7 @@ function describeUnreliableCheckout(finding: CheckoutFinding, guard: MassDeleteG
     );
   }
 
-  const emptiedNote =
-    finding.emptied > 0 ? ` and ${finding.emptied} more present but emptied to zero bytes` : "";
+  const emptiedNote = finding.emptied > 0 ? ` and ${finding.emptied} more present but emptied to zero bytes` : "";
 
   return (
     `is missing ${finding.lost} of the ${finding.tracked} file(s) the base snapshot tracks under ` +
@@ -653,13 +629,7 @@ function assertReliableCheckout(input: {
   remoteHead: string | null;
 }): void {
   const guard = resolveMassDeleteGuard(input.config.massDeleteGuard);
-  const finding = findUnreliableCheckout(
-    input.config,
-    input.baseMap,
-    input.remoteMap,
-    input.remoteHead,
-    guard
-  );
+  const finding = findUnreliableCheckout(input.config, input.baseMap, input.remoteMap, input.remoteHead, guard);
   if (!finding) {
     return;
   }
@@ -689,13 +659,7 @@ function assertOverridableCheckout(input: {
   remoteHead: string | null;
 }): CheckoutFinding | null {
   const guard = resolveMassDeleteGuard(input.config.massDeleteGuard);
-  const finding = findUnreliableCheckout(
-    input.config,
-    input.baseMap,
-    input.remoteMap,
-    input.remoteHead,
-    guard
-  );
+  const finding = findUnreliableCheckout(input.config, input.baseMap, input.remoteMap, input.remoteHead, guard);
   if (finding && finding.emptied > 0) {
     throw new UnreliableCheckoutError(buildUnreliableCheckoutMessage(finding, guard, input.remoteHead));
   }

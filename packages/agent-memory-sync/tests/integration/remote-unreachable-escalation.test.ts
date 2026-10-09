@@ -31,13 +31,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { readFileSync, readdirSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
-const {
-  createSandbox,
-  fileExists,
-  runCli,
-  writeProjectConfig,
-  writeText
-} = require("../helpers/cli.ts");
+const { createSandbox, fileExists, runCli, writeProjectConfig, writeText } = require("../helpers/cli.ts");
 const { runWatchTick } = require("../helpers/watch-process.ts");
 
 function createConfig(workspaceRoot: string, remoteDir: string) {
@@ -76,7 +70,7 @@ function backdateQueuedSnapshots(workspaceRoot: string, ageMs: number): void {
   }
 }
 
-// ─── AC2: below the threshold stays silent, exit 0 ──────────────────────────
+// ─── below the threshold stays silent, exit 0 ──────────────────────────
 
 test("push stays a silent, exit-0 queue while the oldest queued snapshot is well under the escalation threshold", () => {
   const root = createSandbox("escalation-below-threshold");
@@ -104,7 +98,7 @@ test("push stays a silent, exit-0 queue while the oldest queued snapshot is well
   assert.equal(readdirSync(queueDirFor(workspaceRoot)).length, 2);
 });
 
-// ─── AC1: above the threshold becomes visible (non-zero exit) ───────────────
+// ─── above the threshold becomes visible (non-zero exit) ───────────────
 
 test("push crashes loud with a clear message once the oldest queued snapshot is older than the escalation threshold", () => {
   const root = createSandbox("escalation-above-threshold");
@@ -124,10 +118,9 @@ test("push crashes loud with a clear message once the oldest queued snapshot is 
   backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(secondRun.status, 6, `expected the escalation's own exit code. stderr: ${secondRun.stderr}`);
   assert.match(secondRun.stderr, /remote has been unreachable for/);
@@ -171,7 +164,7 @@ test("watch tick exits non-zero once the queue has been failing to drain past th
   assert.match(stderr, /permanently misconfigured/);
 });
 
-// ─── AC4: the precheck-bypass path still queues via lookupRemoteHead ────────
+// ─── the precheck-bypass path still queues via lookupRemoteHead ────────
 //
 // Reviewer-named positive test: a remote whose scheme the reachability
 // precheck waves through as "unsupported" (see classifyRemote in
@@ -206,7 +199,7 @@ test("push still queues cleanly when an unsupported-scheme remote (precheck assu
 // #11): escalation must fire from the catch-all git-failure path
 // (push.ts's catch block around GitClient.lookupRemoteHead/push, ~line
 // 225-234), not only from the reachability-precheck skip path every test
-// above exercises. Reuses AC4's precheck-bypass mechanism above (an
+// above exercises. Reuses the precheck-bypass mechanism above (an
 // unsupported-scheme remote the precheck assumes reachable, so the failure
 // only ever surfaces once the real git operation runs and throws inside the
 // try block) — but this time with the queue already backdated past the
@@ -227,10 +220,9 @@ test("escalation also fires from the catch-all git-failure path, not only the re
   backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(
     secondRun.status,
@@ -285,7 +277,7 @@ test("push does not escalate when the oldest queued snapshot's age is implausibl
 });
 
 // A plain 25h age (well under the 30x sanity ceiling) must still escalate —
-// this is the SAME assertion the "push crashes loud..." AC1 test above
+// this is the SAME assertion the "push crashes loud..." test above
 // already makes; restated here in the same section as the guard's negative
 // case per the fix-round brief, without duplicating the full test body.
 test("push still escalates a plain 25h age — the clock-skew guard does not swallow genuine escalations", () => {
@@ -303,10 +295,9 @@ test("push still escalates a plain 25h age — the clock-skew guard does not swa
   backdateQueuedSnapshots(workspaceRoot, 25 * 60 * 60 * 1000);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(secondRun.status, 6, `expected the escalation's own exit code. stderr: ${secondRun.stderr}`);
   assert.match(secondRun.stderr, /remote has been unreachable for/);
@@ -345,10 +336,9 @@ test("queueEscalationThresholdMs from the project config file is actually wired 
   backdateQueuedSnapshots(workspaceRoot, CONFIG_WIRING_BACKDATE_MS);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    expectFailure: true
+  });
 
   assert.equal(
     secondRun.status,
@@ -372,25 +362,18 @@ test("queueEscalationThresholdMs from AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHO
   writeText(path.join(workspaceRoot, "MEMORY.md"), "first\n");
   writeProjectConfig(configPath, createConfig(workspaceRoot, offlineRemoteDir));
 
-  const firstRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { env }
-  );
+  const firstRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], { env });
   assert.equal(JSON.parse(firstRun.stdout).runs[0].status, "queued");
 
   backdateQueuedSnapshots(workspaceRoot, CONFIG_WIRING_BACKDATE_MS);
 
   writeText(path.join(workspaceRoot, "MEMORY.md"), "second\n");
-  const secondRun = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { env, expectFailure: true }
-  );
+  const secondRun = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    env,
+    expectFailure: true
+  });
 
-  assert.equal(
-    secondRun.status,
-    6,
-    `expected the env override to escalate at 2h old. stderr: ${secondRun.stderr}`
-  );
+  assert.equal(secondRun.status, 6, `expected the env override to escalate at 2h old. stderr: ${secondRun.stderr}`);
   assert.match(secondRun.stderr, /remote has been unreachable for/);
 });
 
@@ -403,10 +386,10 @@ test("an invalid AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS value fails lou
   writeText(path.join(workspaceRoot, "MEMORY.md"), "content\n");
   writeProjectConfig(configPath, createConfig(workspaceRoot, path.join(root, "unused-remote.git")));
 
-  const result = runCli(
-    ["run", "default", "--config", configPath, "--mode", "push", "--output", "json"],
-    { env, expectFailure: true }
-  );
+  const result = runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"], {
+    env,
+    expectFailure: true
+  });
 
   assert.equal(result.status, 3, `expected a config error exit code. stderr: ${result.stderr}`);
   assert.match(result.stderr, /AGENT_MEMORY_SYNC_QUEUE_ESCALATION_THRESHOLD_MS/);

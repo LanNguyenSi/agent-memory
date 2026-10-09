@@ -13,7 +13,7 @@ const {
   initBareRemote,
   runCli,
   writeProjectConfig,
-  writeText,
+  writeText
 } = require("../helpers/cli.ts");
 
 const THREE_MARKERS =
@@ -37,21 +37,12 @@ test("a sync keeps the not-published note of a merge-conflict path and names a p
       {
         source: path.join(workspace, "notes"),
         destination: "notes",
-        kind: "directory",
-      },
-    ],
+        kind: "directory"
+      }
+    ]
   });
   const runSync = () => {
-    const result = runCli([
-      "run",
-      "spoke",
-      "--config",
-      configPath,
-      "--mode",
-      "sync",
-      "--output",
-      "json",
-    ]);
+    const result = runCli(["run", "spoke", "--config", configPath, "--mode", "sync", "--output", "json"]);
     return JSON.parse(result.stdout).runs[0];
   };
 
@@ -69,26 +60,13 @@ test("a sync keeps the not-published note of a merge-conflict path and names a p
   writeText(path.join(workspace, "notes", "C.md"), "local edit\n");
 
   const run = runSync();
-  assert.ok(
-    run.conflictFiles.includes("notes/H.md"),
-    JSON.stringify(run.conflictFiles),
-  );
-  assert.ok(
-    run.conflictFiles.includes("notes/C.md"),
-    JSON.stringify(run.conflictFiles),
-  );
+  assert.ok(run.conflictFiles.includes("notes/H.md"), JSON.stringify(run.conflictFiles));
+  assert.ok(run.conflictFiles.includes("notes/C.md"), JSON.stringify(run.conflictFiles));
 
-  const hubPathNotes = run.notes.filter((note: string) =>
-    note.includes("notes/H.md"),
-  );
+  const hubPathNotes = run.notes.filter((note: string) => note.includes("notes/H.md"));
   assert.equal(hubPathNotes.length, 1, JSON.stringify(run.notes));
-  assert.ok(
-    hubPathNotes[0].startsWith("not pulled: notes/H.md"),
-    hubPathNotes[0],
-  );
+  assert.ok(hubPathNotes[0].startsWith("not pulled: notes/H.md"), hubPathNotes[0]);
 
-  const conflictNotes = run.notes.filter((note: string) =>
-    note.startsWith("not published: notes/C.md"),
-  );
+  const conflictNotes = run.notes.filter((note: string) => note.startsWith("not published: notes/C.md"));
   assert.equal(conflictNotes.length, 1, JSON.stringify(run.notes));
 });

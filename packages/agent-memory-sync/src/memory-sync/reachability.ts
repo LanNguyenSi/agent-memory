@@ -17,10 +17,7 @@ interface ReachabilityResult {
   reason: string;
 }
 
-type ClassifiedRemote =
-  | { kind: "ssh"; host: string }
-  | { kind: "local"; path: string }
-  | { kind: "unsupported" };
+type ClassifiedRemote = { kind: "ssh"; host: string } | { kind: "local"; path: string } | { kind: "unsupported" };
 
 const DEFAULT_REACHABILITY_TIMEOUT_MS = 4000;
 

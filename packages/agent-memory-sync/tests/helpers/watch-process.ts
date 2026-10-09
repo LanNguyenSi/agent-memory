@@ -31,7 +31,7 @@ const path = require("node:path");
 //   behavior (nodejs/node#52601). Measured 0/10 caught at 0ms, 10/10 caught
 //   at >=1ms, both idle and under load. waitForWatcherReady's 25ms poll
 //   cadence leaves comfortable margin above that threshold.
-// - Measured 2026-08-16/17: this file's documented 10-worker load scenario
+// - Measured earlier: this file's documented 10-worker load scenario
 //   ran 5/5 green on the merge base, idle and under load; the historical
 //   30-40% stall symptom did not reproduce. No retry/workaround is carried
 //   in this file as a result.
@@ -66,7 +66,7 @@ const PROGRESS_SIGNAL_PATTERN = new RegExp(
   "g"
 );
 const READY_TIMEOUT_MS = 10000;
-// History (kept for context; superseded below): the 2026-08-14 CI failure
+// History (kept for context; superseded below): the original CI failure
 // (run 31775406978, attempt 1, "watch tick queues locally when the remote is
 // unreachable, then replays the queue once the remote is reachable again")
 // was a fixed 20000ms whole-tick budget in withTickDeadline, not a genuine
@@ -164,7 +164,7 @@ const READY_TIMEOUT_MS = 10000;
 // further progress signal is possible once the process itself is frozen, so
 // inactivity accumulates exactly as it did under the old whole-tick model.
 //
-// Follow-up (agent-tasks cda5b12c, D-009): adding a fifth watcher-spawning
+// Follow-up (agent-tasks cda5b12c): adding a fifth watcher-spawning
 // integration file measurably moved the FULL suite's pass rate under load
 // (8/8 before, 6/8 after, same machine) without any change to this file.
 // Two things follow from the evidence above, and this is the shape they

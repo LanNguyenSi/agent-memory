@@ -41,10 +41,13 @@ function fakeStat(present: Set<string>) {
 test("partitionSyncPaths splits existing from missing paths, keeps the order and drops a path configured twice", () => {
   const present = new Set(["/ws/MEMORY.md", "/ws/a"]);
   const exists = (candidate: string) => present.has(candidate);
-  assert.deepEqual(partitionSyncPaths(["/ws/logs", "/ws/MEMORY.md", "/ws/a", "/ws/notes", "/ws/./logs/", "/ws/MEMORY.md"], exists), {
-    existing: ["/ws/MEMORY.md", "/ws/a"],
-    missing: ["/ws/logs", "/ws/notes"]
-  });
+  assert.deepEqual(
+    partitionSyncPaths(["/ws/logs", "/ws/MEMORY.md", "/ws/a", "/ws/notes", "/ws/./logs/", "/ws/MEMORY.md"], exists),
+    {
+      existing: ["/ws/MEMORY.md", "/ws/a"],
+      missing: ["/ws/logs", "/ws/notes"]
+    }
+  );
   assert.deepEqual(partitionSyncPaths([], exists), { existing: [], missing: [] });
   // A nested path whose parent is missing is simply missing: no ancestor is
   // looked up.
@@ -54,10 +57,14 @@ test("partitionSyncPaths splits existing from missing paths, keeps the order and
 test("trackMissingPaths reports each target once, when it exists, independently of the others", async () => {
   const present = new Set<string>();
   const appeared: string[] = [];
-  const tracker = trackMissingPaths(["/ws/logs", "/ws/notes", "/ws/logs/daily"], (target: string) => appeared.push(target), {
-    pollMs: 2,
-    stat: fakeStat(present)
-  });
+  const tracker = trackMissingPaths(
+    ["/ws/logs", "/ws/notes", "/ws/logs/daily"],
+    (target: string) => appeared.push(target),
+    {
+      pollMs: 2,
+      stat: fakeStat(present)
+    }
+  );
   try {
     await sleep(30);
     assert.deepEqual(appeared, [], "nothing exists yet");
@@ -216,7 +223,11 @@ test("listFilesUnder lists the files of a directory tree, a file target itself, 
   const listed = await listFilesUnder(path.join(root, "logs"));
   assert.deepEqual(
     [...listed].sort(),
-    [path.join(root, "logs", "a.md"), path.join(root, "logs", "sub", "b.md"), path.join(root, "logs", "sub", "deeper", "c.md")].sort()
+    [
+      path.join(root, "logs", "a.md"),
+      path.join(root, "logs", "sub", "b.md"),
+      path.join(root, "logs", "sub", "deeper", "c.md")
+    ].sort()
   );
   assert.deepEqual(await listFilesUnder(path.join(root, "single.md")), [path.join(root, "single.md")]);
   assert.deepEqual(await listFilesUnder(path.join(root, "logs", "empty")), []);
@@ -272,13 +283,19 @@ test("confirmWatchLive resolves false, and does not throw, when the scratch dire
 test("confirmWatchLive reports the cause through onError when the probe cannot be set up, and not on a plain timeout", async () => {
   const errors: unknown[] = [];
   const scratchRoot = path.join(createSandbox("watch-arming-live-onerror"), "does-not-exist");
-  assert.equal(await confirmWatchLive({ timeoutMs: 1000, scratchRoot, onError: (error: unknown) => errors.push(error) }), false);
+  assert.equal(
+    await confirmWatchLive({ timeoutMs: 1000, scratchRoot, onError: (error: unknown) => errors.push(error) }),
+    false
+  );
   assert.equal(errors.length, 1);
   assert.match((errors[0] as Error).message, /ENOENT/);
 
   const timedOut: unknown[] = [];
   const ok = createSandbox("watch-arming-live-onerror-timeout");
-  assert.equal(await confirmWatchLive({ timeoutMs: 0, scratchRoot: ok, onError: (error: unknown) => timedOut.push(error) }), false);
+  assert.equal(
+    await confirmWatchLive({ timeoutMs: 0, scratchRoot: ok, onError: (error: unknown) => timedOut.push(error) }),
+    false
+  );
   assert.deepEqual(timedOut, []);
 });
 
