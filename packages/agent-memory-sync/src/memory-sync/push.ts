@@ -261,6 +261,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // still throws UnreliableCheckoutError here regardless of the flag.
     const remoteMap = collectRemoteFiles(config, gitClient, workingCopy.repoDir);
     let acceptedDeletions: string[] = [];
+    let adoptedBasePaths: string[] = [];
     let preApplySnapshots: string[] = [];
 
     if (options.acceptMassDelete) {
@@ -275,6 +276,9 @@ async function performPush(config: PushConfig, options: PushOptions) {
       });
 
       if (accepted) {
+        adoptedBasePaths = Object.keys(currentBaseMap).filter(
+          (key) => !Object.prototype.hasOwnProperty.call(accepted.baseMap, key)
+        );
         acceptedDeletions = accepted.deletedPaths;
         preApplySnapshots = accepted.snapshots;
         currentBaseMap = accepted.baseMap;
@@ -299,7 +303,22 @@ async function performPush(config: PushConfig, options: PushOptions) {
     const conflictFiles: string[] = [];
     const deletedFiles: string[] = [];
 
-    for (const snapshot of snapshots) {
+    // The base moves forward across the snapshots applied in this run: a
+    // queued snapshot is merged against the base captured when it was
+    // enqueued, and once its commit is in the working copy, the next
+    // snapshot (the current one included) has to merge against what that
+    // commit published, not against the base from before it. See
+    // recordBaseAdvance.
+    const baseDelta = newBaseDelta();
+
+    for (const [index, snapshot] of snapshots.entries()) {
+      const isLast = index === snapshots.length - 1;
+      if (index > 0) {
+        const advanced = applyBaseDelta(snapshot.baseFiles, baseDelta);
+        // Paths adopted from the remote's deletions belong to the current
+        // snapshot only; a queued snapshot keeps its own view of them.
+        snapshot.baseFiles = isLast ? withoutKeys(advanced, adoptedBasePaths) : advanced;
+      }
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
       // Guard 2: evaluated per snapshot and
       // BEFORE this snapshot's commit, so a refusal leaves the remote
@@ -332,6 +351,14 @@ async function performPush(config: PushConfig, options: PushOptions) {
       // and a checkout wiped between the measurement and that second stage
       // was published as a total deletion the guard had measured as none.
       gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
+      if (!isLast) {
+        recordBaseAdvance(
+          config,
+          baseDelta,
+          snapshot,
+          collectRemoteFiles(config, gitClient, workingCopy.repoDir)
+        );
+      }
     }
 
     gitClient.push(workingCopy.repoDir, config.branch);
@@ -365,15 +392,27 @@ async function performPush(config: PushConfig, options: PushOptions) {
     // code paths is filtered out on this write too. This is the root-cause
     // fix for push's own base write, symmetric with pull.ts's write-side
     // filter. See that function's comment in config.ts for the full
-    // three-call-site writeup. filterOwnerScopedBaseMap is applied as well,
-    // matching the read side, so a peer's ownerScoped file never lands in
-    // the base through the kept-previous branch either.
+    // three-call-site writeup.
+    //
+    // The owner-scoped filter is deliberately NOT applied to this write. It
+    // is a read-side filter only (what push offers and merges). The base
+    // store also holds the entries pull wrote for a peer's ownerScoped
+    // files, and pull's local-only guard protects any local file that has no
+    // base entry and is absent on the hub: stripping those entries here
+    // would turn the peer's later deletion of its own file into a stale
+    // local copy that is never removed. The kept-previous branch of
+    // nextBaseAfterPush leaves such an entry exactly as pull wrote it.
+    //
+    // baseDelta carries what the queued snapshots replayed above changed in
+    // the base, so the final per-path rule starts from the base as it stood
+    // after those replays.
     stateStore.replaceBaseSnapshots(
       filterUnmappedBaseMap(
         config,
-        filterOwnerScopedBaseMap(
-          config,
-          nextBaseAfterPush(stateStore.readBaseSnapshots(), currentLocalMap, finalRemoteFiles)
+        nextBaseAfterPush(
+          applyBaseDelta(stateStore.readBaseSnapshots(), baseDelta),
+          currentLocalMap,
+          finalRemoteFiles
         )
       )
     );
@@ -674,7 +713,15 @@ function previewPush(
     const conflictFiles: string[] = [];
     const deletedFiles: string[] = [];
 
-    for (const snapshot of previewSnapshots) {
+    // Same base chaining as the real run, so the preview's plan for the
+    // current snapshot matches what the real run will do after the queued
+    // snapshots have been replayed.
+    const baseDelta = newBaseDelta();
+
+    for (const [index, plannedSnapshot] of previewSnapshots.entries()) {
+      const isLast = index === previewSnapshots.length - 1;
+      const snapshot =
+        index > 0 ? { ...plannedSnapshot, baseFiles: applyBaseDelta(plannedSnapshot.baseFiles, baseDelta) } : plannedSnapshot;
       const result = applySnapshotToWorkingCopy(config, gitClient, workingCopy.repoDir, snapshot);
       const stagedDeletions = collectStagedDeletions(config, gitClient, workingCopy.repoDir);
       assertNoMassDelete({
@@ -697,6 +744,14 @@ function previewPush(
       // index, as the real run does, keeps the preview's arithmetic
       // identical to the real run's.
       gitClient.commitStaged(workingCopy.repoDir, snapshot.message);
+      if (!isLast) {
+        recordBaseAdvance(
+          config,
+          baseDelta,
+          snapshot,
+          collectRemoteFiles(config, gitClient, workingCopy.repoDir)
+        );
+      }
     }
 
     return {
@@ -836,6 +891,58 @@ function collectStagedDeletions(
   }
 
   return { claimed, unclaimed };
+}
+
+// What the snapshots applied so far in one run changed in the base, as a
+// sparse overlay: `set` holds paths whose entry moved to new content,
+// `removed` the paths whose entry went away. Layering it over any base
+// (a later snapshot's own, the stored one) re-applies those moves without
+// replacing the rest of that base.
+interface BaseDelta {
+  set: Record<string, string | null>;
+  removed: Set<string>;
+}
+
+function newBaseDelta(): BaseDelta {
+  return { set: {}, removed: new Set() };
+}
+
+function applyBaseDelta(
+  base: Record<string, string | null>,
+  delta: BaseDelta
+): Record<string, string | null> {
+  const result = withoutKeys(base, Array.from(delta.removed));
+  return { ...result, ...delta.set };
+}
+
+// After a queued snapshot's commit, advance the base for the snapshots that
+// follow with the same per-path rule the final write uses (nextBaseAfterPush),
+// from that snapshot's own local files and the hub tree as the commit left
+// it. Without this, a later snapshot that reverts what the replay just
+// published reads the published content as "local unchanged against base"
+// and the revert is never published.
+function recordBaseAdvance(
+  config: PushConfig,
+  delta: BaseDelta,
+  snapshot: PushSnapshot,
+  hubMap: Record<string, string | null>
+) {
+  const has = (source: object, key: string) => Object.prototype.hasOwnProperty.call(source, key);
+  const before = snapshot.baseFiles;
+  const after = filterUnmappedBaseMap(config, nextBaseAfterPush(before, snapshot.localFiles, hubMap));
+
+  for (const key of Object.keys(before)) {
+    if (!has(after, key)) {
+      delete delta.set[key];
+      delta.removed.add(key);
+    }
+  }
+  for (const key of Object.keys(after)) {
+    if (!has(before, key) || before[key] !== after[key]) {
+      delta.removed.delete(key);
+      delta.set[key] = after[key];
+    }
+  }
 }
 
 // Per-path base advance after a successful push. For each path:

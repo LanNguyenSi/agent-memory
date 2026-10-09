@@ -30,6 +30,7 @@ const {
   cloneRemote,
   createSandbox,
   fileExists,
+  git,
   initBareRemote,
   readText,
   runCli,
@@ -361,3 +362,55 @@ test(
     );
   }
 );
+
+// The base snapshot store must keep a peer's ownerScoped entry across this
+// machine's own pushes: pull's local-only guard protects any local file that
+// has no base entry and is absent on the hub, so a push that stripped the
+// entry would turn the peer's later deletion of its own file into a
+// permanently protected stale local copy.
+test("a peer's deletion of its own ownerScoped file still removes the local copy after this machine pushed in between", () => {
+  const root = createSandbox("owner-scoped-peer-delete");
+  const remoteDir = initBareRemote(root);
+
+  const workspaceA = path.join(root, "workspace-a");
+  const stateDirA = path.join(root, "state-a");
+  const configPathA = path.join(root, "config-a.json");
+  const sourceA = path.join(root, "machine-a-harness-state");
+  writeText(path.join(workspaceA, "MEMORY.md"), "memory\n");
+  writeText(path.join(sourceA, "machine-a.json"), '{"v":1}\n');
+  writeProjectConfig(configPathA, ownerScopedConfig(workspaceA, remoteDir, stateDirA, "machine-a", sourceA));
+  const pushA = runCli(["run", "machine-a", "--config", configPathA, "--mode", "push", "--output", "json"]);
+  assert.equal(JSON.parse(pushA.stdout).runs[0].status, "applied");
+
+  const workspaceB = path.join(root, "workspace-b");
+  const stateDirB = path.join(root, "state-b");
+  const configPathB = path.join(root, "config-b.json");
+  const sourceB = path.join(root, "machine-b-harness-state");
+  writeProjectConfig(configPathB, ownerScopedConfig(workspaceB, remoteDir, stateDirB, "machine-b", sourceB));
+  runCli(["run", "machine-b", "--config", configPathB, "--mode", "pull", "--output", "json"]);
+  assert.equal(readText(path.join(sourceB, "machine-a.json")), '{"v":1}\n');
+
+  // B pushes its own state; this rewrites B's base snapshot store.
+  writeText(path.join(sourceB, "machine-b.json"), '{"v":1}\n');
+  const pushB = runCli(["run", "machine-b", "--config", configPathB, "--mode", "push", "--output", "json"]);
+  assert.equal(JSON.parse(pushB.stdout).runs[0].status, "applied");
+  const base = new StateStore(stateDirB, "machine-b").readBaseSnapshots();
+  assert.equal(base["machine-state/machine-a.json"], '{"v":1}\n', "the peer's base entry must survive B's push");
+
+  // The peer removes its own file from the hub.
+  const peer = cloneRemote(remoteDir, root, "peer-delete");
+  git(["config", "user.name", "peer"], peer);
+  git(["config", "user.email", "peer@example.invalid"], peer);
+  git(["rm", "--quiet", "shared/machine-state/machine-a.json"], peer);
+  git(["commit", "--quiet", "-m", "peer removes its own machine-state file"], peer);
+  git(["push", "--quiet", "origin", "HEAD:main"], peer);
+
+  const sync = runCli(["run", "machine-b", "--config", configPathB, "--mode", "sync", "--output", "json"]);
+  const payload = JSON.parse(sync.stdout).runs[0];
+  assert.equal(fileExists(path.join(sourceB, "machine-a.json")), false, "the stale local copy must be removed");
+  assert.ok(
+    !(payload.protectedFiles || []).includes("machine-state/machine-a.json"),
+    `the deletion must not be reported as protected: ${JSON.stringify(payload.protectedFiles)}`
+  );
+  assert.equal(fileExists(path.join(sourceB, "machine-b.json")), true, "B's own file stays");
+});
