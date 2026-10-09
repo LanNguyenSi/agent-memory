@@ -113,8 +113,8 @@ is about to change.
   `massDeleteGuard.maxFiles`/`maxRatio` in the config for one run.
 - **Pre-apply snapshots**: before a pull deletes or overwrites anything in
   a destination, the destination's current tree is copied to
-  `<stateDir>/snapshots/<destination>/<timestamp>/`. The newest
-  `snapshotGenerations` copies (default 3) are kept. A run with nothing to
+  `<stateDir>/snapshots/<destination>/<timestamp>/`. The copy this run takes plus the newest
+  `snapshotGenerations`-1 earlier ones are kept (default 3 in all). A run with nothing to
   apply writes nothing. `restore --from-snapshot` reads them back.
 - **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
   thresholds refuse. It does not override an untrustworthy working copy.
@@ -124,7 +124,12 @@ is about to change.
   `<stateDir>/snapshots` first, then the remote's state is applied
   locally (on the push side, that means removing the local copies the
   remote no longer has), and the base snapshot moves with it, so the next
-  run is clean instead of republishing what was just accepted as deleted. It cannot be combined
+  run is clean instead of republishing what was just accepted as deleted.
+  Before the first local file is removed, the snapshot is read back and must
+  hold a stored copy of every file about to be removed; when it does not,
+  the run exits `12` with no file removed and the base snapshot unmoved (see
+  the [exit-code table](../README.md#exit-codes)), and running it again takes
+  a fresh snapshot. It cannot be combined
   with `--allow-mass-delete` (usage error, exit `2`). It is a one-shot
   decision about one observed remote state, which is why `watch` does not
   take it.

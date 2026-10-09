@@ -174,7 +174,7 @@ function writePreApplySnapshot(input: {
   };
   writeFileSync(path.join(dir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-  rotate(input.stateDir, input.destination, resolveGenerations(input.generations));
+  rotate(input.stateDir, input.destination, resolveGenerations(input.generations), id);
 
   return { id, dir, destination: input.destination, files: stored };
 }
@@ -183,11 +183,48 @@ function resolveGenerations(value?: number | null): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : DEFAULT_SNAPSHOT_GENERATIONS;
 }
 
-function rotate(stateDir: string, destination: string, generations: number): void {
-  const existing = listPreApplySnapshots(stateDir, destination);
-  for (const entry of existing.slice(0, Math.max(0, existing.length - generations))) {
+// Drops the oldest generations beyond `generations`, never the one named by
+// `pinnedId`. Ids rank by timestamp, so after a clock that ran ahead the id a
+// correct clock produces now can rank below every older generation, and a
+// plain "newest N by id" rule would delete the snapshot the current run has
+// just written - the one copy a caller is about to rely on. The pinned
+// generation counts toward `generations`; the oldest OTHER ones make room.
+function rotate(stateDir: string, destination: string, generations: number, pinnedId: string): void {
+  const others = listPreApplySnapshots(stateDir, destination).filter((entry) => entry.id !== pinnedId);
+  const keepOthers = Math.max(0, generations - 1);
+  for (const entry of others.slice(0, Math.max(0, others.length - keepOthers))) {
     rmSync(entry.dir, { recursive: true, force: true });
   }
+}
+
+// Whether generation `id` of `destination` exists with a readable manifest and
+// every file it lists (plus every file in `expectedFiles`) present on disk.
+// Returns the first problem found, or null when the generation is intact. A
+// caller that is about to delete the originals checks this after the write
+// and after rotation, so a generation that vanished for any reason stops the
+// deletion instead of leaving a file with no surviving copy.
+function findPreApplySnapshotProblem(
+  stateDir: string,
+  destination: string,
+  id: string,
+  expectedFiles: string[] = []
+): string | null {
+  const entry = listPreApplySnapshots(stateDir, destination).find((candidate) => candidate.id === id);
+  if (!entry) {
+    return `generation ${id} of destination '${destination}' no longer exists under '${destinationDir(stateDir, destination)}'`;
+  }
+
+  const listed = new Set<string>([...entry.manifest.files, ...expectedFiles]);
+  for (const remoteRelativePath of Array.from(listed).sort()) {
+    if (!entry.manifest.files.includes(remoteRelativePath)) {
+      return `generation ${id} does not list ${remoteRelativePath}`;
+    }
+    if (!existsSync(path.join(entry.dir, "files", remoteRelativePath))) {
+      return `generation ${id} is missing its copy of ${remoteRelativePath}`;
+    }
+  }
+
+  return null;
 }
 
 // Reads one generation back. `id` may be "latest", which is how an operator
@@ -224,6 +261,7 @@ function readPreApplySnapshot(
 
 module.exports = {
   DEFAULT_SNAPSHOT_GENERATIONS,
+  findPreApplySnapshotProblem,
   listPreApplySnapshots,
   readPreApplySnapshot,
   snapshotsDir,

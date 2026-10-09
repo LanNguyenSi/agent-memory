@@ -111,6 +111,12 @@ test("an adopted held-back path the adoption snapshot holds no copy of says so a
     note.includes("holds no copy of notes/T0.md") && note.includes("no local copy when the adoption ran"),
     `the note says the snapshot holds no copy: ${note}`
   );
+  assert.ok(
+    note.endsWith(
+      "The queued edit is not stored anywhere else, and the local deletion already matches the hub, so no action is needed"
+    ),
+    `the note ends by saying nothing needs doing: ${note}`
+  );
   assert.equal(note.includes("files/notes/T0.md"), false, `the note names no snapshot file: ${note}`);
   assert.equal(note.includes("copy that one file"), false, `the note advises no copy step: ${note}`);
   assert.equal(note.includes("restore"), false, `the note advises no restore fallback: ${note}`);
