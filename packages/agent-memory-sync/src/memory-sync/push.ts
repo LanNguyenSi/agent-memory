@@ -341,19 +341,42 @@ async function performPush(config: PushConfig, options: PushOptions) {
     const state = stateStore.loadState();
     state.lastRemoteHead = remoteHeadAfter;
     state.lastRunAt = new Date().toISOString();
+    // The base snapshot moves per path, not as a whole-tree copy of the hub.
+    // Push never writes hub-won or merged content back into the local files,
+    // so copying the hub into the base for a path this machine did not
+    // converge on makes a stale local copy look unchanged against its base:
+    // the next push (even one with no local change at all) would then
+    // republish that stale copy over a peer's newer version, and a hub-only
+    // file this machine never pulled would enter the base with no local copy
+    // and be deleted from the hub on the push after that. See
+    // nextBaseAfterPush for the per-path rule.
+    //
     // filterUnmappedBaseMap (agent-tasks 65380570): finalRemoteFiles is a
     // fresh, full read of the entire remote repositorySubdir tree, unmapped
     // paths included, regardless of whether THIS push touched them at all
-    // (see collectRemoteFiles below). Left unfiltered, this write alone
-    // re-contaminates the base store on every single push, with no pull
+    // (see collectRemoteFiles below). Left unfiltered, the base write alone
+    // would re-contaminate the base store on every single push, with no pull
     // involved: the very next push would then read an unmapped peer path
     // back out of the base store (the read-side filter above exists
     // precisely to catch that), feed applySnapshotToWorkingCopy a
     // base=<content>/local=null pair for it, and silently delete it from
-    // the remote. This is the root-cause fix for push's own base write,
-    // symmetric with pull.ts's write-side filter. See that function's
-    // comment in config.ts for the full three-call-site writeup.
-    stateStore.replaceBaseSnapshots(filterUnmappedBaseMap(config, finalRemoteFiles));
+    // the remote. The previous base is read back from the store here (not
+    // taken from the in-memory map), so an entry written outside push's own
+    // code paths is filtered out on this write too. This is the root-cause
+    // fix for push's own base write, symmetric with pull.ts's write-side
+    // filter. See that function's comment in config.ts for the full
+    // three-call-site writeup. filterOwnerScopedBaseMap is applied as well,
+    // matching the read side, so a peer's ownerScoped file never lands in
+    // the base through the kept-previous branch either.
+    stateStore.replaceBaseSnapshots(
+      filterUnmappedBaseMap(
+        config,
+        filterOwnerScopedBaseMap(
+          config,
+          nextBaseAfterPush(stateStore.readBaseSnapshots(), currentLocalMap, finalRemoteFiles)
+        )
+      )
+    );
     stateStore.saveState(state);
     stateStore.clearTemp(options.tempDirLabel || "push");
 
@@ -813,6 +836,42 @@ function collectStagedDeletions(
   }
 
   return { claimed, unclaimed };
+}
+
+// Per-path base advance after a successful push. For each path:
+// - the local content (as collected for this push) equals the final hub
+//   content: the base takes the hub content;
+// - the path is absent locally and on the hub: no base entry;
+// - anything else (local differs from the hub, or exists on only one side):
+//   the previous base entry is kept exactly, present or absent. The
+//   three-way merge of the next run then still sees the content this
+//   machine last converged on, so a peer's newer hub version is not
+//   mistaken for "remote unchanged" and a hub-only file stays remote-only.
+function nextBaseAfterPush(
+  previousBase: Record<string, string | null>,
+  localMap: Record<string, string>,
+  hubMap: Record<string, string | null>
+): Record<string, string | null> {
+  const has = (source: object, key: string) => Object.prototype.hasOwnProperty.call(source, key);
+  const result: Record<string, string | null> = {};
+  const paths = new Set([...Object.keys(previousBase), ...Object.keys(localMap), ...Object.keys(hubMap)]);
+
+  for (const key of paths) {
+    const local = has(localMap, key) ? localMap[key] : null;
+    const hub = has(hubMap, key) ? hubMap[key] : null;
+
+    if (local === null && hub === null) {
+      continue;
+    }
+
+    if (local === hub) {
+      result[key] = hub;
+    } else if (has(previousBase, key)) {
+      result[key] = previousBase[key];
+    }
+  }
+
+  return result;
 }
 
 function collectRemoteFiles(
