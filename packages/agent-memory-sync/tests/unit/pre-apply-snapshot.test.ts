@@ -184,3 +184,40 @@ test("a snapshot preserves bytes that are not valid UTF-8", () => {
   assert.deepEqual(stored, rawBytes);
   assert.equal(stored.length, rawBytes.length);
 });
+
+test("rotation never deletes the snapshot the current run wrote, even when older generations carry future ids", () => {
+  const root = sandbox("rotation-pinned");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 1);
+
+  // A clock that ran ahead earlier left generations whose ids sort after
+  // anything written now.
+  const future = [1, 2, 3].map(
+    (day) => writePreApplySnapshot({ stateDir, destination: "logs", files, now: new Date(Date.UTC(2999, 0, day)) }).id
+  );
+
+  const current = writePreApplySnapshot({ stateDir, destination: "logs", files });
+
+  const kept = listPreApplySnapshots(stateDir, "logs").map((entry: { id: string }) => entry.id);
+  assert.ok(kept.includes(current.id), `the run's own snapshot ${current.id} survives rotation: ${kept.join(", ")}`);
+  assert.equal(existsSync(path.join(current.dir, "manifest.json")), true);
+  // The configured count still bounds the total: the pinned one plus the
+  // newest others, the oldest other generation is the one dropped.
+  assert.equal(kept.length, DEFAULT_SNAPSHOT_GENERATIONS);
+  assert.deepEqual(
+    kept.filter((id: string) => id !== current.id),
+    future.slice(-2)
+  );
+});
+
+test("rotation with a single generation keeps only the snapshot the current run wrote", () => {
+  const root = sandbox("rotation-pinned-one");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 1);
+
+  writePreApplySnapshot({ stateDir, destination: "logs", files, now: new Date(Date.UTC(2999, 0, 1)) });
+  const current = writePreApplySnapshot({ stateDir, destination: "logs", files, generations: 1 });
+
+  const kept = listPreApplySnapshots(stateDir, "logs").map((entry: { id: string }) => entry.id);
+  assert.deepEqual(kept, [current.id]);
+});

@@ -31,7 +31,8 @@
 const { existsSync, rmSync } = require("node:fs");
 const { mapRemotePathToLocalAbsolute, resolveSyncPathEntries } = require("./config");
 const { assertOverridableCheckout } = require("./guards");
-const { writePreApplySnapshot } = require("./pre-apply-snapshot");
+const { CliError } = require("../errors");
+const { findPreApplySnapshotProblem, writePreApplySnapshot } = require("./pre-apply-snapshot");
 
 interface AcceptConfig {
   stateDir: string;
@@ -137,23 +138,35 @@ function acceptRemoteDeletions(input: {
     .sort((left: string, right: string) => right.length - left.length);
 
   // Copy first, delete second: the whole point of accepting a deletion this
-  // large is that the operator can still be wrong about it.
+  // large is that the operator can still be wrong about it. The copy is
+  // checked before the first deletion, not trusted: every snapshot is written
+  // first and then read back, so a generation that is gone by now (rotation
+  // dropped it, a disk problem, anything) stops the adoption while the local
+  // files are all still there.
   const snapshots: string[] = [];
   for (const destination of lost.destinations) {
     const files = input.localFiles.filter(
       (file) => destinationOf(destinations, file.remoteRelativePath) === destination
     );
-    snapshots.push(
-      writePreApplySnapshot({
-        stateDir: input.config.stateDir,
-        destination,
-        files: files.map((file) => ({
-          remoteRelativePath: file.remoteRelativePath,
-          absolutePath: file.absolutePath
-        })),
-        generations: input.config.snapshotGenerations
-      }).id
-    );
+    const written = writePreApplySnapshot({
+      stateDir: input.config.stateDir,
+      destination,
+      files: files.map((file) => ({
+        remoteRelativePath: file.remoteRelativePath,
+        absolutePath: file.absolutePath
+      })),
+      generations: input.config.snapshotGenerations
+    });
+    snapshots.push(written.id);
+  }
+  for (const [index, destination] of lost.destinations.entries()) {
+    const problem = findPreApplySnapshotProblem(input.config.stateDir, destination, snapshots[index]);
+    if (problem) {
+      throw new CliError(
+        `--accept-mass-delete stopped: the pre-apply snapshot for '${destination}' is not intact (${problem}). ` +
+          "No local file was removed and the base snapshot was not moved; run the push again"
+      );
+    }
   }
 
   const deletedPaths: string[] = [];

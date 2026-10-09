@@ -1,4 +1,4 @@
-const { readdirSync, rmSync } = require("node:fs");
+const { existsSync, readdirSync, rmSync } = require("node:fs");
 const path = require("node:path");
 const {
   collectLocalSyncFiles,
@@ -452,6 +452,7 @@ async function performPush(config: PushConfig, options: PushOptions) {
           ...(queuedSnapshots.length > 0 ? [`replayed ${queuedSnapshots.length} queued snapshot(s)`] : []),
           ...heldBackNotes(config, heldBack, {
             adoptedPaths: adoptedBasePaths,
+            deletedPaths: acceptedDeletions,
             snapshotIds: preApplySnapshots,
             dryRun: false
           })
@@ -776,7 +777,12 @@ function previewPush(
       queuedSnapshotId: null,
       notes: [
         ...notes,
-        ...heldBackNotes(config, heldBack, { adoptedPaths: adoptedDeletions, snapshotIds: [], dryRun: true })
+        ...heldBackNotes(config, heldBack, {
+          adoptedPaths: adoptedDeletions,
+          deletedPaths: [],
+          snapshotIds: [],
+          dryRun: true
+        })
       ]
     };
   } catch (error) {
@@ -917,11 +923,14 @@ interface HeldBackPath {
 // A path whose local copy is gone because --accept-mass-delete adopted the
 // hub's deletion (adoptedPaths) is held back with its queued edit surviving
 // only in the pre-apply snapshot that adoption took; that note names the
-// snapshot id and the one snapshotted file to copy back.
+// snapshot id and the one snapshotted file to copy back. `deletedPaths` are
+// the paths the adoption actually removed from disk (a subset of
+// adoptedPaths): it tells a path that never had a local copy apart from one
+// whose snapshot copy has gone missing.
 function heldBackNotes(
   config: PushConfig,
   held: HeldBackPath[],
-  adoption: { adoptedPaths: string[]; snapshotIds: string[]; dryRun: boolean }
+  adoption: { adoptedPaths: string[]; deletedPaths: string[]; snapshotIds: string[]; dryRun: boolean }
 ): string[] {
   // Later snapshots of one run describe the path's current state best.
   const kindByPath = new Map<string, HeldBackKind>();
@@ -938,7 +947,13 @@ function heldBackNotes(
         return hubMarkersPushNote(remoteRelativePath);
       }
       if (adoption.adoptedPaths.includes(remoteRelativePath)) {
-        return adoptedHeldBackNote(config, remoteRelativePath, adoption.snapshotIds, adoption.dryRun);
+        return adoptedHeldBackNote(
+          config,
+          remoteRelativePath,
+          adoption.snapshotIds,
+          adoption.deletedPaths.includes(remoteRelativePath),
+          adoption.dryRun
+        );
       }
       if (kind === "local-markers") {
         return (
@@ -980,6 +995,7 @@ function adoptedHeldBackNote(
   config: PushConfig,
   remoteRelativePath: string,
   snapshotIds: string[],
+  hadLocalCopy: boolean,
   dryRun: boolean
 ): string {
   const resolvedEntries = resolveSyncPathEntries(config);
@@ -990,24 +1006,36 @@ function adoptedHeldBackNote(
     destinations.find(
       (candidate) => remoteRelativePath === candidate || remoteRelativePath.startsWith(`${candidate}/`)
     ) || "<destination>";
-  // The snapshot of this destination that actually holds the path; the last
-  // one wins when a run took several.
+  // The snapshot of this destination that actually holds the path, with its
+  // copy still on disk; the last one wins when a run took several.
   const holding = snapshotIds.filter((id) =>
     listPreApplySnapshots(config.stateDir, destination).some(
-      (entry: { id: string; manifest: { files: string[] } }) =>
-        entry.id === id && entry.manifest.files.includes(remoteRelativePath)
+      (entry: { id: string; dir: string; manifest: { files: string[] } }) =>
+        entry.id === id &&
+        entry.manifest.files.includes(remoteRelativePath) &&
+        existsSync(path.join(entry.dir, "files", remoteRelativePath))
     )
   );
   const id = holding.length > 0 ? holding[holding.length - 1] : null;
-  // A real run whose snapshots hold no copy of the path (it had no local copy
-  // when the adoption ran) has nothing to copy back: the queue has drained,
-  // so the edit is gone, and the note must not name a file or a restore.
+  // A real run whose snapshots hold no copy of the path has nothing to copy
+  // back: the queue has drained, so the edit is gone, and the note must not
+  // name a file or a restore. Two causes, told apart by whether the adoption
+  // removed a local copy of the path: it had none (the common case, nothing
+  // was lost by the adoption), or it had one and the snapshot copy is missing.
   if (!dryRun && id === null) {
-    return (
+    const prefix =
       `not published: ${remoteRelativePath} has no local copy because --accept-mass-delete adopted the hub's ` +
-      "deletion of it, and the edit queued for it conflicts with that deletion; the hub keeps its current content. " +
-      `The adoption snapshot holds no copy of ${remoteRelativePath}, because the path had no local copy when the ` +
-      "adoption ran, so the queued edit is not recoverable from it"
+      "deletion of it, and the edit queued for it conflicts with that deletion; the hub keeps its current content. ";
+    if (hadLocalCopy) {
+      return (
+        `${prefix}The path had a local copy when the adoption ran, but the snapshot copy of ` +
+        `${remoteRelativePath} is missing, so the queued edit cannot be restored from the adoption snapshot`
+      );
+    }
+    return (
+      `${prefix}The adoption snapshot holds no copy of ${remoteRelativePath}, because the path had no local copy ` +
+      "when the adoption ran. The queued edit is not stored anywhere else, and the local deletion already matches " +
+      "the hub, so no action is needed"
     );
   }
   const snapshotFile = path.join(
@@ -1227,6 +1255,7 @@ function unique(values: string[]): string[] {
 }
 
 module.exports = {
+  heldBackNotes,
   hubMarkersPushNote,
   performPush
 };
