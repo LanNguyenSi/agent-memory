@@ -57,9 +57,10 @@ each refusal reports on exit.
   [docs/machine-setup.md](machine-setup.md) section e), `pull` mirrors
   every file other than this machine's own `<profile>.json` from the
   remote unconditionally instead of 3-way merging it. If the remote copy
-  itself carries conflict markers, the mirror still takes it and flags the
-  path as a conflict in a note; this is the special case of the general
-  markered-remote rule above, which leaves a non-peer local file untouched. A
+  itself carries conflict markers, the mirror still takes it and reports the
+  path in `conflictFiles`; later runs name it in a stale-marker note. This is
+  the special case of the general markered-remote rule above, which leaves a
+  non-peer local file untouched. A
   local file left with stale conflict markers by a run is named once per
   file in that run's `notes`.
 - A `pull` result's JSON/YAML carries a `skippedFiles` array listing
@@ -176,7 +177,9 @@ filtered at three call sites, all permanently load-bearing:
   base snapshot after every run.
 - `push` (`src/memory-sync/push.ts`) filters what it writes as the new
   base snapshot after every successful push too (on top of the per-path
-  advance described above, including the owner-scoped filter).
+  advance described above; the owner-scoped filter is deliberately not
+  applied to this write, only to push's read side, so a peer's deletion of
+  its own `ownerScoped` file still propagates).
 - `push` also filters its own base snapshot *read* (and any already-queued
   snapshot's stored `baseFiles`) before the 3-way merge runs, guarding
   against a store restored from an old backup or otherwise edited outside

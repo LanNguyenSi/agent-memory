@@ -117,8 +117,10 @@ Conflicts stay on the machine that has them:
 - A hub file that itself carries conflict markers is never merged into, on
   either side: `pull` leaves the local file byte-identical, `push` skips the
   path whatever the local copy or the strategy says, and the path is reported
-  the same way. Under `local-wins` a clean local edit does not repair a
-  markered hub copy implicitly; the hub copy has to be repaired at the hub.
+  the same way. A local copy that is already equal to the markered hub copy
+  is not counted as a conflict; a stale-marker note names it and says to
+  repair the hub copy. Under `local-wins` a clean local edit does not repair
+  a markered hub copy implicitly; the hub copy has to be repaired at the hub.
   (An `ownerScoped` peer file keeps its mirror-and-flag rule as a special
   case of this rule.)
 - A conflict exits `0`. It is visible only through `conflicts=N` and the
@@ -140,9 +142,13 @@ Conflicts stay on the machine that has them:
 1. Stop the periodic `sync` job and the `watch` job on every machine.
 2. Commit the clean file straight into the hub, from a worktree on the bare
    repository or from any clone.
-3. Overwrite every other machine's local copy with the same bytes.
+3. Overwrite every machine's local copy of the file with the same bytes.
 4. Run one controlled `agent-memory-sync run --mode sync` per machine and
-   check that the result reports `conflicts=0`.
+   check that the result reports `conflicts=0` and that no note names the
+   file (stale markers, not published, not pulled). A machine whose state
+   directory still holds queued snapshots replays them on this run; the
+   `replayed N queued snapshot(s)` note is the signal to look at the result
+   closely.
 5. Restart the periodic and watch jobs.
 
 ### systemd unit
