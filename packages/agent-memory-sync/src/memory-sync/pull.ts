@@ -1,4 +1,4 @@
-const { mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { lstatSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const {
   collectLocalSyncFiles,
@@ -8,11 +8,11 @@ const {
   ownerMismatchNote,
   resolveSyncPathEntries
 } = require("./config");
-const { CliError } = require("../errors");
+const { CliError, AdoptionSnapshotNotIntactError } = require("../errors");
 const { GitClient } = require("./git-client");
 const { assertNoRemoteMassDelete, assertOverridableCheckout, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
-const { writePreApplySnapshot } = require("./pre-apply-snapshot");
+const { findPreApplySnapshotProblem, writePreApplySnapshot } = require("./pre-apply-snapshot");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore } = require("./state-store");
 
@@ -394,7 +394,46 @@ async function performPull(config: PullConfig, options: PullOptions) {
     };
   }
 
-  const snapshots = snapshotAffectedDestinations(config, plan, localFiles, resolvedSyncPathEntries);
+  // Stop before any snapshot is written, and so before any older generation is
+  // rotated away, when the plan reaches a path the snapshot could never hold.
+  // That cause is persistent, so every retry or periodic tick would otherwise
+  // write one more generation and drop one more of the older ones while still
+  // failing at the read-back below.
+  const uncollectedPath = findUncollectedPlanPath(plan, localFiles);
+  if (uncollectedPath !== null) {
+    throw new AdoptionSnapshotNotIntactError(
+      `pull stopped: ${uncollectedPath} exists on disk but is not a regular file the sync collects ` +
+        "(a symlink, a directory, a file whose name differs from the hub path only by case or Unicode " +
+        "normalization, or a file created after the run collected its files), so no pre-apply snapshot can hold " +
+        "a copy of it. No local file was written or removed, no snapshot was written and the base snapshot was " +
+        `not moved; move ${uncollectedPath} aside and run the pull again`
+    );
+  }
+
+  const writtenSnapshots = snapshotAffectedDestinations(config, plan, localFiles, resolvedSyncPathEntries);
+  const snapshots = writtenSnapshots.map((written) => written.id);
+
+  // Read every snapshot back before the first write or removal. The snapshots
+  // were taken from the local files collected before the fetch, so a file that
+  // appeared or changed since, or a generation that is gone by now, would
+  // otherwise be overwritten or removed with no surviving copy. Nothing has
+  // been touched yet, so stopping here leaves the workspace and the base
+  // snapshot exactly as they were and the same command can simply be repeated.
+  const snapshotProblem = findPullSnapshotProblem({
+    stateDir: config.stateDir,
+    plan,
+    snapshots: writtenSnapshots,
+    resolvedSyncPathEntries: resolvedSyncPathEntries
+  });
+  if (snapshotProblem) {
+    throw new AdoptionSnapshotNotIntactError(
+      `pull stopped: the pre-apply snapshot for '${snapshotProblem.destination}' is not intact ` +
+        `(${snapshotProblem.problem}). No local file was written or removed and the base snapshot was not ` +
+        "moved; run the pull again. If it stops again at the same path, that path is on disk but is not a " +
+        "regular file the sync collects (a symlink, a directory, or a name that differs from the hub path only by " +
+        "case or Unicode normalization): move it aside and run the pull again"
+    );
+  }
 
   for (const entry of plan) {
     if (entry.content === null) {
@@ -480,7 +519,8 @@ interface PullPlanEntry {
 }
 
 // Copies every destination this plan is about to delete from or overwrite
-// inside, and returns the snapshot ids for the run's report.
+// inside, and returns the written snapshots (destination and generation id)
+// for the run's report and for the read-back that follows.
 //
 // A destination the plan only ADDS files to is not copied: nothing that
 // exists is being replaced, so there is nothing a copy could preserve. A
@@ -492,7 +532,7 @@ function snapshotAffectedDestinations(
   plan: PullPlanEntry[],
   localFiles: Array<{ remoteRelativePath: string; absolutePath: string }>,
   resolvedSyncPathEntries: Array<{ destination: string }>
-): string[] {
+): Array<{ destination: string; id: string }> {
   const destinations = resolvedSyncPathEntries
     .map((entry) => entry.destination)
     .sort((left, right) => right.length - left.length);
@@ -508,11 +548,12 @@ function snapshotAffectedDestinations(
     }
   }
 
-  const written: string[] = [];
+  const written: Array<{ destination: string; id: string }> = [];
   for (const destination of Array.from(affected).sort()) {
     const files = localFiles.filter((file) => destinationOf(destinations, file.remoteRelativePath) === destination);
-    written.push(
-      writePreApplySnapshot({
+    written.push({
+      destination,
+      id: writePreApplySnapshot({
         stateDir: config.stateDir,
         destination,
         files: files.map((file) => ({
@@ -521,10 +562,101 @@ function snapshotAffectedDestinations(
         })),
         generations: config.snapshotGenerations
       }).id
-    );
+    });
   }
 
   return written;
+}
+
+// True when something is at the path, a dangling symlink included: writing a
+// file over a dangling symlink writes through it, so it is not "nothing there".
+function pathExistsOnDisk(absolutePath: string): boolean {
+  try {
+    lstatSync(absolutePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+// The first path the plan creates, overwrites or removes that exists on disk
+// but is not among the files the pull collected (and so is in no snapshot): a
+// symlink, a directory, a case-only or Unicode-normalization alias of another
+// file, or a file created after the collection. Returns its remote-relative
+// path, or null when every path the plan touches that exists is collected.
+function findUncollectedPlanPath(
+  plan: PullPlanEntry[],
+  localFiles: Array<{ remoteRelativePath: string }>
+): string | null {
+  const collected = new Set<string>(localFiles.map((file) => file.remoteRelativePath));
+  for (const entry of plan) {
+    if (pathExistsOnDisk(entry.localAbsolutePath) && !collected.has(entry.remoteRelativePath)) {
+      return entry.remoteRelativePath;
+    }
+  }
+
+  return null;
+}
+
+// The read-back of the snapshots a pull just wrote, run after they are
+// written and before the first write or removal. Returns the first problem
+// found, or null when the apply may go ahead.
+//
+// The paths that must be covered are decided here, from the disk as it is
+// now, not from the files collected before the fetch: every path the plan
+// removes or overwrites and that exists on disk must be listed by, and have a
+// stored copy in, the snapshot of the destination it falls under. A path that
+// does not exist has nothing to preserve. Every destination is checked and
+// the first problem stops the whole apply, so a damaged snapshot for one
+// destination keeps the others from being applied too: the plan is one unit.
+function findPullSnapshotProblem(input: {
+  stateDir: string;
+  plan: PullPlanEntry[];
+  snapshots: Array<{ destination: string; id: string }>;
+  resolvedSyncPathEntries: Array<{ destination: string }>;
+}): { destination: string; problem: string } | null {
+  const destinations = input.resolvedSyncPathEntries
+    .map((entry) => entry.destination)
+    .sort((left, right) => right.length - left.length);
+
+  const expectedByDestination = new Map<string, string[]>();
+  for (const snapshot of input.snapshots) {
+    expectedByDestination.set(snapshot.destination, []);
+  }
+  for (const entry of input.plan) {
+    // Decided against the disk now, not from the plan's `overwrite` flag: that
+    // flag comes from the files collected before the fetch, and a file that
+    // appeared since is overwritten by a "create" all the same.
+    if (!pathExistsOnDisk(entry.localAbsolutePath)) {
+      continue;
+    }
+    const destination = destinationOf(destinations, entry.remoteRelativePath);
+    const expected = destination === null ? undefined : expectedByDestination.get(destination);
+    if (destination === null || !expected) {
+      return {
+        destination: destination === null ? entry.remoteRelativePath : destination,
+        problem: `no pre-apply snapshot was taken that holds ${entry.remoteRelativePath}`
+      };
+    }
+    expected.push(entry.remoteRelativePath);
+  }
+
+  for (const snapshot of input.snapshots) {
+    const problem = findPreApplySnapshotProblem(
+      input.stateDir,
+      snapshot.destination,
+      snapshot.id,
+      expectedByDestination.get(snapshot.destination) || []
+    );
+    if (problem) {
+      return { destination: snapshot.destination, problem };
+    }
+  }
+
+  return null;
 }
 
 // Longest destination first, so the most specific configured destination
@@ -627,6 +759,8 @@ function readSnapshotValue(source: Record<string, string | null>, key: string): 
 }
 
 module.exports = {
+  findPullSnapshotProblem,
+  findUncollectedPlanPath,
   hubMarkersPullNote,
   performPull
 };
