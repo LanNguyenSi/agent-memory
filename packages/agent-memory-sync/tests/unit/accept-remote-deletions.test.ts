@@ -313,7 +313,11 @@ test("an adoption whose removal fails part way names the removed paths and the s
           error.message
         ) &&
         /'notes' \S+, 'notes\/sub' \S+/.test(error.message) &&
-        /base snapshot was not moved/.test(error.message)
+        /base snapshot was not moved/.test(error.message) &&
+        error.message.includes(`${ctx.stateDir}/snapshots/<destination>/<id>`) &&
+        /every rerun takes a new snapshot and rotates older generations away, so copy the generation named above aside \(or pause the scheduled sync\) before retrying/.test(
+          error.message
+        )
     );
   } finally {
     chmodSync(readOnly, 0o755);

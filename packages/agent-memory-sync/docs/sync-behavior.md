@@ -138,8 +138,13 @@ on disk but is not a regular file the sync collects`, naming the path, and
   same path, move that path aside. A write or removal that fails after that
   check (a permission error, say) stops the pull with `13` and a message that
   lists the paths already applied and the snapshot generation holding their
-  previous content; the base snapshot does not move and running the pull
-  again applies the rest.
+  previous content (the failing path itself may be partially written; its
+  previous content is in the same snapshot, and a pull that only created new
+  files says no snapshot was needed); the base snapshot does not move and
+  running the pull again applies the rest. Every rerun takes a new snapshot
+  and rotates older generations away, so copy the named generation
+  (`<stateDir>/snapshots/<destination>/<id>`) aside or pause the scheduled
+  sync before retrying, and fix the cause first.
 - **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
   thresholds refuse. It does not override an untrustworthy working copy.
 - **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the
@@ -155,7 +160,9 @@ on disk but is not a regular file the sync collects`, naming the path, and
   the [exit-code table](../README.md#exit-codes)), and running it again takes
   a fresh snapshot. A removal that fails part way (exit `13`) lists the files
   already removed and the snapshot generation that holds them, leaves the base
-  snapshot unmoved, and a repeated run removes the rest. It cannot be combined
+  snapshot unmoved, and a repeated run removes the rest; each repeated run
+  takes a new snapshot and rotates older generations away, so copy the named
+  generation aside or pause the scheduled sync before retrying. It cannot be combined
   with `--allow-mass-delete` (usage error, exit `2`). It is a one-shot
   decision about one observed remote state, which is why `watch` does not
   take it.

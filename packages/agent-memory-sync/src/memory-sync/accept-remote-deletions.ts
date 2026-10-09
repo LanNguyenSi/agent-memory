@@ -31,7 +31,7 @@
 const { existsSync, rmSync } = require("node:fs");
 const { mapRemotePathToLocalAbsolute, resolveSyncPathEntries } = require("./config");
 const { assertOverridableCheckout } = require("./guards");
-const { AdoptionSnapshotNotIntactError, PartialApplyError } = require("../errors");
+const { AdoptionSnapshotNotIntactError, PartialApplyError, PARTIAL_APPLY_RETRY_NOTE } = require("../errors");
 const { findPreApplySnapshotProblem, writePreApplySnapshot } = require("./pre-apply-snapshot");
 
 interface AcceptConfig {
@@ -200,8 +200,9 @@ function acceptRemoteDeletions(input: {
           `Already removed (${deletedPaths.length} of ${toDelete.length}): ${listForMessage(deletedPaths)}. ` +
           `Their previous content is in the pre-apply snapshot${snapshots.length === 1 ? "" : "s"} ` +
           `${lost.destinations.map((destination, index) => `'${destination}' ${snapshots[index]}`).join(", ")} ` +
-          `(restore <profile> <destination> --from-snapshot <id>). The base snapshot was not moved; ` +
-          "fix the cause and run the push again to remove the rest"
+          `(path ${input.config.stateDir}/snapshots/<destination>/<id>; restore <profile> <destination> --from-snapshot <id>). ` +
+          "The base snapshot was not moved. Fix the cause first. " +
+          PARTIAL_APPLY_RETRY_NOTE
       );
     }
     deletedPaths.push(lostPath);

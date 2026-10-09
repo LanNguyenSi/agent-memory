@@ -8,7 +8,7 @@ const {
   ownerMismatchNote,
   resolveSyncPathEntries
 } = require("./config");
-const { CliError, AdoptionSnapshotNotIntactError, PartialApplyError } = require("../errors");
+const { CliError, AdoptionSnapshotNotIntactError, PartialApplyError, PARTIAL_APPLY_RETRY_NOTE } = require("../errors");
 const { GitClient } = require("./git-client");
 const { assertNoRemoteMassDelete, assertOverridableCheckout, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
@@ -449,13 +449,18 @@ async function performPull(config: PullConfig, options: PullOptions) {
         writeFileSync(entry.localAbsolutePath, entry.content, "utf8");
       }
     } catch (error) {
+      const snapshotSentence =
+        writtenSnapshots.length === 0
+          ? "No snapshot was needed because only new files were created. "
+          : `Their previous content, and that of ${entry.remoteRelativePath} itself, which may be partially written, is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
+            `${writtenSnapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ")} ` +
+            `(path ${config.stateDir}/snapshots/<destination>/<id>; restore ${config.profile} <destination> --from-snapshot <id>). `;
       throw new PartialApplyError(
         `pull stopped part way: ${entry.remoteRelativePath} failed (${(error as Error).message}). ` +
           `Already applied (${applied.length} of ${plan.length}): ${applied.length === 0 ? "none" : applied.join(", ")}. ` +
-          `Their previous content is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
-          `${writtenSnapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ")} ` +
-          `(restore ${config.profile} <destination> --from-snapshot <id>). The base snapshot was not moved; ` +
-          "fix the cause and run the pull again to apply the rest"
+          snapshotSentence +
+          "The base snapshot was not moved. Fix the cause first. " +
+          PARTIAL_APPLY_RETRY_NOTE
       );
     }
     applied.push(entry.remoteRelativePath);

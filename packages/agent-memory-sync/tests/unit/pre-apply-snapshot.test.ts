@@ -266,6 +266,18 @@ test("rotation never removes a nested destination's directory from its parent's 
   assert.equal(existsSync(nested.dir), true, "the nested destination's snapshot survives the parent's rotation");
 });
 
+test("rotation keeps a nested destination whose leaf sorts before a generation id", () => {
+  const root = sandbox("rotation-nested-early-leaf");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 1);
+
+  const nested = writePreApplySnapshot({ stateDir, destination: "logs/2024", files });
+  writePreApplySnapshot({ stateDir, destination: "logs", files });
+  writePreApplySnapshot({ stateDir, destination: "logs", files });
+
+  assert.equal(existsSync(nested.dir), true, "the nested destination's snapshot survives the parent's rotation");
+});
+
 test("a snapshot write that fails partway leaves no generation directory behind", () => {
   const root = sandbox("write-fails");
   const stateDir = path.join(root, "state");
