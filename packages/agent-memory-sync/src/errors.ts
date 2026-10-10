@@ -182,6 +182,25 @@ class AdoptionSnapshotNotIntactError extends CliError {
   }
 }
 
+// Thrown when a pull or an accepted mass deletion fails while it is applying
+// its plan to the local files, after the pre-apply snapshots were written and
+// verified. Some files were already written or removed, so unlike
+// AdoptionSnapshotNotIntactError ("nothing was touched") this one names what
+// was applied and the snapshot generations that hold the previous content.
+// The base snapshot has not moved, so running the same command again after
+// the cause is fixed applies the rest, but every rerun takes a new snapshot
+// and rotates older generations. Exit code 13.
+const PARTIAL_APPLY_RETRY_NOTE =
+  "Running the command again applies the rest, but every rerun takes a new snapshot and rotates older " +
+  "generations away, so copy the generation named above aside (or pause the scheduled sync) before retrying.";
+
+class PartialApplyError extends CliError {
+  constructor(message: string, exitCode = 13) {
+    super(message, exitCode);
+    this.name = "PartialApplyError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -205,6 +224,8 @@ module.exports = {
   RestoreSourceNotFoundError,
   ConfigKeyNotSetError,
   AdoptionSnapshotNotIntactError,
+  PartialApplyError,
+  PARTIAL_APPLY_RETRY_NOTE,
   isCliError,
   formatErrorMessage
 };

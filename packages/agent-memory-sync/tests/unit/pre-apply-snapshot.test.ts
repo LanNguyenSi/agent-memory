@@ -6,7 +6,7 @@
 // files in a destination now copies that destination first.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } = require("node:fs");
+const { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const {
@@ -220,4 +220,74 @@ test("rotation with a single generation keeps only the snapshot the current run 
 
   const kept = listPreApplySnapshots(stateDir, "logs").map((entry: { id: string }) => entry.id);
   assert.deepEqual(kept, [current.id]);
+});
+
+test("rotation removes a manifest-less generation directory older than the newest complete one", () => {
+  const root = sandbox("rotation-incomplete");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 2);
+  const destinationDir = path.join(snapshotsDir(stateDir), "logs");
+
+  // A snapshot write that died after copying one file and before the manifest.
+  const leftover = path.join(destinationDir, "2000-01-01T00-00-00-000Z-0000");
+  mkdirSync(path.join(leftover, "files", "logs"), { recursive: true });
+  writeFileSync(path.join(leftover, "files", "logs", "note-0.md"), "partial\n", "utf8");
+
+  const first = writePreApplySnapshot({ stateDir, destination: "logs", files });
+
+  assert.equal(existsSync(leftover), false, "the leftover directory is gone");
+  assert.deepEqual(
+    listPreApplySnapshots(stateDir, "logs").map((entry: { id: string }) => entry.id),
+    [first.id]
+  );
+});
+
+test("rotation keeps a manifest-less directory that sorts after every complete generation", () => {
+  const root = sandbox("rotation-incomplete-newer");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 1);
+  const inFlight = path.join(snapshotsDir(stateDir), "logs", "2999-01-01T00-00-00-000Z-0000");
+  mkdirSync(path.join(inFlight, "files"), { recursive: true });
+
+  writePreApplySnapshot({ stateDir, destination: "logs", files });
+
+  assert.equal(existsSync(inFlight), true);
+});
+
+test("rotation never removes a nested destination's directory from its parent's listing", () => {
+  const root = sandbox("rotation-nested");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 1);
+
+  const nested = writePreApplySnapshot({ stateDir, destination: "logs/archive", files });
+  writePreApplySnapshot({ stateDir, destination: "logs", files, now: new Date(Date.UTC(2999, 0, 1)) });
+  writePreApplySnapshot({ stateDir, destination: "logs", files, now: new Date(Date.UTC(2999, 0, 2)) });
+
+  assert.equal(existsSync(nested.dir), true, "the nested destination's snapshot survives the parent's rotation");
+});
+
+test("rotation keeps a nested destination whose leaf sorts before a generation id", () => {
+  const root = sandbox("rotation-nested-early-leaf");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 1);
+
+  const nested = writePreApplySnapshot({ stateDir, destination: "logs/2024", files });
+  writePreApplySnapshot({ stateDir, destination: "logs", files });
+  writePreApplySnapshot({ stateDir, destination: "logs", files });
+
+  assert.equal(existsSync(nested.dir), true, "the nested destination's snapshot survives the parent's rotation");
+});
+
+test("a snapshot write that fails partway leaves no generation directory behind", () => {
+  const root = sandbox("write-fails");
+  const stateDir = path.join(root, "state");
+  const files = seedTree(root, 2);
+  // A directory where a file is expected: existsSync is true, copyFileSync throws.
+  rmSync(files[1].absolutePath);
+  mkdirSync(files[1].absolutePath);
+
+  assert.throws(() => writePreApplySnapshot({ stateDir, destination: "logs", files }));
+
+  const destinationDir = path.join(snapshotsDir(stateDir), "logs");
+  assert.deepEqual(existsSync(destinationDir) ? readdirSync(destinationDir) : [], []);
 });

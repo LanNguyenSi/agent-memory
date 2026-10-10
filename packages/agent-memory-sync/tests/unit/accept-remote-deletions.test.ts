@@ -3,7 +3,16 @@
 // files only while the pre-apply snapshot that holds their copy exists.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } = require("node:fs");
+const {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 
@@ -278,3 +287,46 @@ for (const destinations of [
     }
   });
 }
+
+// A removal that throws part way: the earlier ones are done, the error says
+// which and where their content is, and the base snapshot has not moved.
+test("an adoption whose removal fails part way names the removed paths and the snapshot, and leaves the base alone", (t: {
+  skip: (reason: string) => void;
+}) => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    t.skip("a read-only directory does not stop root");
+    return;
+  }
+  const ctx = setup("partial-delete", { destinations: ["notes", "notes/sub"] });
+  const accept = loadAcceptWith(null);
+  // notes/T0..T4 are removed first (sorted order), then notes/sub/T0 hits the read-only directory.
+  const readOnly = path.dirname(ctx.localFile(0, 1));
+  chmodSync(readOnly, 0o555);
+  try {
+    assert.throws(
+      () => ctx.run(accept),
+      (error: Error & { exitCode?: number }) =>
+        error.name === "PartialApplyError" &&
+        error.exitCode === 13 &&
+        /removing notes\/sub\/T0\.md failed/.test(error.message) &&
+        /Already removed \(5 of 10\): notes\/T0\.md, notes\/T1\.md, notes\/T2\.md, notes\/T3\.md, notes\/T4\.md/.test(
+          error.message
+        ) &&
+        /'notes' \S+, 'notes\/sub' \S+/.test(error.message) &&
+        /base snapshot was not moved/.test(error.message) &&
+        error.message.includes(`${ctx.stateDir}/snapshots/<destination>/<id>`) &&
+        /every rerun takes a new snapshot and rotates older generations away, so copy the generation named above aside \(or pause the scheduled sync\) before retrying/.test(
+          error.message
+        )
+    );
+  } finally {
+    chmodSync(readOnly, 0o755);
+  }
+
+  assert.equal(existsSync(ctx.localFile(0, 0)), false, "the earlier removals stay done");
+  assert.equal(existsSync(ctx.localFile(0, 1)), true, "the failing path is still there");
+  assert.equal(ctx.baseReplaced(), 0, "the base snapshot was not moved");
+  const snapshotDir = path.join(ctx.stateDir, "snapshots", "notes");
+  const [generation] = readdirSync(snapshotDir).filter((name: string) => name !== "sub");
+  assert.equal(readFileSync(path.join(snapshotDir, generation, "files", "notes", "T0.md"), "utf8"), "t0\n");
+});

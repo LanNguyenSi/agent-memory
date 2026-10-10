@@ -8,7 +8,7 @@ const {
   ownerMismatchNote,
   resolveSyncPathEntries
 } = require("./config");
-const { CliError, AdoptionSnapshotNotIntactError } = require("../errors");
+const { CliError, AdoptionSnapshotNotIntactError, PartialApplyError, PARTIAL_APPLY_RETRY_NOTE } = require("../errors");
 const { GitClient } = require("./git-client");
 const { assertNoRemoteMassDelete, assertOverridableCheckout, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
@@ -435,14 +435,35 @@ async function performPull(config: PullConfig, options: PullOptions) {
     );
   }
 
+  // A write or removal that throws part way (EACCES, a directory where a file
+  // was expected) leaves the earlier ones applied. The base snapshot has not
+  // moved, so the same pull run again applies the rest; the error names what
+  // is already applied and the generations that hold the previous content.
+  const applied: string[] = [];
   for (const entry of plan) {
-    if (entry.content === null) {
-      rmSync(entry.localAbsolutePath, { force: true });
-      continue;
+    try {
+      if (entry.content === null) {
+        rmSync(entry.localAbsolutePath, { force: true });
+      } else {
+        mkdirSync(path.dirname(entry.localAbsolutePath), { recursive: true });
+        writeFileSync(entry.localAbsolutePath, entry.content, "utf8");
+      }
+    } catch (error) {
+      const snapshotSentence =
+        writtenSnapshots.length === 0
+          ? "No snapshot was needed because only new files were created. "
+          : `Their previous content, and that of ${entry.remoteRelativePath} itself, which may be partially written, is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
+            `${writtenSnapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ")} ` +
+            `(path ${config.stateDir}/snapshots/<destination>/<id>; restore ${config.profile} <destination> --from-snapshot <id>). `;
+      throw new PartialApplyError(
+        `pull stopped part way: ${entry.remoteRelativePath} failed (${(error as Error).message}). ` +
+          `Already applied (${applied.length} of ${plan.length}): ${applied.length === 0 ? "none" : applied.join(", ")}. ` +
+          snapshotSentence +
+          "The base snapshot was not moved. Fix the cause first. " +
+          PARTIAL_APPLY_RETRY_NOTE
+      );
     }
-
-    mkdirSync(path.dirname(entry.localAbsolutePath), { recursive: true });
-    writeFileSync(entry.localAbsolutePath, entry.content, "utf8");
+    applied.push(entry.remoteRelativePath);
   }
 
   const remoteHeadAfter = workingCopy.remoteHead ? gitClient.revParseHead(workingCopy.repoDir) : null;

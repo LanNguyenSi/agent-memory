@@ -154,25 +154,33 @@ function writePreApplySnapshot(input: {
   mkdirSync(filesDir, { recursive: true });
 
   const stored: string[] = [];
-  for (const file of input.files) {
-    if (!existsSync(file.absolutePath)) {
-      continue;
+  try {
+    for (const file of input.files) {
+      if (!existsSync(file.absolutePath)) {
+        continue;
+      }
+      const target = path.join(filesDir, file.remoteRelativePath);
+      mkdirSync(path.dirname(target), { recursive: true });
+      // A byte copy, not a read-then-write: a snapshot that re-encoded the
+      // bytes on the way in would not be the tree it claims to be.
+      copyFileSync(file.absolutePath, target);
+      stored.push(file.remoteRelativePath);
     }
-    const target = path.join(filesDir, file.remoteRelativePath);
-    mkdirSync(path.dirname(target), { recursive: true });
-    // A byte copy, not a read-then-write: a snapshot that re-encoded the
-    // bytes on the way in would not be the tree it claims to be.
-    copyFileSync(file.absolutePath, target);
-    stored.push(file.remoteRelativePath);
-  }
 
-  const manifest: SnapshotManifest = {
-    id,
-    destination: input.destination,
-    createdAt: now.toISOString(),
-    files: stored.sort()
-  };
-  writeFileSync(path.join(dir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const manifest: SnapshotManifest = {
+      id,
+      destination: input.destination,
+      createdAt: now.toISOString(),
+      files: stored.sort()
+    };
+    writeFileSync(path.join(dir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  } catch (error) {
+    // A generation without a manifest is not listed, so nothing would ever
+    // rotate it away; take the half-written directory with the failure.
+    // Rotation still sweeps one a crash left behind (see rotate).
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 
   rotate(input.stateDir, input.destination, resolveGenerations(input.generations), id);
 
@@ -189,11 +197,45 @@ function resolveGenerations(value?: number | null): number {
 // plain "newest N by id" rule would delete the snapshot the current run has
 // just written - the one copy a caller is about to rely on. The pinned
 // generation counts toward `generations`; the oldest OTHER ones make room.
+//
+// It also removes a generation directory that never got a manifest (a
+// snapshot write that died partway, or a crash between the file copies and the
+// manifest), but only when it is older than the newest complete generation:
+// a directory that sorts after every complete one may belong to a write still
+// in flight. Only a directory named like a generation id counts, because a
+// destination nested under another one ("logs/archive" under "logs") also
+// appears as a manifest-less directory in its parent's listing.
 function rotate(stateDir: string, destination: string, generations: number, pinnedId: string): void {
+  removeStaleIncompleteGenerations(stateDir, destination);
   const others = listPreApplySnapshots(stateDir, destination).filter((entry) => entry.id !== pinnedId);
   const keepOthers = Math.max(0, generations - 1);
   for (const entry of others.slice(0, Math.max(0, others.length - keepOthers))) {
     rmSync(entry.dir, { recursive: true, force: true });
+  }
+}
+
+const GENERATION_ID_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-\d{4,}$/;
+
+function removeStaleIncompleteGenerations(stateDir: string, destination: string): void {
+  const dir = destinationDir(stateDir, destination);
+  if (!existsSync(dir)) {
+    return;
+  }
+  const complete = listPreApplySnapshots(stateDir, destination);
+  if (complete.length === 0) {
+    return;
+  }
+  const newestComplete = complete[complete.length - 1].id;
+  const completeIds = new Set(complete.map((entry) => entry.id));
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (
+      entry.isDirectory() &&
+      !completeIds.has(entry.name) &&
+      GENERATION_ID_PATTERN.test(entry.name) &&
+      entry.name.localeCompare(newestComplete) < 0
+    ) {
+      rmSync(path.join(dir, entry.name), { recursive: true, force: true });
+    }
   }
 }
 
