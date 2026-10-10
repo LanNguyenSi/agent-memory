@@ -447,6 +447,9 @@ async function performPull(config: PullConfig, options: PullOptions) {
   // moved, so the same pull run again applies the rest; the error names what
   // is already applied and the generations that hold the previous content.
   const applied: string[] = [];
+  // The applied paths whose previous content exists in a snapshot: overwrites
+  // and removals. A created path had none.
+  const appliedWithPreviousContent: string[] = [];
   for (const entry of plan) {
     try {
       if (entry.content === null) {
@@ -460,27 +463,22 @@ async function performPull(config: PullConfig, options: PullOptions) {
       // that did not exist when the files were collected: there is no previous
       // content of it anywhere, so no snapshot can hold it.
       const failingIsCreate = entry.content !== null && !entry.overwrite;
-      const snapshotList = writtenSnapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ");
-      const snapshotLocation = `(path ${config.stateDir}/snapshots/<destination>/<id>; restore ${config.profile} <destination> --from-snapshot <id>). `;
-      let snapshotSentence: string;
-      if (writtenSnapshots.length === 0) {
-        snapshotSentence = "No snapshot was needed because only new files were created. ";
-      } else if (failingIsCreate) {
-        snapshotSentence =
-          `The previous content of the paths already applied is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
-          `${snapshotList} ${snapshotLocation}` +
-          `${entry.remoteRelativePath} was being created, so no snapshot holds a previous copy of it, and it may be partially written. `;
-      } else {
-        snapshotSentence =
-          `Their previous content, and that of ${entry.remoteRelativePath} itself, which may be partially written, is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
-          `${snapshotList} ${snapshotLocation}`;
-      }
+      const { sentence: snapshotSentence, copyAside } = describePartialApplySnapshot({
+        failingPath: entry.remoteRelativePath,
+        failingIsCreate,
+        appliedWithPreviousContent,
+        snapshots: writtenSnapshots,
+        stateDir: config.stateDir,
+        profile: config.profile
+      });
       // A rerun rotates generations only when a snapshot was written, so the
-      // copy-aside advice applies only then.
-      const retryNote =
-        writtenSnapshots.length === 0
+      // copy-aside advice applies only when a snapshot holds previous content
+      // worth keeping.
+      const retryNote = copyAside
+        ? PARTIAL_APPLY_RETRY_NOTE
+        : writtenSnapshots.length === 0
           ? "Running the pull again applies the rest; a pull that only creates files writes no snapshot, so no generation is rotated away."
-          : PARTIAL_APPLY_RETRY_NOTE;
+          : "Running the pull again applies the rest; no snapshot holds previous content of anything already applied, so no generation needs to be copied aside.";
       throw new PartialApplyError(
         `pull stopped part way: ${entry.remoteRelativePath} failed (${(error as Error).message}). ` +
           `Already applied (${applied.length} of ${plan.length}): ${applied.length === 0 ? "none" : applied.join(", ")}. ` +
@@ -490,6 +488,9 @@ async function performPull(config: PullConfig, options: PullOptions) {
       );
     }
     applied.push(entry.remoteRelativePath);
+    if (entry.content === null || entry.overwrite) {
+      appliedWithPreviousContent.push(entry.remoteRelativePath);
+    }
   }
 
   const remoteHeadAfter = workingCopy.remoteHead ? gitClient.revParseHead(workingCopy.repoDir) : null;
@@ -772,7 +773,43 @@ function readSnapshotValue(source: Record<string, string | null>, key: string): 
   return Object.prototype.hasOwnProperty.call(source, key) ? source[key] : null;
 }
 
+// The snapshot part of the exit-13 message. It points at a snapshot only for
+// applied paths that had previous content (overwrites and removals), and names
+// those paths; created paths are never named as held by a snapshot.
+function describePartialApplySnapshot(input: {
+  failingPath: string;
+  failingIsCreate: boolean;
+  appliedWithPreviousContent: string[];
+  snapshots: Array<{ destination: string; id: string }>;
+  stateDir: string;
+  profile: string;
+}): { sentence: string; copyAside: boolean } {
+  if (input.snapshots.length === 0) {
+    return { sentence: "No snapshot was needed because only new files were created. ", copyAside: false };
+  }
+  const plural = input.snapshots.length === 1 ? "" : "s";
+  const list = input.snapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ");
+  const location = `(path ${input.stateDir}/snapshots/<destination>/<id>; restore ${input.profile} <destination> --from-snapshot <id>). `;
+  const previous = input.appliedWithPreviousContent;
+  if (input.failingIsCreate) {
+    const created = `${input.failingPath} was being created, so no snapshot holds a previous copy of it, and it may be partially written. `;
+    if (previous.length === 0) {
+      return { sentence: created, copyAside: false };
+    }
+    return {
+      sentence: `The previous content of ${previous.join(", ")} is in the pre-apply snapshot${plural} ${list} ${location}${created}`,
+      copyAside: true
+    };
+  }
+  const subject =
+    previous.length === 0
+      ? `The previous content of ${input.failingPath} itself, which may be partially written,`
+      : `The previous content of ${previous.join(", ")}, and of ${input.failingPath} itself, which may be partially written,`;
+  return { sentence: `${subject} is in the pre-apply snapshot${plural} ${list} ${location}`, copyAside: true };
+}
+
 module.exports = {
+  describePartialApplySnapshot,
   findPullSnapshotProblem,
   findUncollectedPlanPath,
   hubMarkersPullNote,

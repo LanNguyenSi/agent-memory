@@ -181,8 +181,9 @@ on disk but is not a regular file the sync collects`, naming the path, and
   written or removed in any destination and the base snapshot does not move.
   A write or removal that fails after that
   check (a permission error, say) stops the pull with `13` and a message that
-  lists the paths already applied and the snapshot generation holding their
-  previous content (the failing path itself may be partially written, and its
+  lists the paths already applied and names the snapshot generation only for
+  applied paths that had previous content (overwrites and removals; created
+  paths are never named as held by a snapshot) (the failing path itself may be partially written, and its
   previous content is in the same snapshot, unless it was being created: a
   path that did not exist has no previous content, and the message says so;
   a pull that only created new files says no snapshot was needed); the base
