@@ -142,4 +142,75 @@ test("pull: a failure while creating only new files says no snapshot was needed 
   assert.match(result.stderr, /pull stopped part way: notes\/sub\/new\.md failed/);
   assert.match(result.stderr, /No snapshot was needed because only new files were created\./);
   assert.doesNotMatch(result.stderr, /pre-apply snapshot/);
+  // No snapshot was written, so a rerun rotates nothing and there is no
+  // generation to copy aside.
+  assert.doesNotMatch(result.stderr, /copy the generation named above aside/);
+  assert.doesNotMatch(result.stderr, /rotates older generations away, so copy/);
+  assert.match(
+    result.stderr,
+    /Running the pull again applies the rest; a pull that only creates files writes no snapshot, so no generation is rotated away\./
+  );
+  assert.equal(fs.existsSync(path.join(stateDir, "snapshots")), false, "no snapshot directory was created");
+});
+
+test("pull: a failing create next to a removal does not claim snapshot content for the created path", (t: {
+  skip: (reason: string) => void;
+}) => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    t.skip("a read-only directory does not stop root");
+    return;
+  }
+  const root = createSandbox("pull-partial-apply-create-with-removal");
+  const remoteDir = initBareRemote(root);
+  const workspace = path.join(root, "workspace");
+  const configPath = path.join(root, "config.json");
+  const stateDir = path.join(root, "state");
+  writeText(path.join(workspace, "notes", "a.md"), "a\n");
+  writeText(path.join(workspace, "notes", "sub", "keep.md"), "keep\n");
+  writeProjectConfig(configPath, {
+    profile: "default",
+    rootDir: workspace,
+    remoteUrl: remoteDir,
+    branch: "main",
+    repositorySubdir: "shared",
+    stateDir,
+    conflictStrategy: "inline-markers",
+    syncPaths: [{ source: path.join(workspace, "notes"), destination: "notes", kind: "directory" }]
+  });
+  runCli(["run", "default", "--config", configPath, "--mode", "push", "--output", "json"]);
+
+  // The hub removes a.md (so a snapshot is written) and adds sub/new.md
+  // (which cannot be created in the read-only directory).
+  const checkout = cloneRemote(remoteDir, root, "peer");
+  fs.rmSync(path.join(checkout, "shared", "notes", "a.md"));
+  writeText(path.join(checkout, "shared", "notes", "sub", "new.md"), "new\n");
+  git(["add", "-A"], checkout);
+  git(["commit", "-m", "peer removes one file and adds one"], checkout);
+  git(["push", "origin", "HEAD:main"], checkout);
+
+  const readOnly = path.join(workspace, "notes", "sub");
+  fs.chmodSync(readOnly, 0o555);
+  let result;
+  try {
+    result = runCli(["run", "default", "--config", configPath, "--mode", "pull", "--output", "json"], {
+      expectFailure: true
+    });
+  } finally {
+    fs.chmodSync(readOnly, 0o755);
+  }
+
+  assert.equal(result.status, 13, result.stderr);
+  assert.match(result.stderr, /pull stopped part way: notes\/sub\/new\.md failed/);
+  assert.match(result.stderr, /Already applied \(1 of 2\): notes\/a\.md/);
+  assert.match(
+    result.stderr,
+    /The previous content of the paths already applied is in the pre-apply snapshot 'notes' \S+ /
+  );
+  assert.match(
+    result.stderr,
+    /notes\/sub\/new\.md was being created, so no snapshot holds a previous copy of it, and it may be partially written\./
+  );
+  assert.doesNotMatch(result.stderr, /notes\/sub\/new\.md itself, which may be partially written, is in the pre-apply/);
+  // A snapshot was written, so the copy-aside advice still applies.
+  assert.match(result.stderr, /rotates older generations away, so copy the generation named above aside/);
 });

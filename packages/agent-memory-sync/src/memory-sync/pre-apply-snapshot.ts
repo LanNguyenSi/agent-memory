@@ -15,7 +15,16 @@
 // the remote's history remains the durable record. This covers the window
 // between "this run is about to overwrite or delete files" and "the operator
 // notices".
-const { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } = require("node:fs");
+const {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} = require("node:fs");
 const path = require("node:path");
 const { RestoreSourceNotFoundError } = require("../errors");
 
@@ -269,6 +278,43 @@ function findPreApplySnapshotProblem(
   return null;
 }
 
+// True when something is at the path, a dangling symlink included: writing a
+// file over a dangling symlink writes through it, so it is not "nothing there".
+function pathExistsOnDisk(absolutePath: string): boolean {
+  try {
+    lstatSync(absolutePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+// The first path a run is about to create, overwrite or remove that exists on
+// disk but is not among the files it collected (and so is in no snapshot): a
+// symlink, a directory, a case-only or Unicode-normalization alias of another
+// file, or a file created after the collection. Returns its remote-relative
+// path, or null when every path the run touches that exists is collected.
+//
+// Run before any snapshot is written. The cause is persistent, so a stop found
+// only at the read-back after the snapshot would write one more generation per
+// retry and rotate an older one away each time.
+function findUncollectedPlanPath(
+  plan: Array<{ remoteRelativePath: string; localAbsolutePath: string }>,
+  localFiles: Array<{ remoteRelativePath: string }>
+): string | null {
+  const collected = new Set<string>(localFiles.map((file) => file.remoteRelativePath));
+  for (const entry of plan) {
+    if (pathExistsOnDisk(entry.localAbsolutePath) && !collected.has(entry.remoteRelativePath)) {
+      return entry.remoteRelativePath;
+    }
+  }
+
+  return null;
+}
+
 // Reads one generation back. `id` may be "latest", which is how an operator
 // names the one they almost always want: the copy taken by the run that just
 // surprised them.
@@ -304,7 +350,9 @@ function readPreApplySnapshot(
 module.exports = {
   DEFAULT_SNAPSHOT_GENERATIONS,
   findPreApplySnapshotProblem,
+  findUncollectedPlanPath,
   listPreApplySnapshots,
+  pathExistsOnDisk,
   readPreApplySnapshot,
   snapshotsDir,
   writePreApplySnapshot

@@ -225,8 +225,10 @@ for (const missing of [0, 1, 4]) {
     assert.throws(
       () => ctx.run(accept),
       (error: Error & { exitCode?: number }) =>
-        new RegExp(`does not list notes/T${missing}\\.md`).test(error.message) &&
-        /No local file was removed/.test(error.message) &&
+        new RegExp(
+          `--accept-mass-delete stopped: notes/T${missing}\\.md exists on disk but is not a regular file the sync collects`
+        ).test(error.message) &&
+        /No local file was removed, no snapshot was written and the base snapshot was not moved/.test(error.message) &&
         error.exitCode === 12
     );
 
@@ -234,6 +236,7 @@ for (const missing of [0, 1, 4]) {
       assert.equal(existsSync(ctx.localFile(index)), true, `T${index}.md is still on disk`);
     }
     assert.equal(ctx.baseReplaced(), 0, "the base snapshot was not moved");
+    assert.equal(existsSync(path.join(ctx.stateDir, "snapshots")), false, "no snapshot was written");
   });
 }
 
@@ -247,7 +250,12 @@ test("an adoption stops on a lost path that is a symlink the sync does not colle
 
   assert.throws(
     () => ctx.run(accept),
-    (error: Error & { exitCode?: number }) => /does not list notes\/T1\.md/.test(error.message) && error.exitCode === 12
+    (error: Error & { exitCode?: number }) =>
+      /notes\/T1\.md exists on disk but is not a regular file the sync collects/.test(error.message) &&
+      /run the push again first\. Only if it stops again at the same path, move notes\/T1\.md aside and run the push again/.test(
+        error.message
+      ) &&
+      error.exitCode === 12
   );
 
   for (let index = 0; index < 10; index += 1) {

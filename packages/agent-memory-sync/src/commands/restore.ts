@@ -1,7 +1,16 @@
-const { mkdirSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const {
+  accessSync,
+  constants: fsConstants,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} = require("node:fs");
 const path = require("node:path");
 const { loadConfig, requireRemoteUrl, resolveRunConfig } = require("../config/loader");
-const { CliError, RestoreSourceNotFoundError } = require("../errors");
+const { CliError, RestoreDestinationNotWritableError, RestoreSourceNotFoundError } = require("../errors");
 const { acquireStateDirLock } = require("../memory-sync/lock");
 const {
   collectLocalSyncFiles,
@@ -463,6 +472,24 @@ async function restoreDestination(
     return { ...file, absolutePath };
   });
 
+  // Checked before the pre-apply copy below, and for a dry run too. A write
+  // that cannot succeed (a read-only directory, a directory where a file is
+  // expected) fails the same way on every retry, and each retry would take a
+  // new pre-apply copy and rotate an older generation away, eventually
+  // including the one this restore was asked to read from. Stopping here
+  // writes no generation, so repeating the stop costs nothing.
+  const blocked = findUnwritableRestorePath(
+    resolvedSourceFiles.map((file: { absolutePath: string }) => file.absolutePath),
+    removable.map((file: { absolutePath: string }) => file.absolutePath)
+  );
+  if (blocked) {
+    throw new RestoreDestinationNotWritableError(
+      `restore stopped: ${blocked.absolutePath} ${blocked.reason}. No file was written or removed and no pre-apply ` +
+        "snapshot was taken, so every existing snapshot generation is still there. Fix the permissions or the " +
+        "entry at that path, then run the restore again"
+    );
+  }
+
   if (options.dryRun) {
     for (const file of sourceFiles) {
       writeDryRun(`would restore ${file.remoteRelativePath}`, outputOptions);
@@ -526,6 +553,94 @@ async function restoreDestination(
       ...payload.removed.map((p: string) => `${options.dryRun ? "[dry-run] " : ""}remove ${p}`)
     ].join("\n")
   );
+}
+
+// The first path a destination restore is about to write or remove that the
+// filesystem would refuse, decided before anything is touched, or null. A
+// write needs a regular file it can open for writing, or - for a path that
+// does not exist yet - an ancestor directory it can create into; a removal
+// needs write access to the containing directory. Best effort: a refusal this
+// cannot see in advance (a full disk, a change between the check and the
+// write) still fails at the write, as before.
+function findUnwritableRestorePath(
+  writePaths: string[],
+  removePaths: string[]
+): { absolutePath: string; reason: string } | null {
+  const refusal = (absolutePath: string, reason: string) => ({ absolutePath, reason });
+  const canWrite = (target: string): boolean => {
+    try {
+      accessSync(target, fsConstants.W_OK | fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  for (const absolutePath of writePaths) {
+    let isLink = false;
+    try {
+      isLink = lstatSync(absolutePath).isSymbolicLink();
+      const stats = statSync(absolutePath);
+      if (stats.isDirectory()) {
+        return refusal(absolutePath, "is a directory, not a file the restore can write");
+      }
+      try {
+        accessSync(absolutePath, fsConstants.W_OK);
+      } catch {
+        return refusal(absolutePath, "is not writable");
+      }
+      continue;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        return refusal(absolutePath, `cannot be inspected (${(error as Error).message})`);
+      }
+      if (isLink) {
+        return refusal(absolutePath, "is a symlink whose target does not exist");
+      }
+    }
+
+    // Nothing is there yet: the nearest ancestor that does exist must be a
+    // directory the restore can create into.
+    let ancestor = path.dirname(absolutePath);
+    while (true) {
+      try {
+        lstatSync(ancestor);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          return refusal(absolutePath, `cannot be created (${(error as Error).message})`);
+        }
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        break;
+      }
+      ancestor = parent;
+    }
+    let ancestorIsDirectory = false;
+    try {
+      ancestorIsDirectory = statSync(ancestor).isDirectory();
+    } catch {
+      ancestorIsDirectory = false;
+    }
+    if (!ancestorIsDirectory) {
+      return refusal(absolutePath, `cannot be created: ${ancestor} is not a directory`);
+    }
+    if (!canWrite(ancestor)) {
+      return refusal(absolutePath, `cannot be created: ${ancestor} is not writable`);
+    }
+  }
+
+  for (const absolutePath of removePaths) {
+    const parent = path.dirname(absolutePath);
+    if (!canWrite(parent)) {
+      return refusal(absolutePath, `cannot be removed: ${parent} is not writable`);
+    }
+  }
+
+  return null;
 }
 
 // The base snapshot for this destination becomes the CURRENT remote tree,
