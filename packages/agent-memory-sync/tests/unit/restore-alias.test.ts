@@ -1,62 +1,87 @@
 // Unit coverage for the restore alias check (src/memory-sync/restore-alias.ts).
-// The candidate comparison is pure string work and runs on every filesystem;
-// whether a candidate is really one file is decided by an injectable
-// predicate, with the real stat-based one covered against a temp directory.
+// The pairing logic takes an injectable identity lookup, so it runs the same on
+// every filesystem; the real lstat-based lookup is covered against a temp
+// directory with a hard link.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const {
-  aliasKey,
-  findAliasCandidates,
-  findAliasedRestorePath,
-  pathsShareFile
-} = require("../../src/memory-sync/restore-alias");
+const { fileIdentity, findAliasedRestorePath } = require("../../src/memory-sync/restore-alias");
 
-test("aliasKey folds case and Unicode normalization form", () => {
-  assert.equal(aliasKey("/w/logs/Foo.md"), aliasKey("/w/logs/foo.md"));
-  assert.equal(aliasKey("/w/logs/café.md"), aliasKey("/w/logs/café.md"));
-  assert.notEqual(aliasKey("/w/logs/foo.md"), aliasKey("/w/logs/bar.md"));
+// An identity table standing in for the filesystem: paths that map to the same
+// value are one entry; a path absent from the table does not exist.
+function lookupFrom(table: Record<string, string>) {
+  return (absolutePath: string) => table[absolutePath] ?? null;
+}
+
+test("a removable path with the identity of a write target under another string is an alias", () => {
+  const identify = lookupFrom({
+    "/w/logs/Grüße.md": "1:10",
+    "/w/logs/GRÜSSE.md": "1:10",
+    "/w/logs/other.md": "1:11"
+  });
+  assert.deepEqual(findAliasedRestorePath(["/w/logs/Grüße.md", "/w/logs/other.md"], ["/w/logs/GRÜSSE.md"], identify), {
+    writePath: "/w/logs/Grüße.md",
+    removePath: "/w/logs/GRÜSSE.md"
+  });
 });
 
-test("findAliasCandidates pairs paths that differ only by case or normalization", () => {
-  assert.deepEqual(findAliasCandidates(["/w/logs/foo.md", "/w/logs/other.md"], ["/w/logs/Foo.md"]), [
-    { writePath: "/w/logs/foo.md", removePath: "/w/logs/Foo.md" }
-  ]);
-  assert.deepEqual(findAliasCandidates(["/w/logs/café.md"], ["/w/logs/café.md"]), [
-    { writePath: "/w/logs/café.md", removePath: "/w/logs/café.md" }
-  ]);
-  // A directory component counts too.
-  assert.equal(findAliasCandidates(["/w/logs/sub/x.md"], ["/w/logs/Sub/x.md"]).length, 1);
-});
-
-test("findAliasCandidates ignores identical and unrelated paths", () => {
-  assert.deepEqual(findAliasCandidates(["/w/logs/foo.md"], ["/w/logs/foo.md"]), []);
-  assert.deepEqual(findAliasCandidates(["/w/logs/foo.md"], ["/w/logs/bar.md"]), []);
-  assert.deepEqual(findAliasCandidates([], ["/w/logs/Foo.md"]), []);
-});
-
-test("findAliasedRestorePath reports a candidate only when the filesystem says it is one file", () => {
-  const writes = ["/w/logs/foo.md", "/w/logs/other.md"];
-  const removes = ["/w/logs/Foo.md", "/w/logs/gone.md"];
-  assert.deepEqual(
-    findAliasedRestorePath(writes, removes, () => true),
-    { writePath: "/w/logs/foo.md", removePath: "/w/logs/Foo.md" }
+test("no string key is involved: names that fold under no ASCII or NFC rule still pair by identity", () => {
+  const identify = lookupFrom({ "/w/logs/ΟΔΟΣ.md": "2:5", "/w/logs/οδος.md": "2:5" });
+  assert.notEqual(
+    "/w/logs/ΟΔΟΣ.md".normalize("NFC").toLowerCase(),
+    "/w/logs/οδος.md".normalize("NFC").toLowerCase(),
+    "precondition: a case-fold string key does not see this pair"
   );
+  assert.deepEqual(findAliasedRestorePath(["/w/logs/ΟΔΟΣ.md"], ["/w/logs/οδος.md"], identify), {
+    writePath: "/w/logs/ΟΔΟΣ.md",
+    removePath: "/w/logs/οδος.md"
+  });
+});
+
+test("a directory-level alias is found through the file identity", () => {
+  const identify = lookupFrom({ "/w/logs/sub/x.md": "1:20", "/w/logs/Sub/x.md": "1:20" });
+  assert.deepEqual(findAliasedRestorePath(["/w/logs/sub/x.md"], ["/w/logs/Sub/x.md"], identify), {
+    writePath: "/w/logs/sub/x.md",
+    removePath: "/w/logs/Sub/x.md"
+  });
+});
+
+test("different identities, missing paths and the identical string are not aliases", () => {
+  // Case-sensitive filesystem: foo.md and Foo.md are two files.
   assert.equal(
-    findAliasedRestorePath(writes, removes, () => false),
-    null,
-    "case-sensitive filesystem: two different files, nothing to refuse"
+    findAliasedRestorePath(
+      ["/w/logs/foo.md"],
+      ["/w/logs/Foo.md"],
+      lookupFrom({ "/w/logs/foo.md": "1:1", "/w/logs/Foo.md": "1:2" })
+    ),
+    null
   );
+  // The write target does not exist yet.
   assert.equal(
-    findAliasedRestorePath(writes, ["/w/logs/gone.md"], () => true),
-    null,
-    "no candidate pair, the predicate is never the deciding factor"
+    findAliasedRestorePath(["/w/logs/foo.md"], ["/w/logs/Foo.md"], lookupFrom({ "/w/logs/Foo.md": "1:2" })),
+    null
+  );
+  // Nothing to write, or nothing to remove.
+  assert.equal(findAliasedRestorePath([], ["/w/logs/Foo.md"], lookupFrom({ "/w/logs/Foo.md": "1:2" })), null);
+  assert.equal(findAliasedRestorePath(["/w/logs/foo.md"], [], lookupFrom({ "/w/logs/foo.md": "1:1" })), null);
+  // The same string is not an alias pair.
+  assert.equal(
+    findAliasedRestorePath(["/w/logs/foo.md"], ["/w/logs/foo.md"], lookupFrom({ "/w/logs/foo.md": "1:1" })),
+    null
   );
 });
 
-test("pathsShareFile compares device and inode, and is false for a missing path", () => {
+test("a later removable path is found, and the first aliased pair wins", () => {
+  const identify = lookupFrom({ "/w/a": "1:1", "/w/b": "1:2", "/w/A": "1:1", "/w/B": "1:2" });
+  assert.deepEqual(findAliasedRestorePath(["/w/a", "/w/b"], ["/w/gone", "/w/B", "/w/A"], identify), {
+    writePath: "/w/b",
+    removePath: "/w/B"
+  });
+});
+
+test("fileIdentity is the device and inode, null for a missing path, and does not follow a symlink", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "restore-alias-"));
   try {
     const a = path.join(dir, "a.txt");
@@ -64,10 +89,20 @@ test("pathsShareFile compares device and inode, and is false for a missing path"
     fs.writeFileSync(a, "a");
     fs.writeFileSync(b, "b");
     fs.linkSync(a, path.join(dir, "a-link.txt"));
-    assert.equal(pathsShareFile(a, a), true);
-    assert.equal(pathsShareFile(a, path.join(dir, "a-link.txt")), true);
-    assert.equal(pathsShareFile(a, b), false);
-    assert.equal(pathsShareFile(a, path.join(dir, "missing.txt")), false);
+    fs.symlinkSync(a, path.join(dir, "a-symlink.txt"));
+
+    assert.equal(fileIdentity(a), fileIdentity(a));
+    assert.equal(fileIdentity(a), fileIdentity(path.join(dir, "a-link.txt")), "a hard link is the same inode");
+    assert.notEqual(fileIdentity(a), fileIdentity(b));
+    assert.notEqual(fileIdentity(a), fileIdentity(path.join(dir, "a-symlink.txt")), "a symlink is its own entry");
+    assert.equal(fileIdentity(path.join(dir, "missing.txt")), null);
+
+    // The real lookup refuses a hard-linked pair too: documented, safe direction.
+    assert.deepEqual(findAliasedRestorePath([a], [path.join(dir, "a-link.txt")]), {
+      writePath: a,
+      removePath: path.join(dir, "a-link.txt")
+    });
+    assert.equal(findAliasedRestorePath([a], [b]), null);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

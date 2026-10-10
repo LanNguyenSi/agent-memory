@@ -1,9 +1,13 @@
-// A destination restore after a local case-only rename (hub logs/foo.md, local
-// logs/Foo.md) on a case-insensitive filesystem. The hub path and the local
-// path are one file there: the write lands in Foo.md, and the removal of the
-// "extra" local Foo.md then deleted the file the restore had just written, so
-// the command exited 0 with the restored file gone. It now stops with exit 12
-// before any snapshot or write, naming both paths.
+// A destination restore after a local rename that the filesystem does not see
+// as one (hub logs/foo.md, local logs/Foo.md) on a case-insensitive filesystem.
+// The hub path and the local path are one file there: the write lands in Foo.md,
+// and the removal of the "extra" local Foo.md then deleted the file the restore
+// had just written, so the command exited 0 with the restored file gone. It now
+// stops with exit 12 before any snapshot or write, naming both paths. Which
+// spellings a filesystem treats as one entry (ASCII case, a final sigma, the
+// German sharp s, ligature names, precomposed against decomposed forms) is the
+// filesystem's own folding table, so every scenario first asks this filesystem
+// whether the two spellings are one entry and skips when they are not.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -19,24 +23,39 @@ const {
   writeText
 } = require("../helpers/cli.ts");
 
-// True when a name that differs only in case resolves to the same file here.
-function directoryFoldsCase(dir: string): boolean {
-  const probe = path.join(dir, "case-probe.txt");
-  fs.writeFileSync(probe, "x");
+// True when the two relative spellings name one entry in this directory.
+function spellingsAreOneEntry(dir: string, hubRelative: string, localRelative: string): boolean {
+  const probeDir = fs.mkdtempSync(path.join(dir, "fold-probe-"));
   try {
-    return fs.existsSync(path.join(dir, "CASE-PROBE.TXT"));
+    writeText(path.join(probeDir, hubRelative), "x");
+    return fs.existsSync(path.join(probeDir, localRelative));
   } finally {
-    fs.rmSync(probe, { force: true });
+    fs.rmSync(probeDir, { recursive: true, force: true });
   }
 }
 
-function setup(name: string) {
+function listFiles(dir: string, prefix = ""): string[] {
+  const found: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      found.push(...listFiles(path.join(dir, entry.name), relative));
+    } else {
+      found.push(relative);
+    }
+  }
+  return found.sort();
+}
+
+function setup(name: string, hubFiles: string[]) {
   const root = createSandbox(name);
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
   const configPath = path.join(root, "config.json");
   const stateDir = path.join(root, "state");
-  writeText(path.join(workspaceRoot, "logs", "foo.md"), "hub content\n");
+  for (const hubFile of hubFiles) {
+    writeText(path.join(workspaceRoot, "logs", hubFile), "hub content\n");
+  }
   writeText(path.join(workspaceRoot, "logs", "other.md"), "other\n");
   writeProjectConfig(configPath, {
     rootDir: workspaceRoot,
@@ -51,21 +70,8 @@ function setup(name: string) {
   return { root, workspaceRoot, configPath, stateDir, sha };
 }
 
-test("restore --from-commit refuses a removable path that aliases a restored one by case", (t: {
-  skip: (reason: string) => void;
-}) => {
-  const ctx = setup("restore-case-alias");
-  const logsDir = path.join(ctx.workspaceRoot, "logs");
-  if (!directoryFoldsCase(logsDir)) {
-    t.skip("this filesystem is case-sensitive; foo.md and Foo.md are different files here");
-    return;
-  }
-
-  // The local case-only rename.
-  fs.renameSync(path.join(logsDir, "foo.md"), path.join(logsDir, "Foo.md"));
-  writeText(path.join(logsDir, "Foo.md"), "local edit\n");
-
-  const args = (extra: string[]) => [
+function restoreArgs(ctx: { configPath: string; sha: string }, extra: string[]): string[] {
+  return [
     "restore",
     "default",
     "logs",
@@ -77,17 +83,70 @@ test("restore --from-commit refuses a removable path that aliases a restored one
     "--output",
     "json"
   ];
+}
 
-  for (const extra of [["--dry-run"], ["--yes"]]) {
-    const result = runCli(args(extra), { expectFailure: true });
-    assert.equal(result.status, 12, `${extra.join(" ")}: ${result.stderr}`);
-    assert.match(result.stderr, /logs\/foo\.md/);
-    assert.match(result.stderr, /logs\/Foo\.md/);
-    assert.match(result.stderr, /No file was written or removed and no pre-apply snapshot was taken/);
-  }
+// Each case: the file the hub has, and the spelling the local copy was renamed
+// to. A path with a folder part covers the folder-level alias.
+const aliasCases: Array<{ label: string; hubFile: string; localFile: string }> = [
+  { label: "ASCII case", hubFile: "foo.md", localFile: "Foo.md" },
+  { label: "German sharp s (Grüße against GRÜSSE)", hubFile: "Grüße.md", localFile: "GRÜSSE.md" },
+  { label: "Greek final sigma (ΟΔΟΣ against οδος)", hubFile: "ΟΔΟΣ.md", localFile: "οδος.md" },
+  { label: "Unicode normalization (NFC against NFD)", hubFile: "café.md", localFile: "café.md" },
+  { label: "folder-level case alias", hubFile: "sub/x.md", localFile: "Sub/x.md" },
+  { label: "folder-level ligature alias", hubFile: "office/x.md", localFile: "oﬃce/x.md" }
+];
 
-  // Nothing was written, removed or snapshotted.
-  assert.equal(readText(path.join(logsDir, "Foo.md")), "local edit\n");
-  assert.deepEqual(fs.readdirSync(logsDir).sort(), ["Foo.md", "other.md"]);
-  assert.equal(fs.existsSync(path.join(ctx.stateDir, "snapshots", "logs")), false);
+for (const aliasCase of aliasCases) {
+  test(`restore --from-commit refuses a removable path that aliases a restored one: ${aliasCase.label}`, (t: {
+    skip: (reason: string) => void;
+  }) => {
+    const ctx = setup("restore-case-alias", [aliasCase.hubFile]);
+    const logsDir = path.join(ctx.workspaceRoot, "logs");
+    if (!spellingsAreOneEntry(ctx.root, aliasCase.hubFile, aliasCase.localFile)) {
+      t.skip("this filesystem treats these two spellings as different entries");
+      return;
+    }
+
+    // The local rename: the folder for a folder-level case, the file otherwise.
+    const hubParts = aliasCase.hubFile.split("/");
+    const localParts = aliasCase.localFile.split("/");
+    fs.renameSync(path.join(logsDir, hubParts[0]), path.join(logsDir, localParts[0]));
+    writeText(path.join(logsDir, aliasCase.localFile), "local edit\n");
+    const before = listFiles(logsDir);
+    if (!before.includes(aliasCase.localFile)) {
+      t.skip("this filesystem keeps the original spelling on rename, so there is no local alias to restore over");
+      return;
+    }
+
+    for (const extra of [["--dry-run"], ["--yes"]]) {
+      const result = runCli(restoreArgs(ctx, extra), { expectFailure: true });
+      assert.equal(result.status, 12, `${extra.join(" ")}: ${result.stderr}`);
+      assert.ok(
+        result.stderr.includes(path.join(logsDir, aliasCase.hubFile)),
+        `names the restored path (${aliasCase.hubFile}): ${result.stderr}`
+      );
+      assert.ok(
+        result.stderr.includes(path.join(logsDir, aliasCase.localFile)),
+        `names the local path (${aliasCase.localFile}): ${result.stderr}`
+      );
+      assert.match(result.stderr, /No file was written or removed and no pre-apply snapshot was taken/);
+    }
+
+    // Nothing was written, removed or snapshotted.
+    assert.deepEqual(listFiles(logsDir), before);
+    assert.equal(readText(path.join(logsDir, aliasCase.localFile)), "local edit\n");
+    assert.equal(fs.existsSync(path.join(ctx.stateDir, "snapshots", "logs")), false);
+  });
+}
+
+test("restore --from-commit still removes a local-only file that is not an alias of a restored one", () => {
+  const ctx = setup("restore-no-alias", ["foo.md"]);
+  const logsDir = path.join(ctx.workspaceRoot, "logs");
+  writeText(path.join(logsDir, "foo.md"), "local edit\n");
+  writeText(path.join(logsDir, "extra.md"), "local only\n");
+
+  const result = runCli(restoreArgs(ctx, ["--yes"]));
+  assert.equal(result.status, 0);
+  assert.equal(readText(path.join(logsDir, "foo.md")), "hub content\n");
+  assert.equal(fs.existsSync(path.join(logsDir, "extra.md")), false);
 });
