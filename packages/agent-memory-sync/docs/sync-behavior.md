@@ -99,6 +99,21 @@ each refusal reports on exit.
   including the generation it was asked to restore from. A refusal the check
   cannot see in advance (a full disk, a change between the check and the
   write) still fails at the write.
+- **Destination restores refuse a case or Unicode-normalization alias**: when
+  a local file the restore would remove is the same file as one it will write
+  (a local case-only rename, hub `logs/foo.md` against local `logs/Foo.md`,
+  on a case-insensitive filesystem such as default APFS), the restore stops
+  with `12` naming both paths, before the pre-apply copy and for a `--dry-run`
+  too. Writing the hub name would land in the local file and the removal would
+  then delete what was just restored, while the command reported success. It
+  is a refusal, not a skipped removal, because which spelling to keep is the
+  operator's call; renaming the local file to the source's spelling or moving
+  it aside clears the stop. The names are compared case-insensitively and
+  after Unicode NFC normalization (APFS treats a precomposed and a decomposed
+  spelling as one entry), and a pair counts as an alias only when both paths
+  resolve to the same device and inode, so on a case-sensitive filesystem two
+  files that differ only by case restore as before. `pull` and `push` are not
+  covered by this check.
 
 ## Deletion guards
 
