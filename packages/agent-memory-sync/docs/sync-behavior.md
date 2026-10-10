@@ -108,11 +108,18 @@ each refusal reports on exit.
   would land in the local file and the removal would then delete what was just
   restored, while the command reported success. It is a refusal, not a skipped
   removal, because which spelling to keep is the operator's call; renaming the
-  local file to the source's spelling or moving it aside clears the stop. The
-  comparison is made by the filesystem, not by the restore: before any write
-  it takes the device and inode of every path it would write or remove (a
-  symlink is not followed) and refuses when a removable path has the identity
-  of a write target. That covers every folding rule the filesystem applies
+  local file to the source's spelling (or, for a hard link, removing the
+  extra link) clears the stop. The comparison is made by the filesystem, not
+  by the restore: before any write it takes the device and inode of every
+  path it would write or remove and refuses when a removable path has the
+  identity of a write target. A removable path is looked up as the entry
+  itself (removing a symlink unlinks the symlink), while a write target is
+  registered both as the entry itself and, when it is a symlink, as the file
+  it points at, because a write goes through the link; a write target that is
+  a symlink to a removable file is therefore refused too, and a dangling
+  symlink keeps only its own identity. A path that is both written and
+  removed (two `syncPaths` entries covering one local file) is refused as
+  well. That covers every folding rule the filesystem applies
   (ASCII case, a final sigma, the German sharp s, ligature names, precomposed
   against decomposed spellings) and a folder-level alias (`logs/sub/x.md`
   against `logs/Sub/x.md`) without the restore carrying a folding table. Two

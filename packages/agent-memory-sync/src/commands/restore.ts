@@ -491,12 +491,14 @@ async function restoreDestination(
     );
   }
 
-  // A path to remove that is the same file as a path to write (a case-only
-  // rename on a case-insensitive filesystem) would be deleted right after
-  // being restored. Refused rather than skipped: the removal is the only thing
-  // that distinguishes the local file from the hub's, and which of the two
-  // spellings the operator wants is theirs to say. Same stop as above, before
-  // any snapshot, so repeating it costs nothing.
+  // A path to remove that is the same file as a path to write would be deleted
+  // right after being restored: a case or Unicode alias on a case-insensitive
+  // filesystem (a case-only rename), a hard link, a write target that is a
+  // symlink to the removable file, or one local file covered by two syncPaths
+  // entries. Refused rather than skipped: the removal is the only thing that
+  // distinguishes the local file from the hub's, and which of the two the
+  // operator wants is theirs to say. Same stop as above, before any snapshot,
+  // so repeating it costs nothing.
   const aliased = findAliasedRestorePath(
     resolvedSourceFiles.map((file: { absolutePath: string }) => file.absolutePath),
     removable.map((file: { absolutePath: string }) => file.absolutePath)
@@ -504,10 +506,10 @@ async function restoreDestination(
   if (aliased) {
     throw new RestoreDestinationNotWritableError(
       `restore stopped: ${aliased.writePath} (restored from the source) and ${aliased.removePath} (local, not in ` +
-        "the source) are the same file on this filesystem, so removing the second would delete the first just " +
-        "after it was restored. No file was written or removed and no pre-apply snapshot was taken, so every " +
-        "existing snapshot generation is still there. Rename the local file to the source's spelling or move it " +
-        "aside, then run the restore again"
+        "the source) are the same file on this filesystem (a case or Unicode alias, or a hard link), so removing " +
+        "the second would delete the first just after it was restored. No file was written or removed and no " +
+        "pre-apply snapshot was taken, so every existing snapshot generation is still there. Rename the local " +
+        "file to the source's spelling or, for a hard link, remove the extra link, then run the restore again"
     );
   }
 

@@ -150,3 +150,80 @@ test("restore --from-commit still removes a local-only file that is not an alias
   assert.equal(readText(path.join(logsDir, "foo.md")), "hub content\n");
   assert.equal(fs.existsSync(path.join(logsDir, "extra.md")), false);
 });
+
+// A write goes through a symlink into its target, so a hub path whose local
+// entry is a symlink to a local-only file writes into that file, and the
+// removal of the file then deletes what was just restored.
+test("restore --from-commit refuses a write target that is a symlink to a removable file", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const ctx = setup("restore-symlink-target", ["a.md"]);
+  const logsDir = path.join(ctx.workspaceRoot, "logs");
+  fs.rmSync(path.join(logsDir, "a.md"));
+  writeText(path.join(logsDir, "b.md"), "local only\n");
+  try {
+    fs.symlinkSync(path.join(logsDir, "b.md"), path.join(logsDir, "a.md"));
+  } catch {
+    t.skip("this platform cannot create a symlink here");
+    return;
+  }
+  const before = listFiles(logsDir);
+
+  for (const extra of [["--dry-run"], ["--yes"]]) {
+    const result = runCli(restoreArgs(ctx, extra), { expectFailure: true });
+    assert.equal(result.status, 12, `${extra.join(" ")}: ${result.stderr}`);
+    assert.ok(result.stderr.includes(path.join(logsDir, "a.md")), result.stderr);
+    assert.ok(result.stderr.includes(path.join(logsDir, "b.md")), result.stderr);
+    assert.match(result.stderr, /No file was written or removed and no pre-apply snapshot was taken/);
+  }
+
+  assert.deepEqual(listFiles(logsDir), before);
+  assert.equal(readText(path.join(logsDir, "b.md")), "local only\n");
+  assert.equal(fs.lstatSync(path.join(logsDir, "a.md")).isSymbolicLink(), true);
+  assert.equal(fs.existsSync(path.join(ctx.stateDir, "snapshots", "logs")), false);
+});
+
+test("restore --from-commit does not trip the alias check on a dangling symlink write target", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const ctx = setup("restore-dangling-target", ["a.md"]);
+  const logsDir = path.join(ctx.workspaceRoot, "logs");
+  fs.rmSync(path.join(logsDir, "a.md"));
+  try {
+    fs.symlinkSync(path.join(logsDir, "nowhere.md"), path.join(logsDir, "a.md"));
+  } catch {
+    t.skip("this platform cannot create a symlink here");
+    return;
+  }
+
+  // The check does not crash on a link that resolves to nothing: whatever the
+  // restore then does with the entry, it is not the alias refusal.
+  const result = runCli(restoreArgs(ctx, ["--dry-run"]), { expectFailure: true });
+  assert.doesNotMatch(result.stderr, /are the same file on this filesystem/);
+  assert.doesNotMatch(result.stderr, /TypeError|ENOENT/);
+});
+
+// Two syncPaths entries can cover one local file under two hub paths. A commit
+// that holds only the first one makes the file both restored and "extra".
+test("restore --from-commit refuses a path that is both written and removed", () => {
+  const ctx = setup("restore-both-written-removed", ["b/x.md"]);
+  const logsDir = path.join(ctx.workspaceRoot, "logs");
+  writeText(path.join(logsDir, "b", "x.md"), "local edit\n");
+  writeProjectConfig(ctx.configPath, {
+    rootDir: ctx.workspaceRoot,
+    remoteUrl: path.join(ctx.root, "remote.git"),
+    branch: "main",
+    repositorySubdir: "shared",
+    stateDir: ctx.stateDir,
+    syncPaths: [
+      { source: "logs", destination: "logs", kind: "directory" },
+      { source: "logs/b", destination: "logs/c", kind: "directory" }
+    ]
+  });
+
+  const result = runCli(restoreArgs(ctx, ["--yes"]), { expectFailure: true });
+  assert.equal(result.status, 12, result.stderr);
+  assert.ok(result.stderr.includes(path.join(logsDir, "b", "x.md")), result.stderr);
+  assert.equal(readText(path.join(logsDir, "b", "x.md")), "local edit\n");
+  assert.equal(fs.existsSync(path.join(ctx.stateDir, "snapshots", "logs")), false);
+});
