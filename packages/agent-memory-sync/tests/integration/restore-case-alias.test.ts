@@ -130,6 +130,8 @@ for (const aliasCase of aliasCases) {
         `names the local path (${aliasCase.localFile}): ${result.stderr}`
       );
       assert.match(result.stderr, /No file was written or removed and no pre-apply snapshot was taken/);
+      assert.match(result.stderr, /same file on this filesystem \(a case or Unicode alias, or a hard link\)/);
+      assert.match(result.stderr, /for a hard link, remove the extra link/);
     }
 
     // Nothing was written, removed or snapshotted.
