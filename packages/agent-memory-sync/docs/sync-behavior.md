@@ -99,6 +99,35 @@ each refusal reports on exit.
   including the generation it was asked to restore from. A refusal the check
   cannot see in advance (a full disk, a change between the check and the
   write) still fails at the write.
+- **Destination restores refuse a path that aliases a restored one**: when a
+  local file the restore would remove is the same file on disk as one it will
+  write under a different string (a local case-only rename, hub
+  `logs/foo.md` against local `logs/Foo.md`, on a case-insensitive filesystem
+  such as default APFS), the restore stops with `12` naming both paths,
+  before the pre-apply copy and for a `--dry-run` too. Writing the hub name
+  would land in the local file and the removal would then delete what was just
+  restored, while the command reported success. It is a refusal, not a skipped
+  removal, because which spelling to keep is the operator's call; renaming the
+  local file to the source's spelling (or, for a hard link, removing the
+  extra link) clears the stop. The comparison is made by the filesystem, not
+  by the restore: before any write it takes the device and inode of every
+  path it would write or remove and refuses when a removable path has the
+  identity of a write target. A removable path is looked up as the entry
+  itself (removing a symlink unlinks the symlink), while a write target is
+  registered both as the entry itself and, when it is a symlink, as the file
+  it points at, because a write goes through the link; a write target that is
+  a symlink to a removable file is therefore refused too, and a dangling
+  symlink keeps only its own identity. A path that is both written and
+  removed (two `syncPaths` entries covering one local file) is refused as
+  well. That covers every folding rule the filesystem applies
+  (ASCII case, a final sigma, the German sharp s, ligature names, precomposed
+  against decomposed spellings) and a folder-level alias (`logs/sub/x.md`
+  against `logs/Sub/x.md`) without the restore carrying a folding table. Two
+  paths that are hard links of one inode are refused too: removing one of
+  them would not lose the content, but the restore cannot tell that from an
+  alias, so it errs on the side of not deleting. On a case-sensitive
+  filesystem two files that differ only by case are two inodes and restore as
+  before. `pull` and `push` are not covered by this check.
 
 ## Deletion guards
 
