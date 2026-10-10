@@ -19,6 +19,10 @@ const {
   writeText
 } = require("../helpers/cli.ts");
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const preload = path.resolve(process.cwd(), "tests", "helpers", "pull-snapshot-fault.cjs");
 
 interface Fault {
@@ -120,8 +124,14 @@ test("pull: a snapshot that does not hold a path the plan removes stops with exi
   assert.equal(result.status, 12, result.stderr);
   assert.match(result.stderr, /pull stopped: the pre-apply snapshot for 'notes' is not intact/);
   assert.match(result.stderr, /does not list notes\/n0\.md/);
-  assert.match(result.stderr, /If it stops again at the same path, that path is on disk but is not a regular file/);
-  assert.match(result.stderr, /move it aside and run the pull again/);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `run the pull again\\. If it stops again, check the snapshot store at ${escapeRegExp(path.join(ctx.stateDir, "snapshots", "notes"))}/ ` +
+        "\\(free space, permissions, another process removing generations, or the machine's clock\\)"
+    )
+  );
+  assert.doesNotMatch(result.stderr, /move it aside/, "the read-back hint no longer sends the operator to move a path");
   assert.match(result.stderr, /No local file was written or removed and the base snapshot was not moved/);
   assertUntouched(ctx, ["notes"]);
   assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
@@ -166,7 +176,10 @@ test("pull: a path created after the local files were collected is never overwri
 
   assert.equal(result.status, 12, result.stderr);
   assert.match(result.stderr, /pull stopped: notes\/n8\.md exists on disk but is not a regular file the sync collects/);
-  assert.match(result.stderr, /move notes\/n8\.md aside and run the pull again/);
+  assert.match(
+    result.stderr,
+    /a file created after the run collected its files\), so no pre-apply snapshot can hold a copy of it\. No local file was written or removed, no snapshot was written and the base snapshot was not moved; run the pull again first\. Only if it stops again at the same path, move notes\/n8\.md aside and run the pull again$/m
+  );
   assert.equal(readText(path.join(ctx.workspace, "notes", "n8.md")), "typed locally\n");
   assert.equal(readText(path.join(ctx.workspace, "notes", "n0.md")), "notes 0\n");
   assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
@@ -320,4 +333,44 @@ test("pull: a persistent stop does not rotate the earlier snapshot generations a
   assert.equal(fs.existsSync(seededFile), true, "the seeded generation still exists");
   assert.deepEqual(ctx.snapshotIds("notes"), seededIds, "no generation was written or rotated away");
   assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
+});
+
+// --dry-run is how an operator inspects a plan before running it, so it must
+// not preview one the real run refuses at exit 12 for an uncollected path.
+test("pull --dry-run stops with the same exit 12 as the real run for an uncollected path", () => {
+  const { ctx, baseBefore } = createdAfterCollection("pull-fc-dry-run", true);
+  const dryRun = runCli(
+    ["run", "default", "--config", ctx.configPath, "--mode", "pull", "--dry-run", "--output", "json"],
+    { env: faultEnv([{ kind: "hide-from-collection", path: "notes/n8.md" }]), expectFailure: true }
+  );
+  const real = ctx.pull([{ kind: "hide-from-collection", path: "notes/n8.md" }]);
+
+  assert.equal(dryRun.status, 12, dryRun.stderr);
+  assert.equal(real.status, 12, real.stderr);
+  const errorLine = (stderr: string): string => stderr.split("\n").find((line) => line.startsWith("error:")) || "";
+  assert.notEqual(errorLine(real.stderr), "");
+  assert.equal(
+    errorLine(dryRun.stderr),
+    errorLine(real.stderr),
+    "the dry run reports the same message as the real run"
+  );
+  assert.match(dryRun.stderr, /pull stopped: notes\/n8\.md exists on disk but is not a regular file the sync collects/);
+  assert.equal(readText(path.join(ctx.workspace, "notes", "n8.md")), "typed locally\n");
+  assert.deepEqual(ctx.snapshotIds("notes"), [], "no snapshot was written");
+  assert.deepEqual(ctx.base(), baseBefore, "the base snapshot did not move");
+});
+
+test("pull --dry-run still previews a plan the real run accepts", () => {
+  const ctx = setup("pull-fc-dry-run-control", ["notes"]);
+  ctx.peerChanges("peer");
+
+  const dryRun = runCli(
+    ["run", "default", "--config", ctx.configPath, "--mode", "pull", "--dry-run", "--output", "json"],
+    { env: faultEnv([]) }
+  );
+
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  assert.equal(JSON.parse(dryRun.stdout).runs[0].status, "dry-run");
+  assertUntouched(ctx, ["notes"]);
+  assert.deepEqual(ctx.snapshotIds("notes"), []);
 });

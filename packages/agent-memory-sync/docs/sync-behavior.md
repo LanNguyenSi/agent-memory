@@ -88,6 +88,17 @@ each refusal reports on exit.
   file is written, so an unmappable backslash path anywhere in the source
   list aborts the whole destination restore before it touches the
   filesystem.
+- **Destination restores check writability first**: `restore <profile>
+<destination> --from-commit|--from-snapshot` verifies, before it takes its
+  pre-apply copy of the destination and for a `--dry-run` too, that every path
+  it will write can be written (a regular file it can open for writing, or a
+  directory it can create into) and every path it will remove sits in a
+  directory it can write. Otherwise it stops with `12`, writes no snapshot and
+  changes no file. The cause is persistent, and a restore that took its copy
+  first would add one generation per retry and rotate the older ones away,
+  including the generation it was asked to restore from. A refusal the check
+  cannot see in advance (a full disk, a change between the check and the
+  write) still fails at the write.
 
 ## Deletion guards
 
@@ -128,23 +139,30 @@ is about to change.
   could ever hold it; the pull stops with `12` and the message `<path> exists
 on disk but is not a regular file the sync collects`, naming the path, and
   that stop writes no snapshot, so repeating it does not rotate the earlier
-  generations away. When the read-back of a snapshot of any destination
+  generations away. `pull --dry-run` runs the same check and stops the same
+  way, rather than previewing a plan the real run refuses. The same applies to a
+  file created after the pull collected its files; the message therefore says
+  to run the pull again first, and to move the path aside only if it stops
+  again at the same path. When the read-back of a snapshot of any destination
   fails instead (the message names the destination and ends `does not list
 <path>`, `no pre-apply snapshot was taken that holds <path>`, or says the
   generation is gone), the pull also exits `12` (see the
-  [exit-code table](../README.md#exit-codes)). In both cases nothing is
+  [exit-code table](../README.md#exit-codes)) and points at the snapshot store
+  (`<stateDir>/snapshots/<destination>/`) to check. In both cases nothing is
   written or removed in any destination and the base snapshot does not move.
-  Running the pull again takes a fresh snapshot; if it stops again at the
-  same path, move that path aside. A write or removal that fails after that
+  A write or removal that fails after that
   check (a permission error, say) stops the pull with `13` and a message that
   lists the paths already applied and the snapshot generation holding their
-  previous content (the failing path itself may be partially written; its
-  previous content is in the same snapshot, and a pull that only created new
-  files says no snapshot was needed); the base snapshot does not move and
-  running the pull again applies the rest. Every rerun takes a new snapshot
-  and rotates older generations away, so copy the named generation
+  previous content (the failing path itself may be partially written, and its
+  previous content is in the same snapshot, unless it was being created: a
+  path that did not exist has no previous content, and the message says so;
+  a pull that only created new files says no snapshot was needed); the base
+  snapshot does not move and running the pull again applies the rest. When a
+  snapshot was written, every rerun takes a new snapshot and rotates older
+  generations away, so copy the named generation
   (`<stateDir>/snapshots/<destination>/<id>`) aside or pause the scheduled
-  sync before retrying, and fix the cause first.
+  sync before retrying, and fix the cause first. A pull that wrote no snapshot
+  rotates nothing, and its message carries no such advice.
 - **`--allow-mass-delete`** (on `run` and `watch`) applies a PUSH plan the
   thresholds refuse. It does not override an untrustworthy working copy.
 - **`--accept-mass-delete`** (on `run` only) applies a REMOTE deletion the
@@ -154,6 +172,11 @@ on disk but is not a regular file the sync collects`, naming the path, and
   locally (on the push side, that means removing the local copies the
   remote no longer has), and the base snapshot moves with it, so the next
   run is clean instead of republishing what was just accepted as deleted.
+  Before any snapshot is written, the run checks that every lost path that
+  exists on disk (a dangling symlink counts) is one of the regular files it
+  collected; a symlink, a directory, a case or Unicode-normalization alias or
+  a file created after the collection stops it with `12` and writes no
+  snapshot, so repeating that stop does not rotate earlier generations away.
   Before the first local file is removed, the snapshot is read back and must
   hold a stored copy of every file about to be removed; when it does not,
   the run exits `12` with no file removed and the base snapshot unmoved (see

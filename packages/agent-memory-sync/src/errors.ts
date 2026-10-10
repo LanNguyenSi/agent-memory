@@ -201,6 +201,22 @@ class PartialApplyError extends CliError {
   }
 }
 
+// Thrown when a destination restore finds, before it takes its pre-apply copy
+// or touches a file, that a path it must write or remove cannot be written
+// (a read-only directory, a directory where a file is expected, a parent that
+// is not a directory). Same exit code as AdoptionSnapshotNotIntactError, 12,
+// for the same reason: the run stopped before writing or removing anything,
+// so repeating it is safe. The cause is persistent, which is the point of
+// stopping early: a restore that took its snapshot first and then failed to
+// write would add one generation per retry and rotate the older ones away,
+// including the generation the operator asked to restore from.
+class RestoreDestinationNotWritableError extends CliError {
+  constructor(message: string, exitCode = 12) {
+    super(message, exitCode);
+    this.name = "RestoreDestinationNotWritableError";
+  }
+}
+
 function isCliError(error: unknown): error is CliError {
   return error instanceof CliError;
 }
@@ -225,6 +241,7 @@ module.exports = {
   ConfigKeyNotSetError,
   AdoptionSnapshotNotIntactError,
   PartialApplyError,
+  RestoreDestinationNotWritableError,
   PARTIAL_APPLY_RETRY_NOTE,
   isCliError,
   formatErrorMessage

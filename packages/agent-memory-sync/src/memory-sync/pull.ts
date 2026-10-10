@@ -1,4 +1,4 @@
-const { lstatSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { mkdirSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const {
   collectLocalSyncFiles,
@@ -12,7 +12,12 @@ const { CliError, AdoptionSnapshotNotIntactError, PartialApplyError, PARTIAL_APP
 const { GitClient } = require("./git-client");
 const { assertNoRemoteMassDelete, assertOverridableCheckout, assertReliableCheckout } = require("./guards");
 const { hasConflictMarkers, mergeText } = require("./merge");
-const { findPreApplySnapshotProblem, writePreApplySnapshot } = require("./pre-apply-snapshot");
+const {
+  findPreApplySnapshotProblem,
+  findUncollectedPlanPath,
+  pathExistsOnDisk,
+  writePreApplySnapshot
+} = require("./pre-apply-snapshot");
 const { checkRemoteReachable } = require("./reachability");
 const { StateStore } = require("./state-store");
 
@@ -377,6 +382,24 @@ async function performPull(config: PullConfig, options: PullOptions) {
     acceptMassDelete: options.acceptMassDelete
   });
 
+  // Stop before any snapshot is written, and so before any older generation is
+  // rotated away, when the plan reaches a path the snapshot could never hold.
+  // That cause is persistent, so every retry or periodic tick would otherwise
+  // write one more generation and drop one more of the older ones while still
+  // failing at the read-back below. Evaluated for a dry run too, ahead of the
+  // dry-run return: --dry-run must not preview a plan the real run refuses.
+  const uncollectedPath = findUncollectedPlanPath(plan, localFiles);
+  if (uncollectedPath !== null) {
+    throw new AdoptionSnapshotNotIntactError(
+      `pull stopped: ${uncollectedPath} exists on disk but is not a regular file the sync collects ` +
+        "(a symlink, a directory, a file whose name differs from the hub path only by case or Unicode " +
+        "normalization, or a file created after the run collected its files), so no pre-apply snapshot can hold " +
+        "a copy of it. No local file was written or removed, no snapshot was written and the base snapshot was " +
+        "not moved; run the pull again first. Only if it stops again at the same path, move " +
+        `${uncollectedPath} aside and run the pull again`
+    );
+  }
+
   if (options.dryRun) {
     return {
       kind: "pull",
@@ -392,22 +415,6 @@ async function performPull(config: PullConfig, options: PullOptions) {
       snapshots: [],
       notes
     };
-  }
-
-  // Stop before any snapshot is written, and so before any older generation is
-  // rotated away, when the plan reaches a path the snapshot could never hold.
-  // That cause is persistent, so every retry or periodic tick would otherwise
-  // write one more generation and drop one more of the older ones while still
-  // failing at the read-back below.
-  const uncollectedPath = findUncollectedPlanPath(plan, localFiles);
-  if (uncollectedPath !== null) {
-    throw new AdoptionSnapshotNotIntactError(
-      `pull stopped: ${uncollectedPath} exists on disk but is not a regular file the sync collects ` +
-        "(a symlink, a directory, a file whose name differs from the hub path only by case or Unicode " +
-        "normalization, or a file created after the run collected its files), so no pre-apply snapshot can hold " +
-        "a copy of it. No local file was written or removed, no snapshot was written and the base snapshot was " +
-        `not moved; move ${uncollectedPath} aside and run the pull again`
-    );
   }
 
   const writtenSnapshots = snapshotAffectedDestinations(config, plan, localFiles, resolvedSyncPathEntries);
@@ -429,9 +436,9 @@ async function performPull(config: PullConfig, options: PullOptions) {
     throw new AdoptionSnapshotNotIntactError(
       `pull stopped: the pre-apply snapshot for '${snapshotProblem.destination}' is not intact ` +
         `(${snapshotProblem.problem}). No local file was written or removed and the base snapshot was not ` +
-        "moved; run the pull again. If it stops again at the same path, that path is on disk but is not a " +
-        "regular file the sync collects (a symlink, a directory, or a name that differs from the hub path only by " +
-        "case or Unicode normalization): move it aside and run the pull again"
+        "moved; run the pull again. If it stops again, check the snapshot store at " +
+        `${config.stateDir}/snapshots/${snapshotProblem.destination}/ (free space, permissions, another process ` +
+        "removing generations, or the machine's clock)"
     );
   }
 
@@ -449,18 +456,37 @@ async function performPull(config: PullConfig, options: PullOptions) {
         writeFileSync(entry.localAbsolutePath, entry.content, "utf8");
       }
     } catch (error) {
-      const snapshotSentence =
+      // The failing path is a create when the plan writes content to a path
+      // that did not exist when the files were collected: there is no previous
+      // content of it anywhere, so no snapshot can hold it.
+      const failingIsCreate = entry.content !== null && !entry.overwrite;
+      const snapshotList = writtenSnapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ");
+      const snapshotLocation = `(path ${config.stateDir}/snapshots/<destination>/<id>; restore ${config.profile} <destination> --from-snapshot <id>). `;
+      let snapshotSentence: string;
+      if (writtenSnapshots.length === 0) {
+        snapshotSentence = "No snapshot was needed because only new files were created. ";
+      } else if (failingIsCreate) {
+        snapshotSentence =
+          `The previous content of the paths already applied is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
+          `${snapshotList} ${snapshotLocation}` +
+          `${entry.remoteRelativePath} was being created, so no snapshot holds a previous copy of it, and it may be partially written. `;
+      } else {
+        snapshotSentence =
+          `Their previous content, and that of ${entry.remoteRelativePath} itself, which may be partially written, is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
+          `${snapshotList} ${snapshotLocation}`;
+      }
+      // A rerun rotates generations only when a snapshot was written, so the
+      // copy-aside advice applies only then.
+      const retryNote =
         writtenSnapshots.length === 0
-          ? "No snapshot was needed because only new files were created. "
-          : `Their previous content, and that of ${entry.remoteRelativePath} itself, which may be partially written, is in the pre-apply snapshot${writtenSnapshots.length === 1 ? "" : "s"} ` +
-            `${writtenSnapshots.map((written) => `'${written.destination}' ${written.id}`).join(", ")} ` +
-            `(path ${config.stateDir}/snapshots/<destination>/<id>; restore ${config.profile} <destination> --from-snapshot <id>). `;
+          ? "Running the pull again applies the rest; a pull that only creates files writes no snapshot, so no generation is rotated away."
+          : PARTIAL_APPLY_RETRY_NOTE;
       throw new PartialApplyError(
         `pull stopped part way: ${entry.remoteRelativePath} failed (${(error as Error).message}). ` +
           `Already applied (${applied.length} of ${plan.length}): ${applied.length === 0 ? "none" : applied.join(", ")}. ` +
           snapshotSentence +
           "The base snapshot was not moved. Fix the cause first. " +
-          PARTIAL_APPLY_RETRY_NOTE
+          retryNote
       );
     }
     applied.push(entry.remoteRelativePath);
@@ -587,39 +613,6 @@ function snapshotAffectedDestinations(
   }
 
   return written;
-}
-
-// True when something is at the path, a dangling symlink included: writing a
-// file over a dangling symlink writes through it, so it is not "nothing there".
-function pathExistsOnDisk(absolutePath: string): boolean {
-  try {
-    lstatSync(absolutePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") {
-      return false;
-    }
-    throw error;
-  }
-}
-
-// The first path the plan creates, overwrites or removes that exists on disk
-// but is not among the files the pull collected (and so is in no snapshot): a
-// symlink, a directory, a case-only or Unicode-normalization alias of another
-// file, or a file created after the collection. Returns its remote-relative
-// path, or null when every path the plan touches that exists is collected.
-function findUncollectedPlanPath(
-  plan: PullPlanEntry[],
-  localFiles: Array<{ remoteRelativePath: string }>
-): string | null {
-  const collected = new Set<string>(localFiles.map((file) => file.remoteRelativePath));
-  for (const entry of plan) {
-    if (pathExistsOnDisk(entry.localAbsolutePath) && !collected.has(entry.remoteRelativePath)) {
-      return entry.remoteRelativePath;
-    }
-  }
-
-  return null;
 }
 
 // The read-back of the snapshots a pull just wrote, run after they are

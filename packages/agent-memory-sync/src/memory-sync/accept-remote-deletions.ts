@@ -32,7 +32,7 @@ const { existsSync, rmSync } = require("node:fs");
 const { mapRemotePathToLocalAbsolute, resolveSyncPathEntries } = require("./config");
 const { assertOverridableCheckout } = require("./guards");
 const { AdoptionSnapshotNotIntactError, PartialApplyError, PARTIAL_APPLY_RETRY_NOTE } = require("../errors");
-const { findPreApplySnapshotProblem, writePreApplySnapshot } = require("./pre-apply-snapshot");
+const { findPreApplySnapshotProblem, findUncollectedPlanPath, writePreApplySnapshot } = require("./pre-apply-snapshot");
 
 interface AcceptConfig {
   stateDir: string;
@@ -136,6 +136,32 @@ function acceptRemoteDeletions(input: {
   const destinations = resolvedEntries
     .map((entry: { destination: string }) => entry.destination)
     .sort((left: string, right: string) => right.length - left.length);
+
+  // Stop before any snapshot is written, and so before any older generation is
+  // rotated away, when a lost path exists on disk but is not among the files
+  // this run collected: a symlink, a directory, a case or Unicode-normalization
+  // alias, or a file created after the collection. No snapshot can hold such a
+  // path, so the read-back below would refuse it anyway, and the cause is
+  // persistent: every retry or scheduled tick would write one more generation
+  // and rotate one more of the older ones away before stopping at the same place.
+  const lostEntries: Array<{ remoteRelativePath: string; localAbsolutePath: string }> = [];
+  for (const lostPath of lostPaths) {
+    const localAbsolutePath = mapRemotePathToLocalAbsolute(input.config, lostPath, resolvedEntries);
+    if (localAbsolutePath) {
+      lostEntries.push({ remoteRelativePath: lostPath, localAbsolutePath });
+    }
+  }
+  const uncollectedPath = findUncollectedPlanPath(lostEntries, input.localFiles);
+  if (uncollectedPath !== null) {
+    throw new AdoptionSnapshotNotIntactError(
+      `--accept-mass-delete stopped: ${uncollectedPath} exists on disk but is not a regular file the sync collects ` +
+        "(a symlink, a directory, a file whose name differs from the hub path only by case or Unicode " +
+        "normalization, or a file created after the run collected its files), so no pre-apply snapshot can hold " +
+        "a copy of it. No local file was removed, no snapshot was written and the base snapshot was not " +
+        "moved; run the push again first. Only if it stops again at the same path, move " +
+        `${uncollectedPath} aside and run the push again`
+    );
+  }
 
   // Copy first, delete second: the whole point of accepting a deletion this
   // large is that the operator can still be wrong about it. The copy is
