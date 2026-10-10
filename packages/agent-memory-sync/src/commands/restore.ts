@@ -506,10 +506,12 @@ async function restoreDestination(
   if (aliased) {
     throw new RestoreDestinationNotWritableError(
       `restore stopped: ${aliased.writePath} (restored from the source) and ${aliased.removePath} (local, not in ` +
-        "the source) are the same file on this filesystem (a case or Unicode alias, or a hard link), so removing " +
+        "the source) are the same file on this filesystem (a case or Unicode alias, a hard link, a symlink to it, or " +
+        "one file covered by two syncPaths entries), so removing " +
         "the second would delete the first just after it was restored. No file was written or removed and no " +
         "pre-apply snapshot was taken, so every existing snapshot generation is still there. Rename the local " +
-        "file to the source's spelling or, for a hard link, remove the extra link, then run the restore again"
+        "file to the source's spelling; for a hard link, remove the extra link; for a symlink, replace it with a regular " +
+        "file; for two syncPaths entries, fix the overlapping entries; then run the restore again"
     );
   }
 

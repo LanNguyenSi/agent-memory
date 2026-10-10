@@ -130,8 +130,14 @@ for (const aliasCase of aliasCases) {
         `names the local path (${aliasCase.localFile}): ${result.stderr}`
       );
       assert.match(result.stderr, /No file was written or removed and no pre-apply snapshot was taken/);
-      assert.match(result.stderr, /same file on this filesystem \(a case or Unicode alias, or a hard link\)/);
-      assert.match(result.stderr, /for a hard link, remove the extra link/);
+      assert.match(
+        result.stderr,
+        /same file on this filesystem \(a case or Unicode alias, a hard link, a symlink to it, or one file covered by two syncPaths entries\)/
+      );
+      assert.match(
+        result.stderr,
+        /for a hard link, remove the extra link; for a symlink, replace it with a regular file; for two syncPaths entries, fix the overlapping entries/
+      );
     }
 
     // Nothing was written, removed or snapshotted.
@@ -185,7 +191,7 @@ test("restore --from-commit refuses a write target that is a symlink to a remova
   assert.equal(fs.existsSync(path.join(ctx.stateDir, "snapshots", "logs")), false);
 });
 
-test("restore --from-commit does not trip the alias check on a dangling symlink write target", (t: {
+test("restore --from-commit stops a dangling symlink write target at the writability check, before the alias check", (t: {
   skip: (reason: string) => void;
 }) => {
   const ctx = setup("restore-dangling-target", ["a.md"]);
@@ -198,11 +204,14 @@ test("restore --from-commit does not trip the alias check on a dangling symlink 
     return;
   }
 
-  // The check does not crash on a link that resolves to nothing: whatever the
-  // restore then does with the entry, it is not the alias refusal.
+  // The writability pre-check refuses a link that resolves to nothing, so the
+  // alias check never sees it (the unit tests cover the alias module on a
+  // dangling link). Pin that order: exit 12 with the writability message.
   const result = runCli(restoreArgs(ctx, ["--dry-run"]), { expectFailure: true });
+  assert.equal(result.status, 12, result.stderr);
+  assert.match(result.stderr, /is a symlink whose target does not exist/);
   assert.doesNotMatch(result.stderr, /are the same file on this filesystem/);
-  assert.doesNotMatch(result.stderr, /TypeError|ENOENT/);
+  assert.doesNotMatch(result.stderr, /TypeError/);
 });
 
 // Two syncPaths entries can cover one local file under two hub paths. A commit
