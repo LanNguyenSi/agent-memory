@@ -129,3 +129,30 @@ test("accept-mass-delete: a lost path the sync does not collect stops N+1 runs b
   assert.equal(fs.existsSync(path.join(s.workspace, "notes", "T1.md")), false, "T1.md was removed by the adoption");
   assert.equal(fs.existsSync(path.join(s.workspace, "notes", "T5.md")), true, "T5.md, still on the hub, is kept");
 });
+
+test("accept-mass-delete: a dangling symlink at a lost path also stops before any snapshot", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const { s, seededId } = stuckSetup("accept-stuck-dangling");
+  const stuck = path.join(s.workspace, "notes", "T0.md");
+  fs.rmSync(stuck);
+  try {
+    fs.symlinkSync(path.join(path.dirname(s.workspace), "does-not-exist.md"), stuck);
+  } catch {
+    t.skip("symlinks are not available on this platform");
+    return;
+  }
+  const snapshotDir = path.join(s.stateDir, "snapshots", "notes");
+
+  for (let attempt = 0; attempt < GENERATIONS + 1; attempt += 1) {
+    const result = run(s, ["--accept-mass-delete"], true);
+    assert.equal(result.status, 12, `attempt ${attempt}: ${result.stderr}`);
+    assert.match(
+      result.stderr,
+      /--accept-mass-delete stopped: notes\/T0\.md exists on disk but is not a regular file the sync collects/
+    );
+  }
+
+  assert.deepEqual(fs.readdirSync(snapshotDir), [seededId], "no snapshot was written");
+  assert.equal(fs.lstatSync(stuck).isSymbolicLink(), true, "the symlink is still there");
+});

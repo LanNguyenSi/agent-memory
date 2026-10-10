@@ -17,7 +17,7 @@ const {
   writeText
 } = require("../helpers/cli.ts");
 
-function setup(name: string) {
+function setup(name: string, options: { nested?: boolean } = {}) {
   const root = createSandbox(name);
   const remoteDir = initBareRemote(root);
   const workspaceRoot = path.join(root, "workspace");
@@ -25,6 +25,9 @@ function setup(name: string) {
   const stateDir = path.join(root, "state");
   for (let index = 0; index < 6; index += 1) {
     writeText(path.join(workspaceRoot, "logs", `note-${index}.md`), `entry ${index}\n`);
+  }
+  if (options.nested) {
+    writeText(path.join(workspaceRoot, "logs", "sub", "deep.md"), "deep\n");
   }
   // Two generations is the whole retention, so one more written generation
   // rotates the oldest away.
@@ -182,4 +185,72 @@ test("restore --dry-run reports the same stop instead of previewing a write that
 
   assert.equal(result.status, 12, result.stderr);
   assert.match(result.stderr, /restore stopped: .*note-0\.md is a directory/);
+});
+
+test("restore: an extra file in a read-only subfolder stops N+1 runs before any snapshot", (t: {
+  skip: (reason: string) => void;
+}) => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    t.skip("a read-only directory does not stop root");
+    return;
+  }
+  const ctx = setup("restore-unremovable");
+  const folder = path.join(ctx.workspaceRoot, "logs", "extras");
+  writeText(path.join(folder, "extra.md"), "not in the snapshot\n");
+  fs.chmodSync(folder, 0o555);
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = ctx.restore(true);
+      assert.equal(result.status, 12, `attempt ${attempt}: ${result.stderr}`);
+      assert.match(
+        result.stderr,
+        new RegExp(
+          `restore stopped: .*extra\\.md cannot be removed: ${folder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is not writable`
+        )
+      );
+    }
+  } finally {
+    fs.chmodSync(folder, 0o755);
+  }
+
+  assert.deepEqual(fs.readdirSync(ctx.snapshotDir).sort(), ctx.generations, "no generation was written or dropped");
+  assert.equal(readText(path.join(folder, "extra.md")), "not in the snapshot\n");
+});
+
+test("restore: a dangling symlink at a path the restore must write stops before any snapshot", (t: {
+  skip: (reason: string) => void;
+}) => {
+  const ctx = setup("restore-dangling-link");
+  const link = path.join(ctx.workspaceRoot, "logs", "note-0.md");
+  try {
+    fs.symlinkSync(path.join(ctx.workspaceRoot, "nowhere.md"), link);
+  } catch {
+    t.skip("symlinks are not available on this platform");
+    return;
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = ctx.restore(true);
+    assert.equal(result.status, 12, `attempt ${attempt}: ${result.stderr}`);
+    assert.match(result.stderr, /restore stopped: .*note-0\.md is a symlink whose target does not exist/);
+  }
+
+  assert.deepEqual(fs.readdirSync(ctx.snapshotDir).sort(), ctx.generations, "no generation was written or dropped");
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true, "the symlink is still there");
+});
+
+test("restore: a regular file where the restore needs a parent directory stops before any snapshot", () => {
+  const ctx = setup("restore-parent-file", { nested: true });
+  const parent = path.join(ctx.workspaceRoot, "logs", "sub");
+  fs.rmSync(parent, { recursive: true });
+  writeText(parent, "a file, not a folder\n");
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = ctx.restore(true);
+    assert.equal(result.status, 12, `attempt ${attempt}: ${result.stderr}`);
+    assert.match(result.stderr, /restore stopped: .*deep\.md cannot be created: .*sub is not a directory/);
+  }
+
+  assert.deepEqual(fs.readdirSync(ctx.snapshotDir).sort(), ctx.generations, "no generation was written or dropped");
+  assert.equal(readText(parent), "a file, not a folder\n");
 });
