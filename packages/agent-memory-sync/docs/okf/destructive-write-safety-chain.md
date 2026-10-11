@@ -1,9 +1,9 @@
 ---
 type: invariant
 title: Destructive-write safety chain and its exit codes
-description: The ordered checks a pull, a push and a destination restore pass before they delete or overwrite a local file or publish a deletion, the exit code each refusal carries (5, 7, 9, 12, 13), the mass-delete thresholds, and which of --allow-mass-delete and --accept-mass-delete reaches which check.
+description: The ordered checks a pull, a push and a destination restore pass before they delete or overwrite a local file or publish a deletion, the exit code each refusal carries (5, 7, 9, 12, 13), the mass-delete thresholds, which of --allow-mass-delete and --accept-mass-delete reaches which check, and the restore writes that bypass the chain.
 tags: [guards, mass-delete, pre-apply-snapshot, exit-codes, invariant]
-timestamp: 2026-10-11T16:16:43Z
+timestamp: 2026-10-11T16:31:20Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/pull.ts
   - packages/agent-memory-sync/src/memory-sync/push.ts
@@ -22,10 +22,13 @@ sources:
 - In a pull and a push, including the `--accept-mass-delete` adoption, no
   local file is removed or overwritten before a verified pre-apply snapshot
   holds its current content.
-- Without an override flag, no deletion is applied locally or published to
-  the hub while it exceeds the mass-delete thresholds, or while the working
+- Without an override flag, a pull applies no deletions over the
+  mass-delete thresholds and a push publishes none over them in any one
+  snapshot, and neither applies or publishes a deletion while the working
   copy it comes from is missing or has zeroed more base-tracked files than
-  those thresholds allow. `--allow-mass-delete` lets a push publish
+  those thresholds allow. A push that replays queued snapshots measures
+  each snapshot on its own, so one run can publish more than `maxFiles`
+  deletions in total. `--allow-mass-delete` lets a push publish
   deletions over the thresholds. `--accept-mass-delete` lets a pull apply
   them, and lets missing (lost) paths through the checkout check: a pull
   applies the deletions its merge plans for them, and a push adopts them by
@@ -57,7 +60,7 @@ flowchart TD
   R{"checkRemoteReachable"} -->|unreachable| S["status skipped<br/>nothing touched"]
   R --> W["prepareWorkingCopy<br/>stateDir/tmp/pull"]
   W --> C{"checkout check<br/>assertReliableCheckout"}
-  C -->|files missing or emptied| E7["exit 7"]
+  C -->|missing or emptied over the limit| E7["exit 7"]
   C --> P["build plan<br/>protected and hub-marker paths left out"]
   P --> M{"assertNoRemoteMassDelete"}
   M -->|over the limit| E9["exit 9"]
@@ -174,7 +177,7 @@ flowchart TD
    A refusal at any snapshot therefore leaves the hub untouched and the
    queue as it was.
 
-`push --dry-run` previews the same checks in a throwaway working copy
+`run --mode push --dry-run` previews the same checks in a throwaway working copy
 labelled `push-preview`, including the per-snapshot plan guard
 (`packages/agent-memory-sync/src/memory-sync/push.ts:741-746#"allowMassDelete: options.allowMassDelete"`).
 
@@ -208,8 +211,11 @@ config is read
 command would consent for every future tick
 (`packages/agent-memory-sync/src/commands/watch.ts:35-36#"consent for every"`).
 A `watch` tick refused with exit 5 or 7 logs a warning and keeps watching;
-any other error stops the watcher with that error's exit code
+any other error from the tick's push stops the watcher with that error's
+exit code
 (`packages/agent-memory-sync/src/commands/watch.ts:579-581#"error instanceof UnreliableCheckoutError"`).
+A tick that finds the state directory locked is deferred instead (see
+[offline-queue-and-lock.md](offline-queue-and-lock.md)).
 
 ## Restore writes
 

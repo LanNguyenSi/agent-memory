@@ -3,7 +3,7 @@ type: module
 title: Configuration resolution and precedence
 description: How resolveRunConfig builds the run configuration. Config file path order, the merge order of defaults, environment, config file and CLI options, the settings derived afterwards, and which config-file and environment values the CLI's own option defaults hide.
 tags: [config, precedence, environment, cli, defaults]
-timestamp: 2026-10-11T12:47:47Z
+timestamp: 2026-10-11T16:31:20Z
 sources:
   - packages/agent-memory-sync/src/config/loader.ts
   - packages/agent-memory-sync/src/commands/run.ts
@@ -26,7 +26,9 @@ precedence surprises below come from.
 ## Entry points
 
 - `loadConfig`, `resolveRunConfig` and `requireRemoteUrl`, called in that
-  order by `run`, `watch` and `restore`.
+  order by `run`, `watch` and `restore`; `restore --from-snapshot` skips
+  `requireRemoteUrl`, since it reads only the state directory
+  (`packages/agent-memory-sync/src/commands/restore.ts:127-129#"requireRemoteUrl(resolved);"`).
 - `readPersistedConfig`, `writePersistedConfig`, `getConfigValue`,
   `setConfigValue`, used by the `config` subcommands.
 
@@ -118,8 +120,9 @@ from the config file or the environment there.
   loader module is first required; `stateDir` defaults to
   `.agent-memory-sync/<profile>`, and a relative `stateDir` resolves against
   `rootDir`. `repositorySubdir` defaults to `agents/<id>`, where `<id>` is
-  `AGENT_MEMORY_SYNC_AGENT_ID` or the host name with every run of other
-  characters than letters, digits, `.`, `_` and `-` replaced by `-`
+  `AGENT_MEMORY_SYNC_AGENT_ID` or the host name, either one with every run
+  of other characters than letters, digits, `.`, `_` and `-` replaced by
+  `-`
   (`packages/agent-memory-sync/src/config/loader.ts:203-207#"const stateDir = path.resolve(rootDir"`,
   `packages/agent-memory-sync/src/config/loader.ts:707-709#"[^a-zA-Z0-9._-]+"`).
 - An absent or empty `syncPaths` list becomes the default list of

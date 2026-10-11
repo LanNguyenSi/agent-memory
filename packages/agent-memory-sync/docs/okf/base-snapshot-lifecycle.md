@@ -3,7 +3,7 @@ type: invariant
 title: Base snapshot lifecycle and per-path advance
 description: Every reader and writer of stateDir/base, when each one moves it, the per-path rule a successful push applies, how queued snapshots chain their bases inside one push, and the three filterUnmappedBaseMap call sites that keep unmapped hub paths out of it.
 tags: [base-snapshot, merge, pull, push, restore, invariant]
-timestamp: 2026-10-11T16:02:50Z
+timestamp: 2026-10-11T16:31:20Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/state-store.ts
   - packages/agent-memory-sync/src/memory-sync/pull.ts
@@ -17,9 +17,9 @@ sources:
 
 The base snapshot is this machine's record of the hub content its last base
 write recorded, one entry per remote-relative path: the hub tree a pull
-merged against, the hub content of each path a push found local already
-matching, or the current hub tree of a destination after
-`restore --from-commit`. It does not mean the local file equals that
+merged against, the final hub content of each path whose local copy
+equals it after a push, including every path the push published, or the
+current hub tree of a destination after `restore --from-commit`. It does not mean the local file equals that
 content. Pull and push both merge `base`, `local` and `remote` per path,
 so a base entry that is wrong
 in either direction turns into a wrong write: a stale base makes a peer's
@@ -35,8 +35,9 @@ behind it makes the next push delete the hub file.
   with inline conflict markers, and one with only a local edit can all end
   with local content that differs from the hub while the base equals the hub
   (`packages/agent-memory-sync/src/memory-sync/pull.ts:292-295#"content: mergeResult.content,"`).
-  The one exception is a path whose hub copy carries conflict markers,
-  which keeps its previous entry.
+  The one exception is a path pull refuses because its hub copy carries
+  conflict markers and local differs from it; such a path keeps its
+  previous entry, or stays absent.
 - A push records hub content only for a path whose local content equals
   it and drops a path absent on both sides; every other path keeps its
   previous entry.

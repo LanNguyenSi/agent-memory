@@ -3,12 +3,13 @@ type: overview
 title: agent-memory-sync overview
 description: Orientation for the agent-memory-sync package. The four commands, the state directory they share, the order one sync tick runs in, and the exit codes, with pointers to the docs that cover each mechanism in depth.
 tags: [overview, agent-memory-sync, cli, state-dir, exit-codes]
-timestamp: 2026-10-11T16:02:50Z
+timestamp: 2026-10-11T16:31:20Z
 sources:
   - packages/agent-memory-sync/src/main.ts
   - packages/agent-memory-sync/src/errors.ts
   - packages/agent-memory-sync/src/commands/run.ts
   - packages/agent-memory-sync/src/commands/watch.ts
+  - packages/agent-memory-sync/src/commands/restore.ts
   - packages/agent-memory-sync/src/memory-sync/state-store.ts
   - packages/agent-memory-sync/src/memory-sync/pre-apply-snapshot.ts
   - packages/agent-memory-sync/src/memory-sync/lock.ts
@@ -22,8 +23,11 @@ sources:
 `agent-memory-sync` keeps a configured set of local files (the `syncPaths`)
 in a subdirectory of a shared Git repository, the hub, and merges each file
 three ways: local copy, hub copy, and a base snapshot this machine stores of
-the hub content its last pull merged against or its last push found local
-already matching. This bundle covers the mechanisms that span
+the hub content its last pull merged against or, after a push, the final
+hub content of each path whose local copy equals it, including every path
+the push published (see
+[base-snapshot-lifecycle.md](base-snapshot-lifecycle.md) for the other
+writers). This bundle covers the mechanisms that span
 several source files: configuration resolution, the base snapshot's
 lifecycle, the guards in front of every destructive write, and the offline
 queue with the state-directory lock. Installation, machine setup and the
@@ -72,14 +76,14 @@ All syncing commands of one profile share one `stateDir`. The
 (`packages/agent-memory-sync/src/memory-sync/state-store.ts:202-216#"state.json"`);
 the pre-apply snapshot store and the lock add the other two entries.
 
-| Path under `stateDir`           | Holds                                                                                                                                                                                                              |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `state.json`                    | `lastRemoteHead` and `lastRunAt`, written after a pull or push completes.                                                                                                                                          |
-| `base/`                         | The base snapshot: one file per tracked path plus a `<path>.meta.json` marker that records a deletion (`packages/agent-memory-sync/src/memory-sync/state-store.ts:219-235#"writeFileSync(absolutePath, content"`). |
-| `queue/<id>/`                   | One queued push: `local/`, `base/` and a `manifest.json` with `createdAt`.                                                                                                                                         |
-| `tmp/<label>/`                  | A disposable working copy of the hub, one label per operation: `pull`, `push`, `watch`, `push-preview`, `restore` (`packages/agent-memory-sync/src/memory-sync/git-client.ts:255-260#"return repoDir;"`).          |
-| `snapshots/<destination>/<id>/` | A pre-apply snapshot of one destination, with `files/` and `manifest.json`.                                                                                                                                        |
-| `lock.json`                     | The advisory lock record (`packages/agent-memory-sync/src/memory-sync/lock.ts:45-47#"lock.json"`).                                                                                                                 |
+| Path under `stateDir`           | Holds                                                                                                                                                                                                                                                      |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state.json`                    | `lastRemoteHead` and `lastRunAt`, written after a pull or push completes.                                                                                                                                                                                  |
+| `base/`                         | The base snapshot: one file per tracked path, each with a `<path>.meta.json` marker; a deleted path has only its marker, with `deleted: true` (`packages/agent-memory-sync/src/memory-sync/state-store.ts:219-235#"writeFileSync(absolutePath, content"`). |
+| `queue/<id>/`                   | One queued push: `local/`, `base/` and a `manifest.json` with `createdAt`.                                                                                                                                                                                 |
+| `tmp/<label>/`                  | A disposable working copy of the hub, one label per operation: `pull`, `push`, `watch`, `push-preview`, `restore` (`packages/agent-memory-sync/src/memory-sync/git-client.ts:255-260#"return repoDir;"`).                                                  |
+| `snapshots/<destination>/<id>/` | A pre-apply snapshot of one destination, with `files/` and `manifest.json`.                                                                                                                                                                                |
+| `lock.json`                     | The advisory lock record (`packages/agent-memory-sync/src/memory-sync/lock.ts:45-47#"lock.json"`).                                                                                                                                                         |
 
 ## Exit codes
 
