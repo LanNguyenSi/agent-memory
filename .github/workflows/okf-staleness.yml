@@ -29,13 +29,31 @@ permissions:
 
 jobs:
   okf-staleness:
-    name: OKF bundle staleness (warn-only)
+    name: OKF bundle staleness (warn-only, ${{ matrix.bundle }})
     runs-on: ubuntu-latest
+
+    # DEVIATION from the okf-kit template, next to REPO-SPECIFIC (2 of 2):
+    # this repo carries per-package knowledge bundles (one for each package
+    # that has one), so the job runs
+    # once per bundle path through this matrix instead of reading a single
+    # fixed BUNDLE_PATH. The template's job name gains the bundle path so
+    # the two runs are told apart in the checks list, and fail-fast is off
+    # so one bundle's tool error does not cancel the other bundle's report.
+    # Everything below `env:` is the template unchanged. On a re-sync from
+    # the template, keep this strategy block, the job name suffix and the
+    # matrix-driven BUNDLE_PATH; add a new bundle as one more list entry.
+    strategy:
+      fail-fast: false
+      matrix:
+        bundle:
+          - packages/memory-router/docs/okf
+          - packages/agent-memory-sync/docs/okf
 
     env:
       # REPO-SPECIFIC (2 of 2): path of the knowledge bundle to check
       # (`knowledge` in .ai/workflow/manifest.json; default docs/okf).
-      BUNDLE_PATH: packages/memory-router/docs/okf
+      # Here: one matrix entry per bundle, see the deviation note above.
+      BUNDLE_PATH: ${{ matrix.bundle }}
 
     steps:
       - uses: actions/checkout@v5
