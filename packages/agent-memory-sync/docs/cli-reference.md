@@ -168,7 +168,7 @@ remote at all.
 ## `config`
 
 ```bash
-agent-memory-sync config show              # Print current config
+agent-memory-sync config show              # Print the config file path and its persisted settings
 agent-memory-sync config set KEY VALUE     # Set a config value
 agent-memory-sync config get KEY           # Get a config value
 agent-memory-sync config reset             # Remove persisted config
