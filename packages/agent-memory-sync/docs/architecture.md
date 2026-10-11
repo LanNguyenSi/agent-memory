@@ -8,7 +8,9 @@ Each subcommand is registered by its own module under `src/commands/`; the sync 
 
 ## Principles
 
-1. **Single responsibility per command**: Each command file owns one subcommand and nothing else.
+1. **One module per top-level subcommand**: `run`, `watch`, `restore` and `config` each live in their own file under
+   `src/commands/`; `config.ts` also registers its `show`, `get`, `set` and `reset` subcommands, and
+   `watch-arming.ts` is a helper of `watch`, not a command.
 2. **Fail fast with clear messages**: Validate inputs at parse time; emit actionable error messages to stderr.
 3. **Exit codes are part of the interface**: Always exit with a meaningful code (see Exit Codes below).
 4. **Stdout for data, stderr for diagnostics**: Program output goes to stdout; logs, warnings, and errors go to stderr.
@@ -20,7 +22,7 @@ Each subcommand is registered by its own module under `src/commands/`; the sync 
 ```
 agent-memory-sync/
 ├── src/
-│   ├── commands/         # One file per subcommand: run, watch, restore, config
+│   ├── commands/         # run, watch, restore, config, plus watch-arming (helper of watch)
 │   ├── config/           # Config loading and validation
 │   ├── memory-sync/      # Pull, push, merge, guards, snapshots, state, lock, reachability
 │   ├── errors.ts
@@ -119,8 +121,9 @@ The config loader lives in `src/config/loader.ts`. It is responsible for:
 - Merging environment variable overrides
 - Returning a validated config object to each command
 
-Commands receive config as a parameter; they do not read it directly. This keeps commands testable without touching
-the filesystem.
+Each command calls `loadConfig` from `src/config/loader.ts` in its action handler; `run`, `watch` and `restore` then
+pass the result and their CLI values to `resolveRunConfig`. The loader does not depend on any command module, so
+`tests/unit/env-config.test.ts` calls `loadConfig` and `resolveRunConfig` directly.
 
 Config file path resolution order:
 
@@ -199,8 +202,13 @@ sequenceDiagram
     alt remote unreachable
         Push->>State: enqueueCurrentSnapshot (exit 6 once the oldest entry passes queueEscalationThresholdMs)
     else reachable
-        Push->>Git: prepareWorkingCopy, replay queued snapshots
-        Push->>Guards: assertReliableCheckout, assertNoMassDelete
+        Push->>Git: prepareWorkingCopy
+        Push->>Guards: assertReliableCheckout
+        loop each queued snapshot, then the current local one
+            Push->>Git: apply snapshot and stage
+            Push->>Guards: assertNoMassDelete (staged deletions)
+            Push->>Git: commitStaged
+        end
         Push->>Git: push
         Push->>State: replaceBaseSnapshots (converged paths only)
     end
@@ -210,9 +218,14 @@ sequenceDiagram
 In words: `run` takes the state-directory lock, then `performPull` checks reachability, fetches the hub into a temp
 clone, reads the base snapshots, checks that the checkout can be trusted, merges each path, applies the remote
 mass-delete guard, writes the pre-apply snapshots, applies the plan and advances the base. `performPush` then checks
-reachability again; an unreachable remote queues the local snapshot, otherwise it replays queued snapshots, applies the
-checkout and mass-delete guards, pushes, and advances the base for the paths that converged. A guard that refuses ends
-the run with its exit code before anything is applied. A `watch` tick takes the same lock and runs only the push half
+reachability again; an unreachable remote queues the local snapshot, otherwise it checks the fetched checkout, applies
+each queued snapshot and then the current local one, checks each one's staged deletions against the mass-delete guard
+before committing it, pushes once, and advances the base for the paths that converged.
+
+A guard that refuses ends the run with its exit code. A pull-side refusal comes before the pull half writes any local
+file; a push-side refusal comes before anything is pushed, and the queued snapshots stay queued. The pull half runs to
+completion first, so in a sync tick a push-side refusal (exit 5 or 7) comes after the pull half has already applied the
+remote changes to the local files. A `watch` tick takes the same lock and runs only the push half
 (`src/commands/watch.ts`); a push that fails with a remote error is queued the same way as an unreachable remote
 (`src/memory-sync/push.ts`).
 
