@@ -19,9 +19,6 @@ topics: [destructive_ops]           # enables Topic Gate
 severity: critical                  # critical | normal | low
 triggers:                           # enables Tool Gate
   command_pattern: "git\\s+push\\s+.*--force"
-  tools: [Bash]
-  keywords: [force-push]
-  globs: ["**/*.sh"]
 verify:                             # stale-marker check on recall
   - kind: path
     value: packages/gh-push-guard/src/cli.ts
@@ -32,6 +29,11 @@ body markdown here
 
 All new fields are optional. Legacy memories still load and can fire via
 semantic match.
+
+`triggers` has two keys. `tools` matches on the tool name alone: a memory
+that lists `Bash` there fires before every Bash call, whatever its
+`command_pattern` says. `command_pattern` is a regex matched against a
+pending Bash command; use it for command-specific memories.
 
 The loader reads the memory directory in deterministic lexicographic order
 (plain code-unit `Array#sort` over the directory listing, locale-independent),

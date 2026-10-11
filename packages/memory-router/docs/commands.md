@@ -57,19 +57,28 @@ frontmatter has no newer `updatedAt:` is flagged `possibly-stale`; stamp
 The Confidence Gate's semantic match requires a one-time index build:
 
 ```bash
-OPENAI_API_KEY=sk-... memory-router index ~/.claude/projects/PROJECT/memory
+memory-router index ~/.claude/projects/PROJECT/memory
 ```
+
+Unless `MEMORY_ROUTER_EMBED_PROVIDER` names a provider, the build uses
+OpenAI embeddings when `OPENAI_API_KEY` is set and an Ollama endpoint
+(default `http://localhost:11434`) otherwise; see
+[docs/scoring.md](scoring.md#embedding-provider) for provider selection.
 
 - Stores embeddings under `<dir>/.memory-router/index.sqlite` via
   sqlite-vec (cosine distance).
 - Re-runs are incremental: unchanged files (by mtime) are skipped,
   removed files are purged.
-- If no provider is configured/reachable, the Confidence Gate silently
-  returns no hits; the Topic and Tool Gates still fire.
+- Without an index, or with `MEMORY_ROUTER_EMBED_PROVIDER=openai` set but
+  no `OPENAI_API_KEY`, the semantic match returns no hits; the Topic and
+  Tool Gates still fire. A failed embedding call (provider unreachable,
+  timeout) makes the hook write one stderr line and fall back to the
+  topic-only result.
 
 The hook never builds the index inline (cold-start latency would block
-every prompt by seconds). Run `memory-router index` manually or wire it
-into a cron/agent-memory-sync post-sync step. See
+every prompt by seconds). Run `memory-router index` manually, or schedule
+it (cron, launchd, a systemd timer), for example right after the periodic
+agent-memory-sync job. See
 [docs/scoring.md](scoring.md) for provider selection and timeout
 configuration.
 
