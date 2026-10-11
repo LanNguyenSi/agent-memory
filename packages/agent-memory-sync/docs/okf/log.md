@@ -2,6 +2,17 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-11T16:16:43Z, corrected and re-verified against the current sources:
+  `destructive-write-safety-chain.md` now states its threshold rule for
+  runs without an override flag and names what `--allow-mass-delete` and
+  `--accept-mass-delete` let through, including the adoption's
+  unthresholded local removals; the pre-apply snapshot rule still covers
+  the adoption. `config-resolution.md` names both flags as per-run
+  overrides of the mass-delete guard. Verified with
+  `okf-kit check --json --require-anchors packages/agent-memory-sync/docs/okf`
+  (no errors, no warnings) and `npm run format:check` in
+  `packages/agent-memory-sync` (passes).
+
 - 2026-10-11T16:02:50Z, corrected and re-verified against the current sources:
   `base-snapshot-lifecycle.md` now states the base rule per writer (pull
   records the hub content it merged against whatever the local result,

@@ -3,7 +3,7 @@ type: invariant
 title: Destructive-write safety chain and its exit codes
 description: The ordered checks a pull, a push and a destination restore pass before they delete or overwrite a local file or publish a deletion, the exit code each refusal carries (5, 7, 9, 12, 13), the mass-delete thresholds, and which of --allow-mass-delete and --accept-mass-delete reaches which check.
 tags: [guards, mass-delete, pre-apply-snapshot, exit-codes, invariant]
-timestamp: 2026-10-11T16:02:50Z
+timestamp: 2026-10-11T16:16:43Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/pull.ts
   - packages/agent-memory-sync/src/memory-sync/push.ts
