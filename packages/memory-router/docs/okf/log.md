@@ -1,5 +1,20 @@
 # Bundle log
 
+- 2026-10-11T12:43:59Z, docs pass over the package README and `docs/scoring.md`: the
+  README's `memory_search` row, Non-Goals, Trust Model wording and a new
+  source layout under Development; `scoring.md`'s `memory_search` spelling
+  and query-cache key and debug-line text. Re-verified
+  `native-deps-and-ci-smoke.md` (the README Development section still
+  summarizes the CI steps; `ci.yml` changed only by the agent-memory-sync
+  Format step, and the matrix `ci.yml:24-27`, smoke step `:47-53`, probe
+  command `:52`, requires `index-store.ts:81-82` and open-and-load
+  `index-store.ts:300-303` anchors hold), `score-blend-resolver.md` and
+  `semantic-search-silent-noop.md` (their README and `scoring.md` links
+  point at sections this pass did not change); claims unchanged;
+  re-stamped. `okf-kit check --json packages/memory-router/docs/okf`
+  before: 0 errors, 1 warning (sources-fresh on
+  `native-deps-and-ci-smoke.md`).
+
 - 2026-10-04T12:55:59Z, release cut 0.7.3 bumped `package.json` and the `PACKAGE_VERSION`
   constant in `src/hooks/user-prompt-submit.ts` (one-line change, no line
   shift). Re-verified `gate-composition-and-dedup.md` (`ctx` built without
