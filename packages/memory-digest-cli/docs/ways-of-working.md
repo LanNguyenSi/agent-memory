@@ -37,7 +37,7 @@ Always use the canonical exit codes from [docs/architecture.md](architecture.md#
 This makes the tool composable:
 
 ```bash
-memory-digest-cli run --output json | jq '.items[]'
+memory-digest-cli run --output json | jq '.settings'
 ```
 
 ### Error Messages
@@ -52,7 +52,7 @@ Examples:
 
 ```
 error: required argument TARGET was not provided. Run 'memory-digest-cli run --help' to see usage.
-error: config key 'output_format' has invalid value 'xml'. Allowed values: text, json, yaml.
+error: config key 'outputFormat' has invalid value 'xml'. Allowed values: text, json, yaml.
 error: could not read file at path '/tmp/data.csv': no such file or directory.
 ```
 
@@ -125,11 +125,7 @@ This project follows [Semantic Versioning](https://semver.org/):
 
 ## Release Process
 
-1. Update `CHANGELOG.md`
-2. Commit: `chore(release): v1.2.3`
-3. Tag: `git tag v1.2.3`
-4. Push tag: `git push origin v1.2.3`
-5. CI cross-compiles and publishes release artifacts to GitHub Releases
+This package is not published or tagged; changes ship by merging to `master`.
 
 ## Branching Strategy
 
@@ -146,12 +142,12 @@ docs/<description>
 
 ### Workflow
 
-1. Branch from `main`
+1. Branch from `master`
 2. Make small, focused commits
 3. Open a Pull Request (draft if in progress)
 4. Pass CI checks
 5. Get at least one review approval
-6. Squash-merge into `main`
+6. Squash-merge into `master`
 7. Delete the branch
 
 ## Pull Request Conventions
@@ -182,10 +178,9 @@ Strategy: **unit-tests**
 
 ### Unit Test Rules
 
-- Every command module has a corresponding test file in `tests/commands/`
-- Config loader is tested in `tests/config/`
+- Tests live flat in `tests/*.test.ts` and run through tsx (`npm test`)
 - Test function naming: `test_<command>_<scenario>_<expected_outcome>`
-- Tests must not touch the filesystem except through temp directories (`tmp_path` in pytest, `t.TempDir()` in Go)
+- Tests must not touch the filesystem except through temporary directories
 - Tests must not make network calls
 - Tests must not depend on environment variables unless explicitly set in the test
 - Aim for >80% branch coverage on `src/commands/` and `src/config/`
