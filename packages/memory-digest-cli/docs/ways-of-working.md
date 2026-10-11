@@ -20,12 +20,12 @@ These rules govern how the tool behaves from a user perspective. All contributor
 
 ### Exit Codes
 
-Always use the canonical exit codes from [docs/architecture.md](architecture.md#exit-codes).
+Always use the canonical exit codes from [docs/architecture.md](architecture.md#exit-code-reference).
 
 - Exit `0` on success, even if there is nothing to do
 - Exit `2` for usage errors (wrong argument types, mutually exclusive flags)
 - Exit `1` for all other failures if no more specific code applies
-- Never call `sys.exit()` / `os.Exit()` inside command logic - propagate errors to the top-level handler
+- Never call `process.exit()` inside command logic - propagate errors to the top-level handler
 
 ### stdout vs stderr
 
@@ -37,7 +37,7 @@ Always use the canonical exit codes from [docs/architecture.md](architecture.md#
 This makes the tool composable:
 
 ```bash
-memory-digest-cli run --output json | jq '.items[]'
+memory-digest-cli run --output json | jq '.settings'
 ```
 
 ### Error Messages
@@ -52,7 +52,7 @@ Examples:
 
 ```
 error: required argument TARGET was not provided. Run 'memory-digest-cli run --help' to see usage.
-error: config key 'output_format' has invalid value 'xml'. Allowed values: text, json, yaml.
+error: config key 'outputFormat' has invalid value 'xml'. Allowed values: text, json, yaml.
 error: could not read file at path '/tmp/data.csv': no such file or directory.
 ```
 
@@ -103,11 +103,8 @@ Commands that mutate state must support `--dry-run`:
 
 ## Versioning
 
-This project follows [Semantic Versioning](https://semver.org/):
-
-- **MAJOR**: breaking change to CLI interface (removed flag, changed exit code, changed output schema)
-- **MINOR**: new subcommand, new option, new output field (backward compatible)
-- **PATCH**: bug fix, documentation fix, internal refactor with no interface change
+The package is private and its `package.json` version is not bumped per change, so it does not follow Semantic
+Versioning. The lists below still define which CLI changes break scripts that call it.
 
 ### What Counts as a Breaking Change
 
@@ -125,11 +122,7 @@ This project follows [Semantic Versioning](https://semver.org/):
 
 ## Release Process
 
-1. Update `CHANGELOG.md`
-2. Commit: `chore(release): v1.2.3`
-3. Tag: `git tag v1.2.3`
-4. Push tag: `git push origin v1.2.3`
-5. CI cross-compiles and publishes release artifacts to GitHub Releases
+This package is not published or tagged; changes ship by merging to `master`.
 
 ## Branching Strategy
 
@@ -146,12 +139,12 @@ docs/<description>
 
 ### Workflow
 
-1. Branch from `main`
+1. Branch from `master`
 2. Make small, focused commits
 3. Open a Pull Request (draft if in progress)
 4. Pass CI checks
 5. Get at least one review approval
-6. Squash-merge into `main`
+6. Squash-merge into `master`
 7. Delete the branch
 
 ## Pull Request Conventions
@@ -182,26 +175,20 @@ Strategy: **unit-tests**
 
 ### Unit Test Rules
 
-- Every command module has a corresponding test file in `tests/commands/`
-- Config loader is tested in `tests/config/`
-- Test function naming: `test_<command>_<scenario>_<expected_outcome>`
-- Tests must not touch the filesystem except through temp directories (`tmp_path` in pytest, `t.TempDir()` in Go)
+- Tests live flat in `tests/*.test.ts` and run through tsx (`npm test`)
+- Tests must not touch the filesystem except through temporary directories
 - Tests must not make network calls
 - Tests must not depend on environment variables unless explicitly set in the test
 - Aim for >80% branch coverage on `src/commands/` and `src/config/`
 
 ### Test Naming
 
-```
-test_<command>_<scenario>_<expected_result>
-```
+Tests use `test()` from `node:test`. The name is a plain sentence that states the scenario and the expected outcome,
+for example in `tests/digest.test.ts` and `tests/scanner.test.ts`:
 
-Examples:
-
-```
-test_run_missing_required_arg_exits_2
-test_config_set_invalid_key_prints_error
-test_version_outputs_json_when_requested
+```ts
+test("digest should not crash when no insights are extracted", () => {
+test("scanner should filter by days back", async () => {
 ```
 
 ## Architecture Decision Records (ADRs)

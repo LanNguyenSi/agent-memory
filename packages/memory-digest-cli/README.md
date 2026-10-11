@@ -35,11 +35,11 @@ npm install
 npm run build
 ```
 
-Run the built CLI, or use it in development without building:
+Run the built CLI, or run the sources through tsx without building:
 
 ```bash
 node dist/main.js generate --help
-npm run dev -- generate --help
+npx tsx src/main.ts generate --help
 ```
 
 ## Usage
@@ -68,7 +68,7 @@ list, the memory file format, and the importance/type heuristics.
 
 ```bash
 npm install
-npm run dev -- generate --dir ./test-data
+npx tsx src/main.ts generate --dir <directory with YYYY-MM-DD.md files>
 npm run typecheck
 npm run build
 npm test

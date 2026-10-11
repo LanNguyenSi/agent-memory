@@ -25,7 +25,7 @@ Always use the canonical exit codes from [the README's Exit codes table](../READ
 - Exit `0` on success, even if there is nothing to do
 - Exit `2` for usage errors (wrong argument types, mutually exclusive flags)
 - Exit `1` for all other failures if no more specific code applies
-- Never call `sys.exit()` / `os.Exit()` inside command logic - propagate errors to the top-level handler
+- Never call `process.exit()` inside command logic - propagate errors to the top-level handler
 
 ### stdout vs stderr
 
@@ -37,7 +37,7 @@ Always use the canonical exit codes from [the README's Exit codes table](../READ
 This makes the tool composable:
 
 ```bash
-agent-memory-sync run --output json | jq '.items[]'
+agent-memory-sync run --output json | jq '.runs[]'
 ```
 
 ### Error Messages
@@ -52,7 +52,7 @@ Examples:
 
 ```
 error: required argument TARGET was not provided. Run 'agent-memory-sync run --help' to see usage.
-error: config key 'output_format' has invalid value 'xml'. Allowed values: text, json, yaml.
+error: config key 'outputFormat' has invalid value 'xml'. Allowed values: text, json, yaml.
 error: could not read file at path '/tmp/data.csv': no such file or directory.
 ```
 
@@ -61,9 +61,9 @@ Never expose raw exception traces to the user.
 ### Color Output
 
 - Use color to aid readability, not to convey meaning alone (accessibility)
-- Always respect `NO_COLOR=1` (see [no-color.org](https://no-color.org))
-- Always respect `--no-color` flag
-- Disable color automatically when stdout/stderr is not a TTY (i.e., when piped)
+- Color applies only to diagnostics on stderr
+- `--no-color` turns it off; `NO_COLOR` and piping do not, because `run`, `watch` and `restore` always pass the color
+  flag's CLI default (see [Output Formatting](architecture.md#3-output-formatting))
 - Suggested palette: red for errors, yellow for warnings, green for success, cyan for labels
 
 ### Progress Indicators
@@ -103,11 +103,8 @@ Commands that mutate state must support `--dry-run`:
 
 ## Versioning
 
-This project follows [Semantic Versioning](https://semver.org/):
-
-- **MAJOR**: breaking change to CLI interface (removed flag, changed exit code, changed output schema)
-- **MINOR**: new subcommand, new option, new output field (backward compatible)
-- **PATCH**: bug fix, documentation fix, internal refactor with no interface change
+The package is private and its `package.json` version is not bumped per change, so it does not follow Semantic
+Versioning. The lists below still define which CLI changes break scripts that call it.
 
 ### What Counts as a Breaking Change
 
@@ -125,11 +122,8 @@ This project follows [Semantic Versioning](https://semver.org/):
 
 ## Release Process
 
-1. Update `CHANGELOG.md`
-2. Commit: `chore(release): v1.2.3`
-3. Tag: `git tag v1.2.3`
-4. Push tag: `git push origin v1.2.3`
-5. CI cross-compiles and publishes release artifacts to GitHub Releases
+This package is not published or tagged; changes ship by merging to `master`. Record user-visible changes under
+`[Unreleased]` in `CHANGELOG.md`.
 
 ## Branching Strategy
 
@@ -146,12 +140,12 @@ docs/<description>
 
 ### Workflow
 
-1. Branch from `main`
+1. Branch from `master`
 2. Make small, focused commits
 3. Open a Pull Request (draft if in progress)
 4. Pass CI checks
 5. Get at least one review approval
-6. Squash-merge into `main`
+6. Squash-merge into `master`
 7. Delete the branch
 
 ## Pull Request Conventions
@@ -182,25 +176,21 @@ Strategy: **integration-tests**
 
 ### Integration Test Rules
 
-- Tests invoke the compiled binary via subprocess
+- Tests run `src/main.ts` through tsx as a subprocess (no build needed)
 - Always assert on exit code first
 - Assert on stdout and stderr separately
 - Use temporary directories for any file operations
-- Tests must pass on Linux, macOS, and Windows
+- CI runs the suite on Linux (ubuntu-latest)
 - Keep integration tests in `tests/integration/`; fast unit tests can co-exist in `tests/unit/`
 
 ### Test Naming
 
-```
-test_<command>_<scenario>_<expected_result>
-```
+Tests use `test()` from `node:test`. The name is a plain sentence that states the scenario and the expected outcome,
+for example in `tests/integration/memory-sync.test.ts` and `tests/unit/pre-apply-snapshot.test.ts`:
 
-Examples:
-
-```
-test_run_missing_required_arg_exits_2
-test_config_set_invalid_key_prints_error
-test_version_outputs_json_when_requested
+```ts
+test("push uploads local memory files to the remote repository", () => {
+test("the documented default keeps three generations", () => {
 ```
 
 ## Architecture Decision Records (ADRs)

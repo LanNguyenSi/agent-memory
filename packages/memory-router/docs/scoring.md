@@ -225,7 +225,7 @@ Overrides:
   value falls back to that path's own default (the upper bound is Node's
   32-bit timer limit).
 - `MEMORY_ROUTER_HOOK_EMBED_TIMEOUT_MS`: timeout override for every
-  `semanticSearch` query-embedding call (the hook, the MCP `memory-search`
+  `semanticSearch` query-embedding call (the hook, the MCP `memory_search`
   tool, the eval runner, and the public `semanticSearch` export),
   precedence over `MEMORY_ROUTER_EMBED_TIMEOUT_MS`. `memory-router
   index`'s rebuild path never reads this knob.
@@ -251,7 +251,7 @@ Local Ollama setup: `ollama pull nomic-embed-text`, then run `ollama
 serve` (or use the app) before `memory-router index`/normal hook usage.
 
 **Timeout budgets.** Every `semanticSearch` query-embedding call (the
-hook's confidence-gate path, the MCP `memory-search` tool, the eval
+hook's confidence-gate path, the MCP `memory_search` tool, the eval
 runner) defaults to a tight 5s (it must never block a prompt for long)
 while `memory-router index`'s rebuild defaults to a much more generous
 60s per batch, because a real 64-input Ollama batch on the calibration
@@ -273,15 +273,16 @@ Repeated vague prompts re-pay one OpenAI embedding call (roughly
 memoizes prompt to embedding in the same `index.sqlite` file under a
 `query_cache` table:
 
-- **Key:** sha256(prompt) prefix (8 bytes, plenty for the LRU cap).
+- **Key:** the full sha256 hex digest of the prompt (not truncated, so
+  a shared prefix cannot map two prompts to one entry).
 - **Eviction:** LRU by `accessed_at`, hard cap of 1000 entries. Switching
   `MEMORY_ROUTER_EMBED_MODEL` lazily evicts entries stored under the
   previous model on the next put.
 - **Persistence:** survives hook process restarts (the file is the only
   state).
-- **Observability:** set `MEMORY_ROUTER_DEBUG=1` to see `[memory-router]
-  query cache hit (size=N)` / `[memory-router] query cache miss;
-  embedding (size=N)` lines on stderr.
+- **Observability:** set `MEMORY_ROUTER_DEBUG=1` to see stderr lines
+  starting with `[memory-router] query cache hit` or
+  `[memory-router] query cache miss`, each ending in `(size=N)`.
 
 No flag turns the cache off, it's always on when the Confidence Gate is.
 `memory-router index` does not touch the cache; only switching embed

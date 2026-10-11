@@ -360,7 +360,9 @@ a real gap, not a nice-to-have:
 
 - **Linux**: use the systemd `watch` unit in README.md (`#systemd-unit`)
   with `Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/<name>.json`
-  added alongside its existing `Environment=` lines, and
+  added alongside its existing `Environment=` lines (those lines then apply
+  only to keys the profile file does not set; the profile wins for every
+  key it sets), and
   `ExecStart=... watch <profile-name> --verbose` (positional profile name,
   same reasoning as above) — **plus** a systemd timer + oneshot service
   pair for the periodic sync companion, systemd's equivalent of launchd's
@@ -396,6 +398,8 @@ empty/stale local workspace as if it were authoritative.
 5. Install the `watch` systemd unit from README.md (`#systemd-unit`),
    adjusting:
    - `Environment=AGENT_MEMORY_SYNC_CONFIG=/absolute/path/to/profiles/linux.json`
+     (the unit's other `Environment=` lines then apply only to keys
+     `linux.json` does not set)
    - `ExecStart=/usr/local/bin/agent-memory-sync watch <profile-name> --verbose`
      (positional profile name — same reasoning as (b) above; the unit's
      example `ExecStart` only shows the bare `watch` form, so add the name)
@@ -533,13 +537,9 @@ real run would adopt and changes nothing.
 
 ### When a run refuses instead of syncing
 
-| Exit | What the run decided                                                                                                      | What to do                                                                                                                                                                                                                            |
-| ---- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `5`  | This push would delete more than the guard allows.                                                                        | Check whether the local tree was emptied by something else. If the deletion is intended, re-run with `--allow-mass-delete`.                                                                                                           |
-| `7`  | The fetched working copy is missing too much of what the base snapshot tracks, so it may not represent the remote at all. | Re-run once no other run is touching `stateDir/tmp`. If the remote really did drop those files, run `run` once with `--accept-mass-delete` (the destination is copied first), or recover it with `restore --from-commit <sha> --yes`. |
-| `8`  | Another run holds this state directory's lock.                                                                            | Wait and re-run. A lock older than `lockStaleMs`, or one whose process is gone on this host, is taken over automatically; only remove `<stateDir>/lock.json` by hand if neither applies.                                              |
-| `9`  | A remote change would delete more of a destination than the guard allows.                                                 | Confirm the deletion is genuine, then run `run` once with `--accept-mass-delete`.                                                                                                                                                     |
-| `10` | A `restore` source was not found: no pre-apply snapshot for the destination, or the commit holds nothing under it.        | List `<stateDir>/snapshots/<destination>/`, or pick a commit that still had the files (`git log` against the bare repo).                                                                                                              |
+A run that refuses exits with a code from the canonical
+[Exit codes table](../README.md#exit-codes) in the README, which says what
+each code means and what to do about it.
 
 The two flags are not interchangeable. `--allow-mass-delete` answers "yes,
 publish these deletions" and never overrides an untrustworthy working copy;
@@ -593,10 +593,11 @@ described at the top of this document:
 ```
 
 Unlike the `memory` entry, `source` here is an **absolute path outside
-`rootDir`** — `~/.harness/machine-state`, not anywhere under the Claude Code
-memory directory — pointing at a per-machine toolchain-snapshot directory
-maintained by the (shipped) harness companion `session-start
-toolchain-parity`. `resolveWorkspacePath` in `src/memory-sync/config.ts`
+`rootDir`** (`~/.harness/machine-state`, not anywhere under the Claude Code
+memory directory), pointing at a per-machine directory into which a producer
+outside this package drops this machine's `<profile>.json`. agent-memory-sync
+does not produce or interpret these files; it only syncs them like any other file.
+`resolveWorkspacePath` in `src/memory-sync/config.ts`
 treats an absolute `source` as-is instead of resolving it against `rootDir`,
 so this entry syncs on its own schedule independent of the memory tree; both
 entries still land under the same shared `pandora/` remote tree
@@ -630,10 +631,9 @@ copy (mirror) and flags the markers in a note rather than leaving the local
 file untouched.
 Only `<profile>.json` belongs in `~/.harness/machine-state`, and never any
 secret: the whole directory is synced into a shared, committed remote, so
-every file dropped there ends up in git history on every peer. The consumer
-is the harness companion `session-start toolchain-parity`, which reads every
-machine's file under `machine-state/` to compare toolchain versions across
-machines at session start.
+every file dropped there ends up in git history on every peer. Whatever reads
+the synced files under `machine-state/` (for example a cross-machine toolchain
+comparison) is outside this package.
 
 **Propagation to this machine's local `machine-state/` still runs through
 the periodic `run --mode sync` job, not `watch` — `watch`'s push no longer
@@ -663,9 +663,8 @@ snapshot yet simply syncs nothing for this entry until it does. Conversely,
 (`mkdirSync(path.dirname(...), { recursive: true })` in
 `src/memory-sync/pull.ts`, i.e. `mkdir -p` semantics) the first time a
 peer's snapshot is pulled down, so no manual `mkdir` step is required during
-machine setup either — though the harness companion consuming these files
-may still create the directory itself on first run if it expects it to
-exist ahead of any sync.
+machine setup either, though a producer may still create the directory
+itself on first run if it expects it to exist ahead of any sync.
 
 ## f) frictions payload (friction-log exports)
 

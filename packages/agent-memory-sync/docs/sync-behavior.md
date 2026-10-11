@@ -7,6 +7,8 @@ each refusal reports on exit.
 
 ## Sync behavior
 
+The [sync flow diagram](architecture.md#6-sync-flow) shows the order of these steps in one `run --mode sync` tick.
+
 - `sync` runs `pull` first and then `push`.
 - Before any pull/push network operation (including replaying a queue), a
   fast reachability precheck runs first: for ssh/scp-style remotes it

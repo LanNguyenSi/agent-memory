@@ -206,7 +206,7 @@ configured, and how to fall back to the topic-only path.
 
 | Tool | Use |
 |------|-----|
-| `memory_search(query, k?)` | Raw semantic hits from the sqlite-vec index. Returns `[]` if the index is missing or no embedding provider is configured/reachable. |
+| `memory_search(query, k?)` | Raw semantic hits from the sqlite-vec index, as `{ "hits": [...] }`. The list is empty when the index is missing, or when `MEMORY_ROUTER_EMBED_PROVIDER=openai` is set without `OPENAI_API_KEY`. A failed embedding call (provider unreachable, timeout) returns a tool error instead. |
 | `memory_resolve(prompt, cwd?, tool?)` | Same score-blend resolver the `UserPromptSubmit` hook uses, plus the Tool Gate when `tool` is passed. |
 | `memory_apply(id)` | Fetch the full body of a single memory by id (filename without extension). `isError: true` when the id doesn't exist. |
 
@@ -243,7 +243,7 @@ preview what the hook would inject for a golden set of prompts.
 ## Trust Model
 
 Memory files under `MEMORY_ROUTER_DIR` are treated as **author-trusted
-code**. They ship regexes (`triggers.command_pattern`), keyword lists, and
+code**. They ship regexes (`triggers.command_pattern`), topic lists, and
 markdown bodies that directly shape Claude's context. In the current
 deployment they live alongside your Claude-Code session (`~/.claude/...`)
 and are synced via [agent-memory-sync](../agent-memory-sync), i.e. you
@@ -266,8 +266,7 @@ backtracking-free engine (e.g. `re2`) before deploying.
   [agent-memory-sync](../agent-memory-sync) owns sync.
 - **Agent self-confidence.** LLM self-reports are unreliable; ambiguity is
   measured via deterministic proxy signals only.
-- **Cross-session memory migration.** See
-  [MW3 Context Indexer](https://github.com/LanNguyenSi/memory-weaver).
+- **Cross-session memory migration.** Out of scope for this package.
 
 ## Development
 
@@ -280,6 +279,24 @@ npm run test:coverage
 npm run typecheck
 npm run build
 ```
+
+Source layout under `src/`:
+
+- `hooks/` and `mcp/`: entry points of the two hook binaries and the MCP
+  server (the `bin` entries in `package.json`).
+- `router.ts` and `gates/`: resolution (`resolve`, `resolveBlended`), the
+  Topic and Tool Gates, and the confidence and blend weights.
+- `embed/`: the embedding index (`indexer.ts`), its sqlite-vec store and
+  query cache (`index-store.ts`), and embedding provider selection
+  (`provider.ts`).
+- `memory/` and `vocab/`: loading memory files with their frontmatter, and
+  the topic vocabulary (`topics.yml` or the built-in default in
+  `topic-patterns.ts`).
+- `render.ts`: renders hits as `additionalContext`, with the stale marker
+  from `verify-refs.ts` (the `verify:` path check at recall time).
+- `cli.ts` and one directory per CLI verb: `tag/`, `lint/` (including
+  `lint/stale.ts` for `stale`), `migrate/`, `consolidate/`, `eval/`.
+- `index.ts`: programmatic exports.
 
 CI (`.github/workflows/ci.yml`) runs a native-dep smoke check
 (`better-sqlite3` + `sqlite-vec`), typecheck, build, lint, and the

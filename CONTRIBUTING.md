@@ -29,7 +29,7 @@ Each package is self-contained, no root install.
 
 ## Dogfooding hook changes
 
-When changing anything under `packages/memory-router/src/hooks/*` or the Gate logic, validate against the actual `~/.claude/projects/-home-lan-git-pandora/memory/` directory, not just test fixtures. After `npm run build` in `packages/memory-router/`, pipe a real prompt through the hook with `MEMORY_ROUTER_DIR` pointing at the user's memory dir and verify the positive case emits `hookSpecificOutput.additionalContext` while the negative case exits clean. See [packages/memory-router/README.md](packages/memory-router/README.md) for hook wiring and the trust model.
+When changing anything under `packages/memory-router/src/hooks/*` or the Gate logic, validate against your own Claude Code memory directory (`~/.claude/projects/<project-slug>/memory/`), not just test fixtures. After `npm run build` in `packages/memory-router/`, pipe a real prompt through the hook with `MEMORY_ROUTER_DIR` pointing at the user's memory dir and verify the positive case emits `hookSpecificOutput.additionalContext` while the negative case exits clean. See [packages/memory-router/README.md](packages/memory-router/README.md) for hook wiring and the trust model.
 
 ## Adding a memory to memory-router
 
@@ -50,7 +50,7 @@ Match the surrounding code. Prefer small, reviewable diffs.
 
 ## Releasing
 
-Each package is published independently under the `@lannguyensi/...` scope. The flow for `memory-router` (other packages will follow the same shape once their workflows land):
+Only `memory-router` is published, as `@lannguyensi/memory-router`; `agent-memory-sync` and `memory-digest-cli` are private and not released. The release flow for `memory-router`:
 
 1. Bump `packages/memory-router/package.json` version on a release branch.
 2. Add a `## [<version>] - YYYY-MM-DD` entry at the top of `packages/memory-router/CHANGELOG.md` with the user-visible changes.
