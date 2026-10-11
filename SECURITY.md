@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Active development is on `master`. Only the latest published release of each package under `packages/*` (unscoped on npm: `memory-router`, `agent-memory-sync`, `memory-digest-cli`) is supported.
+Active development is on `master`. Security fixes target the latest release of `@lannguyensi/memory-router` on npm. `agent-memory-sync` and `memory-digest-cli` are not published to npm; for those two packages, only the current `master` is supported.
 
 ## Reporting a Vulnerability
 

@@ -4,27 +4,44 @@
 
 Most agent infrastructure assumes the model carries the context. It doesn't: the moment a session ends, the context window evaporates and the next run is a blank slate. agent-memory is the durable substrate underneath. Persist what you learned, sync it across machines, and let a routing layer decide which memories matter for the next prompt.
 
-`memory-router` turns every prompt into a gated lookup over your markdown memory dir: matches are injected as `additionalContext`, misses leave the context window untouched.
+`memory-router` turns every prompt into a lookup over your markdown memory dir: matches are injected as `additionalContext`, misses leave the context window untouched. The Claude Code hooks and the MCP server load the memory files themselves and hand them to the router. `UserPromptSubmit` and the MCP tool `memory_resolve` use the score blend (`resolveBlended`); `PreToolUse` runs only the Tool Gate. The semantic part reads a sqlite-vec index that `memory-router index` builds offline. Building the index sends memory bodies to the embedding provider (OpenAI or Ollama); once the index exists, prompt text is sent there as well.
+
+The first diagram shows the per-prompt and per-tool-call path from Claude Code or an MCP client to the injected context.
 
 ```mermaid
 flowchart TD
-    cc["Claude Code"] -->|"UserPromptSubmit / PreToolUse"| hook["hooks/user-prompt-submit.ts<br/>hooks/pre-tool-use.ts"]
-    mcpc["MCP client"] --> mcp["mcp/server.ts"]
-    hook --> router["router.ts"]
-    mcp --> router
-
+    sync["agent-memory-sync<br/>cross-machine git sync"] --> files
     subgraph corpus["Memory dir · markdown"]
         files["*.md memories"]
     end
-    sync["agent-memory-sync<br/>cross-machine git sync"] --> files
-    digest["memory-digest-cli<br/>daily-log digests"] --> files
+    files --> loader["memory/loader.ts"]
+    loader --> mcp["mcp/server.ts<br/>MCP stdio server"]
+    loader --> ups["hooks/user-prompt-submit.ts"]
+    loader --> ptu["hooks/pre-tool-use.ts"]
+    cc["Claude Code"] -->|UserPromptSubmit| ups
+    cc -->|PreToolUse| ptu
 
-    router --> loader["memory/loader.ts"]
-    files --> loader
-    loader --> store[("sqlite-vec index<br/>embed/indexer.ts · embed/index-store.ts")]
-    store --> gates{"gates<br/>topic · tool · confidence"}
-    gates -->|match| render["render.ts<br/>additionalContext JSON injected"]
-    gates -->|no match| empty["empty stdout<br/>context stays clean"]
+    ups -->|resolveBlended| router["router.ts"]
+    ptu -->|"resolve, Tool Gate only"| router
+    mcp -->|"memory_resolve (resolveBlended)"| router
+    router --> gates["gates/topic.ts<br/>gates/tool.ts"]
+    router -->|semanticSearch| indexer["embed/indexer.ts"]
+
+    ups --> render["render.ts"]
+    ptu --> render
+    render -->|hits| out["additionalContext JSON on stdout"]
+    render -->|no hits| empty["empty stdout"]
+```
+
+The second diagram shows who reads and builds the embedding index, and where the embedding provider is called.
+
+```mermaid
+flowchart LR
+    router["router.ts"] -->|semanticSearch| indexer["embed/indexer.ts"]
+    mcp["mcp/server.ts"] -->|memory_search| indexer
+    build["memory-router index"] -->|rebuildIndex| indexer
+    indexer --> store[("sqlite-vec index")]
+    indexer -->|"POST /v1/embeddings"| prov["OpenAI or Ollama"]
 ```
 
 ## Packages
