@@ -21,13 +21,21 @@ sources:
 
 - In a pull and a push, including the `--accept-mass-delete` adoption, no
   local file is removed or overwritten before a verified pre-apply snapshot
-  holds its current content, and no deletion is applied locally or
-  published to the hub while it exceeds the mass-delete thresholds or comes
-  from a working copy that is missing or zeroing files the base snapshot
-  tracks. Every refusal before the first local write leaves the local
-  files, the hub and the base snapshot as they were, so the same command
-  can be repeated. A push refused after an `--accept-mass-delete` adoption
-  keeps the adoption: its local removals and its base update stay.
+  holds its current content.
+- Without an override flag, no deletion is applied locally or published to
+  the hub while it exceeds the mass-delete thresholds, or while the working
+  copy it comes from is missing or has zeroed more base-tracked files than
+  those thresholds allow. `--allow-mass-delete` lets a push publish
+  deletions over the thresholds. `--accept-mass-delete` lets a pull apply
+  them, and lets missing (lost) paths through the checkout check: a pull
+  applies the deletions its merge plans for them, and a push adopts them by
+  removing the local copies, in both cases with no threshold (see
+  [The two override flags](#the-two-override-flags)). No flag lets a
+  checkout finding with zeroed (emptied) paths through.
+- Every refusal before the first local write leaves the local files, the
+  hub and the base snapshot as they were, so the same command can be
+  repeated. A push refused after an `--accept-mass-delete` adoption keeps
+  the adoption: its local removals and its base update stay.
 - `restore` is outside this guarantee. The `restore <sha>` form overwrites
   the named local files with no pre-apply snapshot, and a destination
   restore writes after a snapshot it does not read back and removes files

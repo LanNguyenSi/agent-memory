@@ -126,8 +126,11 @@ from the config file or the environment there.
   `MEMORY.md`, `daily` and `logs`
   (`packages/agent-memory-sync/src/config/loader.ts:525-526#": DEFAULT_SYNC_PATHS;"`).
 - `massDeleteGuard: null` or an absent key means the default thresholds,
-  never "no guard"; the per-run override is the `--allow-mass-delete` flag
+  never "no guard"
   (`packages/agent-memory-sync/src/config/loader.ts:610-613#"return { ...DEFAULT_MASS_DELETE_GUARD };"`).
+  The per-run overrides are the `--allow-mass-delete` and
+  `--accept-mass-delete` flags, each for its own checks (see
+  [destructive-write-safety-chain.md](destructive-write-safety-chain.md#the-two-override-flags)).
 - `queueEscalationThresholdMs: null` is a real value that disables queue
   escalation, distinct from an absent key, which means the default
   (`packages/agent-memory-sync/src/config/loader.ts:596-602#"validatePositiveInteger(value,"`).
