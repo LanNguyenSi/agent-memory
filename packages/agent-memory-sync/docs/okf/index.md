@@ -30,9 +30,10 @@ repeat those docs.
   advances it by, and the three call sites that keep unmapped hub paths out
   of it.
 - [Destructive-write safety chain and its exit codes](destructive-write-safety-chain.md):
-  the ordered checks in front of every local deletion or overwrite and
-  every published deletion, with the exit code of each refusal and the
-  scope of the two override flags.
+  the ordered checks in front of every local deletion or overwrite by a
+  pull or a push and every published deletion, with the exit code of each
+  refusal, the scope of the two override flags, and the `restore` writes
+  that bypass the chain.
 
 ## Runbooks
 

@@ -3,7 +3,7 @@ type: runbook
 title: Responding to a stopped or refused sync run
 description: Per exit code (5, 6, 7, 8, 9, 12, 13), what state a stopped run leaves behind and the next step, taken from the remediation text each refusal prints.
 tags: [runbook, exit-codes, recovery, restore, mass-delete]
-timestamp: 2026-10-11T12:47:47Z
+timestamp: 2026-10-11T16:02:50Z
 sources:
   - packages/agent-memory-sync/src/errors.ts
   - packages/agent-memory-sync/src/memory-sync/guards.ts
@@ -31,6 +31,11 @@ sources:
   pre-apply snapshots (see [config-resolution.md](config-resolution.md)).
 - For a recovery with `restore`, a pause of the scheduled sync jobs on this
   machine, so that no tick runs between the steps below.
+- `restore <sha>` overwrites local files without a pre-apply snapshot, and
+  a destination restore does not read its snapshot back. Copy aside any
+  local file whose current content you may need before running either
+  (see
+  [destructive-write-safety-chain.md](destructive-write-safety-chain.md#restore-writes)).
 
 ## Steps
 
@@ -42,13 +47,13 @@ sources:
    (`packages/agent-memory-sync/src/memory-sync/lock.ts:265-270#"If neither applies and the holder is really gone"`).
 2. **Exit 7, unreliable checkout.** Nothing was deleted locally and nothing
    was pushed.
-   - If the message names files *missing* from the working copy: run the
+   - If the message names files _missing_ from the working copy: run the
      command again once nothing else uses `stateDir/tmp`. If the hub really
      dropped those files on purpose, run `run --accept-mass-delete` once.
      To bring them back instead, restore the destination from a commit that
      still had them and let the next run push them
      (`packages/agent-memory-sync/src/memory-sync/guards.ts:581-588#"and let the next run push them"`).
-   - If it names files *emptied to zero bytes*: `--accept-mass-delete`
+   - If it names files _emptied to zero bytes_: `--accept-mass-delete`
      does not apply. Run again once nothing else uses `stateDir/tmp`, or
      restore from a commit; if the hub emptied them on purpose, commit real
      content at the hub or raise `massDeleteGuard` for one run

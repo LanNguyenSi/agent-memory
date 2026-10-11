@@ -3,7 +3,7 @@ type: invariant
 title: Destructive-write safety chain and its exit codes
 description: The ordered checks a pull, a push and a destination restore pass before they delete or overwrite a local file or publish a deletion, the exit code each refusal carries (5, 7, 9, 12, 13), the mass-delete thresholds, and which of --allow-mass-delete and --accept-mass-delete reaches which check.
 tags: [guards, mass-delete, pre-apply-snapshot, exit-codes, invariant]
-timestamp: 2026-10-11T12:47:47Z
+timestamp: 2026-10-11T16:02:50Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/pull.ts
   - packages/agent-memory-sync/src/memory-sync/push.ts
@@ -19,13 +19,20 @@ sources:
 
 ## The invariant
 
-- No local file is removed or overwritten before a verified pre-apply
-  snapshot holds its current content, and no deletion is applied locally
-  or published to the hub while it exceeds the mass-delete thresholds or
-  comes from a working copy that is missing or zeroing files the base
-  snapshot tracks. Every refusal up to the apply step leaves the local
+- In a pull and a push, including the `--accept-mass-delete` adoption, no
+  local file is removed or overwritten before a verified pre-apply snapshot
+  holds its current content, and no deletion is applied locally or
+  published to the hub while it exceeds the mass-delete thresholds or comes
+  from a working copy that is missing or zeroing files the base snapshot
+  tracks. Every refusal before the first local write leaves the local
   files, the hub and the base snapshot as they were, so the same command
-  can be repeated.
+  can be repeated. A push refused after an `--accept-mass-delete` adoption
+  keeps the adoption: its local removals and its base update stay.
+- `restore` is outside this guarantee. The `restore <sha>` form overwrites
+  the named local files with no pre-apply snapshot, and a destination
+  restore writes after a snapshot it does not read back and removes files
+  without the mass-delete thresholds (see
+  [Restore writes](#restore-writes) below).
 
 The checks run in a fixed order, and the order is part of the guarantee:
 each refusal must happen before the first write it protects. All of them
@@ -181,10 +188,10 @@ paths and has no cross-destination total.
 
 ## The two override flags
 
-| Flag | Commands | Overrides | Does not override |
-|---|---|---|---|
-| `--allow-mass-delete` | `run`, `watch` | the push plan guard (exit 5) | the checkout check (exit 7), anything on the pull side |
-| `--accept-mass-delete` | `run` only | the pull plan guard (exit 9); a checkout finding with lost paths only, by adopting the deletions locally behind a pre-apply snapshot | a checkout finding with any emptied path, which is refused whatever the flag (`packages/agent-memory-sync/src/memory-sync/guards.ts:662-664#"throw new UnreliableCheckoutError(buildUnreliableCheckoutMessage("`) |
+| Flag                   | Commands       | Overrides                                                                                                                            | Does not override                                                                                                                                                                                                 |
+| ---------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--allow-mass-delete`  | `run`, `watch` | the push plan guard (exit 5)                                                                                                         | the checkout check (exit 7), anything on the pull side                                                                                                                                                            |
+| `--accept-mass-delete` | `run` only     | the pull plan guard (exit 9); a checkout finding with lost paths only, by adopting the deletions locally behind a pre-apply snapshot | a checkout finding with any emptied path, which is refused whatever the flag (`packages/agent-memory-sync/src/memory-sync/guards.ts:662-664#"throw new UnreliableCheckoutError(buildUnreliableCheckoutMessage("`) |
 
 Passing both to one `run` is a usage error, exit 2, checked before the
 config is read
@@ -196,7 +203,15 @@ A `watch` tick refused with exit 5 or 7 logs a warning and keeps watching;
 any other error stops the watcher with that error's exit code
 (`packages/agent-memory-sync/src/commands/watch.ts:579-581#"error instanceof UnreliableCheckoutError"`).
 
-## Destination restore
+## Restore writes
+
+`restore <sha> [--path <p>]` writes each named file from the hub commit
+straight over the local copy. It takes no pre-apply snapshot, so content
+that existed only in the overwritten local file is not kept anywhere
+under `stateDir`
+(`packages/agent-memory-sync/src/commands/restore.ts:263-264#"writeFileSync(absoluteLocalPath, content"`).
+Without `--path` it needs `--yes` or `--dry-run`
+(`packages/agent-memory-sync/src/commands/restore.ts:131-133#"full-snapshot restore requires --yes"`).
 
 `restore <profile> <destination> --from-commit|--from-snapshot` replaces a
 whole destination, removals included. It refuses with exit 12, before any
@@ -208,6 +223,10 @@ filesystem
 It then snapshots the destination's current files and writes; unlike pull,
 it does not read that snapshot back before writing
 (`packages/agent-memory-sync/src/commands/restore.ts:526-533#"generations: runConfig.snapshotGenerations"`).
+Its removals are not counted against the mass-delete thresholds: every
+file in the destination that the source does not hold is removed
+(`packages/agent-memory-sync/src/commands/restore.ts:445-447#"!sourcePaths.has(file.remoteRelativePath)"`,
+`packages/agent-memory-sync/src/commands/restore.ts:553-554#"rmSync(file.absolutePath, { force: true });"`).
 
 ## What breaks it
 

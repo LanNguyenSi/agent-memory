@@ -3,7 +3,7 @@ type: invariant
 title: Base snapshot lifecycle and per-path advance
 description: Every reader and writer of stateDir/base, when each one moves it, the per-path rule a successful push applies, how queued snapshots chain their bases inside one push, and the three filterUnmappedBaseMap call sites that keep unmapped hub paths out of it.
 tags: [base-snapshot, merge, pull, push, restore, invariant]
-timestamp: 2026-10-11T12:47:47Z
+timestamp: 2026-10-11T16:02:50Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/state-store.ts
   - packages/agent-memory-sync/src/memory-sync/pull.ts
@@ -15,19 +15,35 @@ sources:
 
 # Base snapshot lifecycle and per-path advance
 
-The base snapshot is this machine's record of the content it last converged
-on with the hub, one entry per remote-relative path. Pull and push both
-merge `base`, `local` and `remote` per path, so a base entry that is wrong
+The base snapshot is this machine's record of the hub content its last base
+write recorded, one entry per remote-relative path: the hub tree a pull
+merged against, the hub content of each path a push found local already
+matching, or the current hub tree of a destination after
+`restore --from-commit`. It does not mean the local file equals that
+content. Pull and push both merge `base`, `local` and `remote` per path,
+so a base entry that is wrong
 in either direction turns into a wrong write: a stale base makes a peer's
 newer hub version look unchanged, and a base entry with no local copy
 behind it makes the next push delete the hub file.
 
 ## The invariant
 
-- `stateDir/base` changes only after the local side and the hub agree on
-  the paths it records, and never holds a path that no `syncPaths` entry
-  maps to a local file. A run that stops before its final write leaves it
-  as it was.
+- `stateDir/base` never holds a path that no `syncPaths` entry maps to a
+  local file.
+- A pull records the hub content it merged against for every mapped path,
+  whatever the merged local result. A path merged three ways, one written
+  with inline conflict markers, and one with only a local edit can all end
+  with local content that differs from the hub while the base equals the hub
+  (`packages/agent-memory-sync/src/memory-sync/pull.ts:292-295#"content: mergeResult.content,"`).
+  The one exception is a path whose hub copy carries conflict markers,
+  which keeps its previous entry.
+- A push records hub content only for a path whose local content equals
+  it and drops a path absent on both sides; every other path keeps its
+  previous entry.
+- A pull or a plain push that stops before its own base write leaves the
+  base as it was. `run --accept-mass-delete` writes the base earlier, when
+  it adopts the hub's deletions, and that write stays even when the push
+  after it stops, for example with exit 5.
 
 ## Storage
 

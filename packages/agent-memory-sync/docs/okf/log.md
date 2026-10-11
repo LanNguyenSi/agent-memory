@@ -2,6 +2,20 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-11T16:02:50Z, corrected and re-verified against the current sources:
+  `base-snapshot-lifecycle.md` now states the base rule per writer (pull
+  records the hub content it merged against whatever the local result,
+  push only where local equals the hub, and an `--accept-mass-delete`
+  adoption stays when the push after it stops), with the matching wording
+  in `overview.md`; `destructive-write-safety-chain.md` scopes its
+  invariant to pull and push and adds a "Restore writes" section for
+  `restore <sha>` (no pre-apply snapshot) and the destination restore's
+  unchecked snapshot and unthresholded removals, linked from
+  `stopped-run-runbook.md`. Tables and emphasis reformatted with the
+  package's prettier config. Verified with
+  `okf-kit check --json --require-anchors packages/agent-memory-sync/docs/okf`
+  (no errors, no warnings) and `npm run format:check` in
+  `packages/agent-memory-sync` (passes).
 - 2026-10-11T12:47:47Z, bundle introduced with `okf-kit init` (okf-kit 0.16.0) and
   written against the current sources: `overview.md`,
   `config-resolution.md`, `base-snapshot-lifecycle.md`,
