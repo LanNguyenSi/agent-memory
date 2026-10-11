@@ -6,7 +6,7 @@ Most agent infrastructure assumes the model carries the context. It doesn't: the
 
 `memory-router` turns every prompt into a lookup over your markdown memory dir: matches are injected as `additionalContext`, misses leave the context window untouched. The Claude Code hooks and the MCP server load the memory files themselves and hand them to the router. `UserPromptSubmit` and the MCP tool `memory_resolve` use the score blend (`resolveBlended`); `PreToolUse` runs only the Tool Gate. The semantic part reads a sqlite-vec index that `memory-router index` builds offline. Building the index sends memory bodies to the embedding provider (OpenAI or Ollama); once the index exists, prompt text is sent there as well.
 
-The first diagram shows the per-prompt and per-tool-call path from Claude Code or an MCP client to the injected context.
+The first diagram shows the per-prompt and per-tool-call path from Claude Code to the injected context, and where the MCP server's `memory_resolve` enters the same router; the MCP tool returns its hits as the tool result, not through `render.ts`.
 
 ```mermaid
 flowchart TD
@@ -15,16 +15,16 @@ flowchart TD
         files["*.md memories"]
     end
     files --> loader["memory/loader.ts"]
-    loader --> mcp["mcp/server.ts<br/>MCP stdio server"]
-    loader --> ups["hooks/user-prompt-submit.ts"]
-    loader --> ptu["hooks/pre-tool-use.ts"]
+    mcp["mcp/server.ts<br/>MCP stdio server"] --> loader
+    ups["hooks/user-prompt-submit.ts"] --> loader
+    ptu["hooks/pre-tool-use.ts<br/>Tool Gate only"] --> loader
     cc["Claude Code"] -->|UserPromptSubmit| ups
     cc -->|PreToolUse| ptu
 
     ups -->|resolveBlended| router["router.ts"]
-    ptu -->|"resolve, Tool Gate only"| router
+    ptu --> router
     mcp -->|"memory_resolve (resolveBlended)"| router
-    router --> gates["gates/topic.ts<br/>gates/tool.ts"]
+    router --> gates["gates/topic.ts<br/>gates/tool.ts<br/>gates/confidence.ts"]
     router -->|semanticSearch| indexer["embed/indexer.ts"]
 
     ups --> render["render.ts"]
@@ -41,6 +41,7 @@ flowchart LR
     mcp["mcp/server.ts"] -->|memory_search| indexer
     build["memory-router index"] -->|rebuildIndex| indexer
     indexer --> store[("sqlite-vec index")]
+    consolidate["memory-router consolidate"] -->|read-only| store
     indexer -->|"POST /v1/embeddings"| prov["OpenAI or Ollama"]
 ```
 

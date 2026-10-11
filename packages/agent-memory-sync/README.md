@@ -187,9 +187,9 @@ StartLimitBurst=30
 WantedBy=multi-user.target
 ```
 
-The `Environment=` values apply only to keys that the config file
-(`$XDG_CONFIG_HOME/agent-memory-sync/config.json`, or the file named by
-`AGENT_MEMORY_SYNC_CONFIG`) does not set.
+The `Environment=` values apply only to keys that the config file (the
+default config file, see [Configuration](#configuration), or the file named
+by `AGENT_MEMORY_SYNC_CONFIG`) does not set.
 
 See [docs/service-supervision.md](docs/service-supervision.md) for the
 `StartLimitIntervalSec`/`StartLimitBurst` restart-budget math, the macOS
@@ -254,7 +254,7 @@ and the file's `profile` key have no effect there.
 | `color`                      | `true` unless `NO_COLOR` is set                                   | `AGENT_MEMORY_SYNC_COLOR`                         | boolean                                                          |
 | `profile`                    | `default`                                                         | `AGENT_MEMORY_SYNC_PROFILE`                       | string                                                           |
 | `rootDir`                    | the current directory                                             | `AGENT_MEMORY_SYNC_ROOT_DIR`                      | path                                                             |
-| `remoteUrl`                  | none (`run`, `watch` exit `3`)                                    | `AGENT_MEMORY_SYNC_REMOTE_URL`                    | git URL or path                                                  |
+| `remoteUrl`                  | none (`run`, `watch` and commit-based `restore` exit `3`)         | `AGENT_MEMORY_SYNC_REMOTE_URL`                    | git URL or path                                                  |
 | `branch`                     | `main`                                                            | `AGENT_MEMORY_SYNC_BRANCH`                        | string                                                           |
 | `repositorySubdir`           | `agents/<AGENT_MEMORY_SYNC_AGENT_ID or hostname>`                 | `AGENT_MEMORY_SYNC_REPOSITORY_SUBDIR`             | relative path                                                    |
 | `stateDir`                   | `<rootDir>/.agent-memory-sync/<profile>`                          | `AGENT_MEMORY_SYNC_STATE_DIR`                     | path; a relative one resolves against `rootDir`                  |

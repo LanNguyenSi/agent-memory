@@ -25,7 +25,7 @@ Always use the canonical exit codes from [the README's Exit codes table](../READ
 - Exit `0` on success, even if there is nothing to do
 - Exit `2` for usage errors (wrong argument types, mutually exclusive flags)
 - Exit `1` for all other failures if no more specific code applies
-- Never call `sys.exit()` / `os.Exit()` inside command logic - propagate errors to the top-level handler
+- Never call `process.exit()` inside command logic - propagate errors to the top-level handler
 
 ### stdout vs stderr
 
@@ -103,11 +103,8 @@ Commands that mutate state must support `--dry-run`:
 
 ## Versioning
 
-This project follows [Semantic Versioning](https://semver.org/):
-
-- **MAJOR**: breaking change to CLI interface (removed flag, changed exit code, changed output schema)
-- **MINOR**: new subcommand, new option, new output field (backward compatible)
-- **PATCH**: bug fix, documentation fix, internal refactor with no interface change
+The package is private and its `package.json` version is not bumped per change, so it does not follow Semantic
+Versioning. The lists below still define which CLI changes break scripts that call it.
 
 ### What Counts as a Breaking Change
 
@@ -188,16 +185,12 @@ Strategy: **integration-tests**
 
 ### Test Naming
 
-```
-test_<command>_<scenario>_<expected_result>
-```
+Tests use `test()` from `node:test`. The name is a plain sentence that states the scenario and the expected outcome,
+for example in `tests/integration/memory-sync.test.ts` and `tests/unit/pre-apply-snapshot.test.ts`:
 
-Examples:
-
-```
-test_run_missing_required_arg_exits_2
-test_config_set_invalid_key_prints_error
-test_version_outputs_json_when_requested
+```ts
+test("push uploads local memory files to the remote repository", () => {
+test("the documented default keeps three generations", () => {
 ```
 
 ## Architecture Decision Records (ADRs)

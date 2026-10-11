@@ -3,7 +3,7 @@
 ## Overview
 
 agent-memory-sync is a CLI tool implemented in **typescript** (CommonJS modules) using the **commander** framework.
-Each subcommand is registered by its own module under `src/commands/`; the sync logic it calls lives under
+Each top-level subcommand is registered by its own module under `src/commands/`; the sync logic it calls lives under
 `src/memory-sync/`.
 
 ## Principles
@@ -15,7 +15,8 @@ Each subcommand is registered by its own module under `src/commands/`; the sync 
 3. **Exit codes are part of the interface**: Always exit with a meaningful code (see Exit Codes below).
 4. **Stdout for data, stderr for diagnostics**: Program output goes to stdout; logs, warnings, and errors go to stderr.
 5. **Composable with other tools**: Support `--output json` on commands that produce structured data.
-6. **Config is optional**: The tool runs with no config file present; only `remoteUrl` has no default.
+6. **Config is optional**: The tool runs with no config file present; only `remoteUrl` must be provided (config file,
+   `AGENT_MEMORY_SYNC_REMOTE_URL` or `--remote`).
 
 ## System Structure
 
@@ -195,7 +196,7 @@ sequenceDiagram
     else reachable
         Pull->>Git: prepareWorkingCopy
         Pull->>State: readBaseSnapshots
-        Pull->>Guards: assertOverridableCheckout, assertReliableCheckout
+        Pull->>Guards: assertReliableCheckout (assertOverridableCheckout with --accept-mass-delete)
         Pull->>Pull: mergeText per path
         Pull->>Guards: assertNoRemoteMassDelete
         Pull->>Snap: writePreApplySnapshot per affected destination
@@ -204,7 +205,8 @@ sequenceDiagram
     Run->>Push: performPush
     Push->>Reach: checkRemoteReachable
     alt remote unreachable
-        Push->>State: enqueueCurrentSnapshot (exit 6 once the oldest entry passes queueEscalationThresholdMs)
+        Push->>State: enqueueSnapshot
+        Push->>Push: checkQueueEscalation (exit 6 once the oldest entry passes queueEscalationThresholdMs)
     else reachable
         Push->>Git: prepareWorkingCopy
         Push->>Guards: assertReliableCheckout

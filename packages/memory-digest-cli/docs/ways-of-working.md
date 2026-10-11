@@ -25,7 +25,7 @@ Always use the canonical exit codes from [docs/architecture.md](architecture.md#
 - Exit `0` on success, even if there is nothing to do
 - Exit `2` for usage errors (wrong argument types, mutually exclusive flags)
 - Exit `1` for all other failures if no more specific code applies
-- Never call `sys.exit()` / `os.Exit()` inside command logic - propagate errors to the top-level handler
+- Never call `process.exit()` inside command logic - propagate errors to the top-level handler
 
 ### stdout vs stderr
 
@@ -103,11 +103,8 @@ Commands that mutate state must support `--dry-run`:
 
 ## Versioning
 
-This project follows [Semantic Versioning](https://semver.org/):
-
-- **MAJOR**: breaking change to CLI interface (removed flag, changed exit code, changed output schema)
-- **MINOR**: new subcommand, new option, new output field (backward compatible)
-- **PATCH**: bug fix, documentation fix, internal refactor with no interface change
+The package is private and its `package.json` version is not bumped per change, so it does not follow Semantic
+Versioning. The lists below still define which CLI changes break scripts that call it.
 
 ### What Counts as a Breaking Change
 
@@ -179,7 +176,6 @@ Strategy: **unit-tests**
 ### Unit Test Rules
 
 - Tests live flat in `tests/*.test.ts` and run through tsx (`npm test`)
-- Test function naming: `test_<command>_<scenario>_<expected_outcome>`
 - Tests must not touch the filesystem except through temporary directories
 - Tests must not make network calls
 - Tests must not depend on environment variables unless explicitly set in the test
@@ -187,16 +183,12 @@ Strategy: **unit-tests**
 
 ### Test Naming
 
-```
-test_<command>_<scenario>_<expected_result>
-```
+Tests use `test()` from `node:test`. The name is a plain sentence that states the scenario and the expected outcome,
+for example in `tests/digest.test.ts` and `tests/scanner.test.ts`:
 
-Examples:
-
-```
-test_run_missing_required_arg_exits_2
-test_config_set_invalid_key_prints_error
-test_version_outputs_json_when_requested
+```ts
+test("digest should not crash when no insights are extracted", () => {
+test("scanner should filter by days back", async () => {
 ```
 
 ## Architecture Decision Records (ADRs)

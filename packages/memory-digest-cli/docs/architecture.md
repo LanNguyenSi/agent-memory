@@ -3,7 +3,7 @@
 ## Overview
 
 memory-digest-cli is a CLI tool implemented in **typescript** using the **commander** framework.
-Each subcommand is registered by its own module under `src/commands/`; `generate` calls the
+Each top-level subcommand is registered by its own module under `src/commands/`; `generate` calls the
 scanning, extraction and digest modules under `src/scanner/`, `src/extractor/` and `src/digest/`.
 
 ## Principles

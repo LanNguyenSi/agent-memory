@@ -596,7 +596,7 @@ Unlike the `memory` entry, `source` here is an **absolute path outside
 `rootDir`** (`~/.harness/machine-state`, not anywhere under the Claude Code
 memory directory), pointing at a per-machine directory into which a producer
 outside this package drops this machine's `<profile>.json`. agent-memory-sync
-neither writes nor reads the content of these files; it only syncs them.
+does not produce or interpret these files; it only syncs them like any other file.
 `resolveWorkspacePath` in `src/memory-sync/config.ts`
 treats an absolute `source` as-is instead of resolving it against `rootDir`,
 so this entry syncs on its own schedule independent of the memory tree; both
