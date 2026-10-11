@@ -119,11 +119,15 @@ The config loader lives in `src/config/loader.ts`. It is responsible for:
 - Locating the config file (respects `--config`, `AGENT_MEMORY_SYNC_CONFIG` and `XDG_CONFIG_HOME`)
 - Parsing the JSON file and normalizing its keys
 - Merging environment variable overrides
-- Returning a validated config object to each command
+- Returning a validated run config to `run`, `watch` and `restore`
+- Reading, writing and removing the config file for `config get`, `set` and `reset`
 
-Each command calls `loadConfig` from `src/config/loader.ts` in its action handler; `run`, `watch` and `restore` then
-pass the result and their CLI values to `resolveRunConfig`. The loader does not depend on any command module, so
-`tests/unit/env-config.test.ts` calls `loadConfig` and `resolveRunConfig` directly.
+`run`, `watch`, `restore` and `config show` call `loadConfig` from `src/config/loader.ts` in their action handlers;
+`run`, `watch` and `restore` then pass the loaded config and their CLI values to `resolveRunConfig`. `config get`,
+`set` and `reset` do not call `loadConfig`: they read or write the file through `readPersistedConfig`,
+`writePersistedConfig` and `resetPersistedConfig`, and `readPersistedConfig` returns empty settings for a missing file.
+The loader does not depend on any command module, so `tests/unit/env-config.test.ts` calls `loadConfig` and
+`resolveRunConfig` directly.
 
 Config file path resolution order:
 

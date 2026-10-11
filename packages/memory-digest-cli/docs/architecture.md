@@ -3,12 +3,13 @@
 ## Overview
 
 memory-digest-cli is a CLI tool implemented in **typescript** using the **commander** framework.
-It follows a command-based architecture where each subcommand is an isolated unit with its own
-argument parsing, validation, and execution logic.
+Each subcommand is registered by its own module under `src/commands/`; `generate` calls the
+scanning, extraction and digest modules under `src/scanner/`, `src/extractor/` and `src/digest/`.
 
 ## Principles
 
-1. **Single responsibility per command**: Each command file owns one subcommand and nothing else.
+1. **One module per top-level subcommand**: `run`, `generate` and `config` each live in their own file under
+   `src/commands/`; `config.ts` also registers its `show` subcommand.
 2. **Fail fast with clear messages**: Validate inputs at parse time; emit actionable error messages to stderr.
 3. **Exit codes are part of the interface**: Always exit with a meaningful code (see Exit Codes below).
 4. **Stdout for data, stderr for diagnostics**: Program output goes to stdout; logs, warnings, and errors go to stderr.
@@ -25,7 +26,7 @@ argument parsing, validation, and execution logic.
 ```
 memory-digest-cli/
 ├── src/
-│   ├── commands/         # One module per subcommand
+│   ├── commands/         # One module per top-level subcommand
 │   │   ├── run.ts
 │   │   ├── generate.ts
 │   │   └── config.ts
@@ -90,10 +91,10 @@ The config loader lives in `src/config/loader.ts`. It is responsible for:
   then `~/.config`)
 - Parsing the JSON file and casting it to `Partial<CliConfig>` (no runtime schema validation)
 - Merging the parsed file over `DEFAULT_CONFIG`
-- Returning a `LoadedConfig` (`path` and `settings`) to each command
+- Returning a `LoadedConfig` (`path` and `settings`) to its caller
 
-Commands receive config as a parameter; they do not read it directly. This keeps commands
-testable without touching the filesystem.
+`run` and `config show` call `loadConfig` from `src/config/loader.ts` in their action handlers;
+`generate` reads no config.
 
 Config file path resolution order:
 
