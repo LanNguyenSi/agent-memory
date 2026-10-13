@@ -8,6 +8,13 @@ import {
   formatDigestJSON,
 } from "../digest/generator.js";
 
+export function parsePositiveInt(name: string, value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(`--${name} must be a positive integer, got "${value}"`);
+  }
+  return parseInt(value, 10);
+}
+
 export function registerGenerateCommand(program: Command) {
   program
     .command("generate")
@@ -22,52 +29,50 @@ export function registerGenerateCommand(program: Command) {
     .option("--recursive", "Scan subdirectories recursively", false)
     .option("--json", "Output in JSON format", false)
     .action(async (options) => {
-      try {
-        // Scan memory files
-        console.error(`Scanning ${options.dir}...`);
-        const scanResult = await scanMemoryFiles({
-          directory: options.dir,
-          daysBack: parseInt(options.days),
-          recursive: options.recursive,
-        });
+      const daysBack = parsePositiveInt("days", options.days);
+      const maxInsights = parsePositiveInt("max", options.max);
 
-        console.error(
-          `Found ${scanResult.totalMatched} files (scanned ${scanResult.totalScanned})`,
-        );
+      // Scan memory files
+      console.error(`Scanning ${options.dir}...`);
+      const scanResult = await scanMemoryFiles({
+        directory: options.dir,
+        daysBack,
+        recursive: options.recursive,
+      });
 
-        if (scanResult.errors.length > 0) {
-          console.error(`Warnings: ${scanResult.errors.length}`);
-          for (const error of scanResult.errors) {
-            console.error(`  - ${error}`);
-          }
+      console.error(
+        `Found ${scanResult.totalMatched} files (scanned ${scanResult.totalScanned})`,
+      );
+
+      if (scanResult.errors.length > 0) {
+        console.error(`Warnings: ${scanResult.errors.length}`);
+        for (const error of scanResult.errors) {
+          console.error(`  - ${error}`);
         }
+      }
 
-        // Extract insights
-        console.error("Extracting insights...");
-        const extractionResult = extractInsights(scanResult.files);
-        console.error(`Extracted ${extractionResult.totalExtracted} insights`);
+      // Extract insights
+      console.error("Extracting insights...");
+      const extractionResult = extractInsights(scanResult.files);
+      console.error(`Extracted ${extractionResult.totalExtracted} insights`);
 
-        // Generate digest
-        console.error("Generating digest...");
-        const digest = generateDigest(extractionResult.insights, {
-          maxInsights: parseInt(options.max),
-        });
+      // Generate digest
+      console.error("Generating digest...");
+      const digest = generateDigest(extractionResult.insights, {
+        maxInsights,
+      });
 
-        // Format output
-        const output = options.json
-          ? formatDigestJSON(digest)
-          : formatDigestMarkdown(digest);
+      // Format output
+      const output = options.json
+        ? formatDigestJSON(digest)
+        : formatDigestMarkdown(digest);
 
-        // Write or print
-        if (options.output) {
-          await fs.writeFile(options.output, output, "utf-8");
-          console.error(`Digest written to ${options.output}`);
-        } else {
-          console.log(output);
-        }
-      } catch (error: any) {
-        console.error(`Error: ${error.message}`);
-        process.exit(1);
+      // Write or print
+      if (options.output) {
+        await fs.writeFile(options.output, output, "utf-8");
+        console.error(`Digest written to ${options.output}`);
+      } else {
+        console.log(output);
       }
     });
 }

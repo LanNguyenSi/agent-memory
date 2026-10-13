@@ -2,6 +2,30 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-13T19:30:31Z, re-pointed every citation into `run.ts`, `watch.ts` and
+  `restore.ts` after the output-flag handling of the three commands moved
+  into the shared `src/commands/cli-options.ts` (`colorFromCli`,
+  `outputOverrides`). `config-resolution.md` now cites that helper for
+  `--output`, `--verbose`, `--quiet` and `--no-color` instead of the
+  per-command `getOptionValueSource` sites, and lists it as a source.
+  `stopped-run-runbook.md` exit-code text re-checked and unchanged. Verified
+  with `okf-kit check --json --require-anchors packages/agent-memory-sync/docs/okf`.
+
+- 2026-10-13T16:28:37Z, re-pointed and corrected after the CLI behaviour pass on `run`,
+  `watch`, `restore` and the config loader: every citation into
+  `restore.ts`, `run.ts`, `watch.ts` and `loader.ts` moved to its current
+  lines. `config-resolution.md` now states the merge order defaults, config
+  file, environment, CLI (environment beats the config file), that
+  `--output`, `--verbose`, `--quiet`, `--no-color` and the `[profile]`
+  positional carry no commander default and so only override when passed,
+  the `NO_COLOR` and non-TTY rule in `applyColor`, and the exit-3 report of
+  invalid JSON; `overview.md` lists invalid JSON under exit 3. The stopped-run
+  runbook's exit-code text (5, 6, 7, 8, 9, 12, 13) is unchanged and still
+  true. Verified with
+  `okf-kit check --json --require-anchors packages/agent-memory-sync/docs/okf`
+  (no errors, no warnings) and `npm run format:check` in
+  `packages/agent-memory-sync` (passes).
+
 - 2026-10-11T16:31:20Z, corrected and re-verified against the current sources:
   `destructive-write-safety-chain.md` states that the push threshold
   applies per snapshot, so a run replaying queued snapshots can publish more

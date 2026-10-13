@@ -16,9 +16,9 @@ repeat those docs.
 ## Modules
 
 - [Configuration resolution and precedence](config-resolution.md): config
-  file path order, the merge order of defaults, environment, config file
-  and CLI options, and the config-file and environment values that the
-  CLI's own option defaults replace.
+  file path order, the merge order of defaults, config file, environment
+  and CLI options, and the options whose CLI value only applies when the
+  flag is passed.
 - [Offline queue, replay and escalation, and the state-directory lock](offline-queue-and-lock.md):
   when a push queues, how the queue is replayed and when it escalates to
   exit 6, and how `lock.json` serialises `run`, `watch` and `restore`.

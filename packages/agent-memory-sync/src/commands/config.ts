@@ -16,7 +16,7 @@ function registerConfigCommand(program: import("commander").Command): void {
 
   config
     .command("show")
-    .description("Print the resolved configuration")
+    .description("Print the config file path and its persisted settings")
     .option("--config <path>", "Override config file path")
     .option("-o, --output <format>", "Output format: text, json, yaml", "json")
     .action(async (options: { config?: string; output: "text" | "json" | "yaml" }) => {

@@ -8,6 +8,12 @@
 // Captures process.stdout.write / process.stderr.write in place, mirroring
 // tests/unit/reachability-check-command-env.test.ts's pattern, so real
 // output can be asserted without spawning a subprocess.
+//
+// applyColor now requires THREE things for a message to be colored: options
+// .color true, NO_COLOR unset/empty, and process.stderr.isTTY true. The
+// test runner's stderr is not a TTY and NO_COLOR may or may not be set in the
+// environment, so the color tests drive that state explicitly via
+// withStderrTTY and every touched variable is saved/restored in afterEach.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -44,6 +50,32 @@ function captureStderr(fn: () => void): string {
   } finally {
     process.stderr.write = original;
   }
+}
+
+// Runs `fn` with process.stderr.isTTY forced to `isTTY` and NO_COLOR removed
+// (color requires it unset/empty), capturing stderr. Restore happens in the
+// afterEach below, which re-asserts the pre-test environment.
+let savedNoColor: string | undefined;
+let savedIsTTY = false;
+
+test.beforeEach(() => {
+  savedNoColor = process.env.NO_COLOR;
+  savedIsTTY = Boolean(process.stderr.isTTY);
+});
+
+test.afterEach(() => {
+  if (savedNoColor === undefined) {
+    delete process.env.NO_COLOR;
+  } else {
+    process.env.NO_COLOR = savedNoColor;
+  }
+  process.stderr.isTTY = savedIsTTY;
+});
+
+function withStderrTTY(isTTY: boolean, fn: () => void): string {
+  process.stderr.isTTY = isTTY;
+  delete process.env.NO_COLOR;
+  return captureStderr(fn);
 }
 
 // ─── writeResult ─────────────────────────────────────────────────────────────
@@ -83,13 +115,26 @@ test("writeInfo: non-verbose suppresses output even when quiet is false", () => 
 });
 
 test("writeInfo: quiet=false, verbose=true, color=false writes the plain message", () => {
-  const out = captureStderr(() => writeInfo("hello", { color: false, quiet: false, verbose: true }));
+  const out = withStderrTTY(true, () => writeInfo("hello", { color: false, quiet: false, verbose: true }));
   assert.equal(out, "hello\n");
 });
 
-test("writeInfo: quiet=false, verbose=true, color=true wraps the message in cyan ANSI codes", () => {
-  const out = captureStderr(() => writeInfo("hello", { color: true, quiet: false, verbose: true }));
-  assert.equal(out, "[36mhello[0m\n");
+test("writeInfo: TTY, NO_COLOR unset, color=true wraps the message in cyan ANSI codes", () => {
+  const out = withStderrTTY(true, () => writeInfo("hello", { color: true, quiet: false, verbose: true }));
+  assert.equal(out, "\u001b[36mhello\u001b[0m\n");
+});
+
+test("writeInfo: NO_COLOR=1 gives uncolored output even on a TTY with color=true", () => {
+  const out = withStderrTTY(true, () => {
+    process.env.NO_COLOR = "1";
+    writeInfo("hello", { color: true, quiet: false, verbose: true });
+  });
+  assert.equal(out, "hello\n");
+});
+
+test("writeInfo: a non-TTY stderr gives uncolored output even with color=true", () => {
+  const out = withStderrTTY(false, () => writeInfo("hello", { color: true, quiet: false, verbose: true }));
+  assert.equal(out, "hello\n");
 });
 
 // ─── writeWarning ─────────────────────────────────────────────────────────────
@@ -100,13 +145,13 @@ test("writeWarning: quiet suppresses output", () => {
 });
 
 test("writeWarning: quiet=false, color=false writes a plain 'warning: ' prefixed message", () => {
-  const out = captureStderr(() => writeWarning("careful", { color: false, quiet: false, verbose: false }));
+  const out = withStderrTTY(true, () => writeWarning("careful", { color: false, quiet: false, verbose: false }));
   assert.equal(out, "warning: careful\n");
 });
 
-test("writeWarning: quiet=false, color=true wraps the prefixed message in yellow ANSI codes", () => {
-  const out = captureStderr(() => writeWarning("careful", { color: true, quiet: false, verbose: false }));
-  assert.equal(out, "[33mwarning: careful[0m\n");
+test("writeWarning: TTY, NO_COLOR unset, color=true wraps the prefixed message in yellow ANSI codes", () => {
+  const out = withStderrTTY(true, () => writeWarning("careful", { color: true, quiet: false, verbose: false }));
+  assert.equal(out, "\u001b[33mwarning: careful\u001b[0m\n");
 });
 
 // ─── writeDryRun ───────────────────────────────────────────────────────────────
@@ -117,11 +162,11 @@ test("writeDryRun: quiet suppresses output", () => {
 });
 
 test("writeDryRun: quiet=false, color=false writes a plain '[dry-run] ' prefixed message", () => {
-  const out = captureStderr(() => writeDryRun("would do X", { color: false, quiet: false, verbose: false }));
+  const out = withStderrTTY(true, () => writeDryRun("would do X", { color: false, quiet: false, verbose: false }));
   assert.equal(out, "[dry-run] would do X\n");
 });
 
-test("writeDryRun: quiet=false, color=true wraps the prefixed message in cyan ANSI codes", () => {
-  const out = captureStderr(() => writeDryRun("would do X", { color: true, quiet: false, verbose: false }));
-  assert.equal(out, "[36m[dry-run] would do X[0m\n");
+test("writeDryRun: TTY, NO_COLOR unset, color=true wraps the prefixed message in cyan ANSI codes", () => {
+  const out = withStderrTTY(true, () => writeDryRun("would do X", { color: true, quiet: false, verbose: false }));
+  assert.equal(out, "\u001b[36m[dry-run] would do X\u001b[0m\n");
 });

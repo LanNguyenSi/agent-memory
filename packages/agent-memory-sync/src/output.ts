@@ -46,8 +46,13 @@ function writeDryRun(message: string, options: OutputOptions): void {
   process.stderr.write(`${applyColor(`[dry-run] ${message}`, "cyan", options)}\n`);
 }
 
+// Color applies only when all three hold: the resolved config says color is
+// on (CLI --no-color, config file or AGENT_MEMORY_SYNC_COLOR), the NO_COLOR
+// environment variable is unset or empty, and stderr is an interactive
+// terminal. Decision lives here, in one place, so every writer above honors
+// it and a piped/redirected stderr never carries escape codes.
 function applyColor(message: string, color: "red" | "yellow" | "green" | "cyan", options: OutputOptions): string {
-  if (!options.color) {
+  if (!options.color || process.env.NO_COLOR || !process.stderr.isTTY) {
     return message;
   }
 

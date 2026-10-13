@@ -10,7 +10,7 @@ scanning, extraction and digest modules under `src/scanner/`, `src/extractor/` a
 
 1. **One module per top-level subcommand**: `run`, `generate` and `config` each live in their own file under
    `src/commands/`; `config.ts` also registers its `show` subcommand.
-2. **Fail fast with clear messages**: Validate inputs at parse time; emit actionable error messages to stderr.
+2. **Fail fast with clear messages**: Validate inputs at the start of the command, before any work; emit actionable error messages to stderr.
 3. **Exit codes are part of the interface**: Always exit with a meaningful code (see Exit Codes below).
 4. **Stdout for data, stderr for diagnostics**: Program output goes to stdout; logs, warnings, and errors go to stderr.
 5. **Composable with other tools**: Structured output where a command produces structured data (`run --output json`, `generate --json`).
@@ -124,18 +124,19 @@ Only two exit codes are actually used: `0` (implicit success) and `1`.
 
 #### Exit Code Reference
 
-| Code | Meaning                        | Where                                                                                                                                  |
-| ---- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | Success                        | Implicit (no error thrown/exit called)                                                                                                 |
-| `1`  | Unhandled error in any command | `main.ts`'s `parseAsync().catch()` sets `process.exitCode = 1`; `generate`'s action calls `process.exit(1)` from its own `catch` block |
+| Code | Meaning                        | Where                                                                                                                                                    |
+| ---- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success                        | Implicit (no error thrown/exit called)                                                                                                                   |
+| `1`  | Unhandled error in any command | `main.ts`'s `parseAsync().catch()` sets `process.exitCode = 1` for every command, including `generate`, whose action rethrows instead of exiting locally |
 
-`run` and `config show` have no `catch` of their own and rely on the top-level handler in
-`main.ts`. `generate` catches locally and calls `process.exit(1)` directly instead of raising.
+`run`, `config show` and `generate` have no `catch` of their own: errors raised anywhere in
+their actions propagate to the top-level handler in `main.ts`, which prints the message and
+sets `process.exitCode = 1`.
 Exit codes `2`-`5` are not implemented; there is no dedicated usage-error, config-error,
 runtime-error, or not-found code.
 
-Error messages are written with a plain `error: <message>` (in `main.ts`) or `Error:
-<message>` (in `generate`) prefix; there is no "how to fix it" suffix convention.
+Error messages are written with a plain `error: <message>` prefix (in `main.ts`); there is no
+"how to fix it" suffix convention.
 
 ### 5. Logging and Verbosity
 
@@ -172,7 +173,8 @@ Approach: a mix of direct unit calls and subprocess integration tests.
   directly with controlled inputs.
 - `generate.test.ts` mostly drives `registerGenerateCommand`'s parsed options by spying on the
   action handler, plus a few tests that run the real action against a temp directory (writing
-  files, checking `process.exit(1)` on a write failure) without spawning a subprocess.
+  files, checking that a write failure rejects the action's promise, which `main.ts` turns into
+  exit code 1) without spawning a subprocess.
 - `run.test.ts` spawns the CLI as a real subprocess via `execFileSync` (running `src/main.ts`
   through `tsx`) and asserts on its stdout/exit behavior for both the `run` and `config show`
   commands; it is the closest thing to a dedicated test file for `config`, which has no

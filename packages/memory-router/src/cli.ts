@@ -316,7 +316,10 @@ Commands:
   index <dir>
     Embed each memory file and store a sqlite-vec index at
     <dir>/.memory-router/index.sqlite. Required for the Confidence Gate
-    semantic matches. Env: OPENAI_API_KEY (required),
+    semantic matches. Embedding provider: OpenAI (OPENAI_API_KEY), or a
+    locally running Ollama: with no OPENAI_API_KEY and no explicit
+    MEMORY_ROUTER_EMBED_PROVIDER, Ollama is used, and an unreachable
+    Ollama fails at the embedding call. Env: OPENAI_API_KEY,
     MEMORY_ROUTER_EMBED_MODEL (default: text-embedding-3-small).
 
   lint <dir> [--drift] [--unknown-topics] [--conflicts] [--semantic] [--fix] [--json]
@@ -366,8 +369,11 @@ Commands:
     score, and description.
     Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR env. The
     sync gates (topic, tool) always run; --semantic also runs the async
-    confidence gate (requires OPENAI_API_KEY; degrades to a stderr
-    warning when missing or on API failure).
+    confidence gate (embeds via OpenAI when OPENAI_API_KEY is set, or via
+    a locally running Ollama when neither OPENAI_API_KEY nor an explicit
+    MEMORY_ROUTER_EMBED_PROVIDER is set, where an unreachable Ollama fails
+    at the embedding call; degrades to a stderr warning when neither is
+    available or on API failure).
     --max-hits caps how many matches are printed (default 5).
     --json emits a machine-readable report on stdout.
 
@@ -393,7 +399,10 @@ Commands:
     corpus returns zero hits; it is scored separately from — and never
     blended into — the aggregate precision/recall/MRR.
     Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR env (same
-    as 'test'). Without an embedding index and OPENAI_API_KEY the
+    as 'test'). Without an embedding index and a usable embedding provider
+    (OPENAI_API_KEY, or Ollama, used when neither OPENAI_API_KEY nor an
+    explicit MEMORY_ROUTER_EMBED_PROVIDER is set; an unreachable Ollama
+    fails at the embedding call) the
     confidence gate stays silent; the report states this explicitly via
     "semantic path: inactive" rather than passing it off as measured.
     --json emits a machine-readable report on stdout; schema:

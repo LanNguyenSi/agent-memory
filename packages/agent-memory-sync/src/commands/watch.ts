@@ -15,15 +15,19 @@ const {
   resolveArmTimeoutMs,
   trackMissingPaths
 } = require("./watch-arming");
+const { outputOverrides } = require("./cli-options");
 
 type OutputFormat = "text" | "json" | "yaml";
 
 interface WatchOptions {
   config?: string;
-  output: OutputFormat;
-  verbose: boolean;
-  quiet: boolean;
-  color: boolean;
+  // No commander defaults on output/verbose/quiet (see the same note in
+  // run.ts): an omitted flag stays undefined so the config file/env value
+  // applies. color is only set when --no-color was actually passed.
+  output?: OutputFormat;
+  verbose?: boolean;
+  quiet?: boolean;
+  color?: boolean;
   rootDir?: string;
   remote?: string;
   branch?: string;
@@ -49,7 +53,7 @@ function registerWatchCommand(program: import("commander").Command): void {
   program
     .command("watch")
     .description("Watch the local workspace for changes and commit + push a snapshot per debounce window")
-    .argument("[profile]", "Configuration profile to execute", "default")
+    .argument("[profile]", "Configuration profile to execute")
     .option("--config <path>", "Override config file path")
     .option("--root-dir <path>", "Override the local workspace root")
     .option("--remote <url>", "Override the remote Git repository URL")
@@ -72,19 +76,16 @@ function registerWatchCommand(program: import("commander").Command): void {
         "emptied to zero bytes, is still refused",
       false
     )
-    .option("-o, --output <format>", "Output format: text, json, yaml", "text")
-    .option("-v, --verbose", "Enable verbose diagnostics", false)
-    .option("-q, --quiet", "Suppress non-error diagnostics", false)
+    .option("-o, --output <format>", "Output format: text, json, yaml")
+    .option("-v, --verbose", "Enable verbose diagnostics")
+    .option("-q, --quiet", "Suppress non-error diagnostics")
     .option("--no-color", "Disable colored diagnostics")
-    .action(async (profile: string, options: WatchOptions) => {
+    .action(async (profile: string | undefined, options: WatchOptions, command: import("commander").Command) => {
       const loaded = await loadConfig(options.config, { requireExisting: true });
       const runConfig = requireRemoteUrl(
         resolveRunConfig(loaded, {
           profile,
-          outputFormat: options.output,
-          verbose: options.verbose,
-          quiet: options.quiet,
-          color: options.color,
+          ...outputOverrides(command, options),
           rootDir: options.rootDir,
           remoteUrl: options.remote,
           branch: options.branch,

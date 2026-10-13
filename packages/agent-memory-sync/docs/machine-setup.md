@@ -311,7 +311,7 @@ directory, so `"profile"` must equal this machine's own filename there
 visible warning instead) finds no matching owner file and publishes no
 `machine-state`/`frictions` state for that run. Passing it on the command
 line (see the CLI snippets below, and note the CLI's `[profile]` positional
-argument overrides the config file's field, so a mismatched or omitted
+argument overrides the config file's field when given, so a mismatched
 positional is the more common way to trigger this) keeps that filter
 correct as well as the run self-documenting; it is load-bearing for push
 here, just not for `stateDir`/path resolution. See any mac-mini/macbook

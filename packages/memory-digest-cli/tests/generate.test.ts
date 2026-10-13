@@ -300,7 +300,7 @@ test("generate: real action prints the digest to stdout when --output is omitted
   );
 });
 
-test("generate: real action calls process.exit(1) when --output cannot be written", async () => {
+test("generate: real action rejects when --output cannot be written", async () => {
   const { program } = buildProgram();
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "generate-real-exit-"));
   await fs.writeFile(
@@ -309,15 +309,18 @@ test("generate: real action calls process.exit(1) when --output cannot be writte
     "utf-8"
   );
   // Parent directory of the output path does not exist, so fs.writeFile
-  // rejects with ENOENT and the action's catch block must run.
+  // rejects with ENOENT and the action must rethrow; main.ts's
+  // parseAsync().catch() reports it and sets process.exitCode = 1.
   const badOutput = path.join(tmpDir, "does-not-exist-subdir", "out.md");
 
-  const { exitCode, exitCalled } = await withStubbedIO(async () => {
-    await program.parseAsync(["generate", "--dir", tmpDir, "--output", badOutput], {
-      from: "user",
-    });
+  const { exitCalled } = await withStubbedIO(async () => {
+    await assert.rejects(
+      program.parseAsync(["generate", "--dir", tmpDir, "--output", badOutput], {
+        from: "user",
+      }),
+      /ENOENT/,
+    );
   });
 
-  assert.equal(exitCalled, true, "process.exit should have been called");
-  assert.equal(exitCode, 1, "process.exit should be called with code 1");
+  assert.equal(exitCalled, false, "process.exit must no longer be called");
 });

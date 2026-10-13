@@ -62,8 +62,8 @@ Never expose raw exception traces to the user.
 
 - Use color to aid readability, not to convey meaning alone (accessibility)
 - Color applies only to diagnostics on stderr
-- `--no-color` turns it off; `NO_COLOR` and piping do not, because `run`, `watch` and `restore` always pass the color
-  flag's CLI default (see [Output Formatting](architecture.md#3-output-formatting))
+- `--no-color`, `NO_COLOR` and piping stderr all turn it off (see
+  [Output Formatting](architecture.md#3-output-formatting))
 - Suggested palette: red for errors, yellow for warnings, green for success, cyan for labels
 
 ### Progress Indicators

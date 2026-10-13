@@ -1,5 +1,25 @@
 # Bundle log
 
+- 2026-10-13T19:31:28Z, re-pointed the `cli.ts` citations that the earlier re-point had
+  left nine lines short: `gate-composition-and-dedup.md` (`:765-778`,
+  `:765`, `:770`) and `semantic-search-silent-noop.md` (`:769-778`,
+  `:776`, `:582-583`, `:1145-1148`), each now starting on a content
+  line. Claims unchanged. `score-blend-resolver.md` re-verified (the
+  `server.ts` line it cites did not move) and re-stamped with the other two.
+
+- 2026-10-13T16:28:37Z, `cli.ts` gained six lines in the `index` and `test` help text and the
+  `memory_search` MCP tool description and the README's documentation list
+  changed. Re-pointed the `cli.ts` citations in
+  `gate-composition-and-dedup.md` (`test --semantic` at `:762-775`, `:762`,
+  `:767`) and `semantic-search-silent-noop.md` (`:766-775`, `:773`,
+  `:579-580`, `:1142-1145`); claims unchanged, the help and tool
+  descriptions now match the provider/Ollama behaviour the doc already
+  states. Re-verified `score-blend-resolver.md` and
+  `native-deps-and-ci-smoke.md` (no cited line moved); re-stamped all four.
+  `okf-kit check --json --require-anchors packages/memory-router/docs/okf`:
+  0 errors, 100 warnings, all anchor-required (the same count as before this
+  change).
+
 - 2026-10-11T12:43:59Z, docs pass over the package README and `docs/scoring.md`: the
   README's `memory_search` row, Non-Goals, Trust Model wording and a new
   source layout under Development; `scoring.md`'s `memory_search` spelling

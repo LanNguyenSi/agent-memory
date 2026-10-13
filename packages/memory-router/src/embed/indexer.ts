@@ -248,7 +248,7 @@ async function semanticSearch(
     if (queryVec) {
       debug(`query cache hit (size=${store.cacheSize()})`);
     } else {
-      debug(`query cache miss — embedding (size=${store.cacheSize()})`);
+      debug(`query cache miss; embedding (size=${store.cacheSize()})`);
       try {
         [queryVec] = await embedBatch({
           apiKey: cfg.apiKey,
