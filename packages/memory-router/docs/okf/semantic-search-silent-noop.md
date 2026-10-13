@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-10-11T12:43:59Z
+timestamp: 2026-10-13T16:28:37Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -146,9 +146,9 @@ are not on this path: `semanticSearch()` does not call `upsert`.
   (`packages/memory-router/src/embed/index-store.ts:424`, `:453`), is
   written on every call that throws.
 - `memory-router test --semantic`
-  (`packages/memory-router/src/cli.ts:760-769`) catches the throw from
+  (`packages/memory-router/src/cli.ts:766-775`) catches the throw from
   `resolveConfidence`, writes a `warning:` line that also interpolates
-  `String(err)` (`packages/memory-router/src/cli.ts:767`), and prints the
+  `String(err)` (`packages/memory-router/src/cli.ts:773`), and prints the
   sync-only hits.
 - MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:80-92`)
   has no catch in its handler: the error leaves the tool handler.
@@ -161,9 +161,9 @@ writing:
 
 - `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:138-142`),
   run by `memory-router index`
-  (`packages/memory-router/src/cli.ts:573-574`). `runIndex` has no catch;
+  (`packages/memory-router/src/cli.ts:579-580`). `runIndex` has no catch;
   the CLI's top-level handler
-  (`packages/memory-router/src/cli.ts:1136-1139`) prints the error and
+  (`packages/memory-router/src/cli.ts:1142-1145`) prints the error and
   exits non-zero, so a provider or legacy-provenance mismatch fails the
   command with the rebuild command in its text.
 - `lint --conflicts --semantic`

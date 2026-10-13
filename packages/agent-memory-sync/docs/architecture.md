@@ -105,14 +105,14 @@ Config is loaded in layers, with later layers overriding earlier ones:
 
 ```
 1. Compiled-in defaults
-2. Environment variables (AGENT_MEMORY_SYNC_*)
-3. Config file
+2. Config file
+3. Environment variables (AGENT_MEMORY_SYNC_*)
 4. CLI flags passed at runtime
 ```
 
-An environment variable therefore takes effect only for a key the config file does not set. `run`, `watch` and
-`restore` always pass `--output`, `--verbose`, `--quiet` and the color flag as CLI values (their CLI defaults when not
-given), so the matching config keys and environment variables have no effect on these commands. The README's
+An environment variable therefore overrides the config file for the key it names. `run`, `watch` and `restore` pass
+`--output`, `--verbose`, `--quiet` and `--no-color` only when the flag is actually given, so an omitted flag leaves the
+decision to the matching config keys and environment variables. The README's
 [Configuration](../README.md#configuration) section lists every key with its default and environment variable.
 
 The config loader lives in `src/config/loader.ts`. It is responsible for:
@@ -145,8 +145,8 @@ Commands write their result through a shared output layer (`src/output.ts`):
 - **`output json`**: machine-readable JSON
 - **`output yaml`**: machine-readable YAML
 
-Color applies only to the diagnostics on stderr. They are colored unless `--no-color` is passed; `NO_COLOR` and piping
-do not turn color off, because `run`, `watch` and `restore` always pass the color flag's CLI default.
+Color applies only to the diagnostics on stderr. They are colored only when the resolved `color` is on, `NO_COLOR` is
+unset or empty, and stderr is a terminal, so `NO_COLOR`, `--no-color` and piping stderr all turn it off.
 
 ### 4. Error Handling and Exit Codes {#exit-codes}
 

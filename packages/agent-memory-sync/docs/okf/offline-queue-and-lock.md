@@ -3,7 +3,7 @@ type: module
 title: Offline queue, replay and escalation, and the state-directory lock
 description: How push queues a snapshot when the hub is unreachable, how the next successful push replays the queue, when a growing queue escalates to exit 6, and how the advisory lock in stateDir/lock.json serialises run, watch and restore (exit 8).
 tags: [queue, replay, escalation, lock, offline, watch, schedule]
-timestamp: 2026-10-11T12:47:47Z
+timestamp: 2026-10-13T16:28:37Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/push.ts
   - packages/agent-memory-sync/src/memory-sync/state-store.ts
@@ -105,13 +105,13 @@ How each command handles exit 6:
 - A single `run` exits 6 at once.
 - `run --schedule` records the error, keeps ticking, and exits 6 after the
   last tick, once the result of every completed tick has been written
-  (`packages/agent-memory-sync/src/commands/run.ts:182-186#"queueEscalationError = error;"`,
-  `packages/agent-memory-sync/src/commands/run.ts:225-226#"throw queueEscalationError;"`).
+  (`packages/agent-memory-sync/src/commands/run.ts:171-175#"queueEscalationError = error;"`,
+  `packages/agent-memory-sync/src/commands/run.ts:214-215#"throw queueEscalationError;"`).
 - `watch` logs a queued tick as an info line and counts it toward
   `--max-runs`
-  (`packages/agent-memory-sync/src/commands/watch.ts:194-196#"watch tick queued locally instead of pushing"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:200-202#"watch tick queued locally instead of pushing"`).
   An escalation is not a guard refusal, so it stops the watcher with exit 6
-  (`packages/agent-memory-sync/src/commands/watch.ts:280-281#"handleSnapshotError(error);"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:286-287#"handleSnapshotError(error);"`).
 
 ## The state-directory lock, exit 8
 
@@ -143,18 +143,18 @@ Who takes the lock, and when:
 - `run` takes it per tick, before anything reads the workspace or the
   state directory, and releases it before waiting for the next scheduled
   tick
-  (`packages/agent-memory-sync/src/commands/run.ts:147-151#"staleMs: runConfig.lockStaleMs"`,
-  `packages/agent-memory-sync/src/commands/run.ts:198-200#"lock.release();"`).
+  (`packages/agent-memory-sync/src/commands/run.ts:136-140#"staleMs: runConfig.lockStaleMs"`,
+  `packages/agent-memory-sync/src/commands/run.ts:187-189#"lock.release();"`).
   A locked `run` exits 8.
 - `watch` takes it per tick before it consumes the pending changes; a
   locked tick logs a warning, keeps the changes pending and schedules
   itself again
-  (`packages/agent-memory-sync/src/commands/watch.ts:250-258#"scheduleFlush();"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:256-264#"scheduleFlush();"`).
   The shutdown flush takes it too, and a locked flush leaves the changes on
   disk without failing the shutdown
-  (`packages/agent-memory-sync/src/commands/watch.ts:349-356#"watch shutdown flush deferred"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:355-362#"watch shutdown flush deferred"`).
 - `restore` takes it for its whole run
-  (`packages/agent-memory-sync/src/commands/restore.ts:159-163#"staleMs: runConfig.lockStaleMs"`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:165-169#"staleMs: runConfig.lockStaleMs"`).
 - The `config` subcommands do not take it.
 
 The lock is what keeps one job from removing another job's working copy

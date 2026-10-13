@@ -3,7 +3,7 @@ type: overview
 title: agent-memory-sync overview
 description: Orientation for the agent-memory-sync package. The four commands, the state directory they share, the order one sync tick runs in, and the exit codes, with pointers to the docs that cover each mechanism in depth.
 tags: [overview, agent-memory-sync, cli, state-dir, exit-codes]
-timestamp: 2026-10-11T16:31:20Z
+timestamp: 2026-10-13T16:28:37Z
 sources:
   - packages/agent-memory-sync/src/main.ts
   - packages/agent-memory-sync/src/errors.ts
@@ -44,11 +44,11 @@ not repeat them.
 - `run` executes one mode per tick through `executeMode`: `push` calls
   `performPush`, `pull` calls `performPull`, and `sync` runs the pull and
   then the push
-  (`packages/agent-memory-sync/src/commands/run.ts:252-262#"const pushResult = await performPush(runConfig, options);"`).
+  (`packages/agent-memory-sync/src/commands/run.ts:271-281#"const pushResult = await performPush(runConfig, options);"`).
   With `--schedule` it repeats ticks on a five-field cron expression.
 - `watch` never pulls. Each debounce window becomes one `performPush` call
   with its own working-copy label `watch`
-  (`packages/agent-memory-sync/src/commands/watch.ts:187-192#"allowMassDelete: options.allowMassDelete"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:193-198#"allowMassDelete: options.allowMassDelete"`).
 - `restore` writes files back from a hub commit with no pre-apply
   snapshot, or replaces a whole sync destination from a commit or from a
   local pre-apply snapshot. `config` reads and writes the config file only.
@@ -56,8 +56,8 @@ not repeat them.
 ## Key modules
 
 - [Configuration resolution](config-resolution.md): where each setting
-  comes from, in which order, and which config-file keys the CLI's own
-  option defaults hide.
+  comes from, in which order (defaults, config file, environment, CLI), and
+  which options carry no default of their own.
 - [Base snapshot lifecycle](base-snapshot-lifecycle.md): every reader and
   writer of `stateDir/base`, and the per-path rule push advances it by.
 - [Destructive-write safety chain](destructive-write-safety-chain.md): the
@@ -94,7 +94,7 @@ Every refusal is a `CliError` subclass with its own default exit code
 | ---- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | any error without its own code                                         | Unclassified failure.                                                                                                                                                                                                           |
 | 2    | `CliError(..., 2)`                                                     | Usage error, for example `--accept-mass-delete` combined with `--allow-mass-delete`.                                                                                                                                            |
-| 3    | `CliError(..., 3)`                                                     | Configuration error: missing `remoteUrl`, an invalid key or value, a missing explicit config file.                                                                                                                              |
+| 3    | `CliError(..., 3)`                                                     | Configuration error: missing `remoteUrl`, an invalid key or value, invalid JSON, a missing explicit config file.                                                                                                                |
 | 4    | `RemoteUnavailableError`, or a generic git failure                     | `RemoteUnavailableError` comes only from `ls-remote` and `push`; every other failed git command is a plain `CliError` with the same code (`packages/agent-memory-sync/src/memory-sync/git-client.ts:381#"git command failed"`). |
 | 5    | `MassDeleteRefusedError`                                               | A push plan deletes more than the mass-delete guard allows.                                                                                                                                                                     |
 | 6    | `RemoteQueueEscalationError`                                           | The offline queue has not drained for longer than the escalation threshold.                                                                                                                                                     |

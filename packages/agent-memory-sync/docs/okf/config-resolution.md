@@ -1,9 +1,9 @@
 ---
 type: module
 title: Configuration resolution and precedence
-description: How resolveRunConfig builds the run configuration. Config file path order, the merge order of defaults, environment, config file and CLI options, the settings derived afterwards, and which config-file and environment values the CLI's own option defaults hide.
+description: How resolveRunConfig builds the run configuration. Config file path order, the merge order of defaults, config file, environment and CLI options, the settings derived afterwards, which CLI options carry no default, and how invalid JSON is reported.
 tags: [config, precedence, environment, cli, defaults]
-timestamp: 2026-10-11T16:31:20Z
+timestamp: 2026-10-13T16:28:37Z
 sources:
   - packages/agent-memory-sync/src/config/loader.ts
   - packages/agent-memory-sync/src/commands/run.ts
@@ -28,7 +28,7 @@ precedence surprises below come from.
 - `loadConfig`, `resolveRunConfig` and `requireRemoteUrl`, called in that
   order by `run`, `watch` and `restore`; `restore --from-snapshot` skips
   `requireRemoteUrl`, since it reads only the state directory
-  (`packages/agent-memory-sync/src/commands/restore.ts:127-129#"requireRemoteUrl(resolved);"`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:133-135#"requireRemoteUrl(resolved);"`).
 - `readPersistedConfig`, `writePersistedConfig`, `getConfigValue`,
   `setConfigValue`, used by the `config` subcommands.
 
@@ -36,7 +36,7 @@ precedence surprises below come from.
 
 `resolveConfigPath` takes `--config`, then `AGENT_MEMORY_SYNC_CONFIG`, then
 the default path
-(`packages/agent-memory-sync/src/config/loader.ts:314-318#"path.resolve(candidate)"`),
+(`packages/agent-memory-sync/src/config/loader.ts:330-334#"path.resolve(candidate)"`),
 which is `$XDG_CONFIG_HOME/agent-memory-sync/config.json`, or
 `~/.config/agent-memory-sync/config.json` when `XDG_CONFIG_HOME` is unset
 (`packages/agent-memory-sync/src/config/loader.ts:149-153#"config.json"`).
@@ -47,11 +47,11 @@ A missing file yields empty settings, except that `run`, `watch` and
 
 The file's keys are accepted in camelCase or snake_case, and `files` is an
 alias for `syncPaths`
-(`packages/agent-memory-sync/src/config/loader.ts:469-471#"files:"`). Any
+(`packages/agent-memory-sync/src/config/loader.ts:487-489#"files:"`). Any
 other key is dropped without a message
-(`packages/agent-memory-sync/src/config/loader.ts:488-492#"continue;"`).
+(`packages/agent-memory-sync/src/config/loader.ts:506-510#"continue;"`).
 `mode` is not a config key at all
-(`packages/agent-memory-sync/src/config/loader.ts:289-312#"snapshotGenerations"`);
+(`packages/agent-memory-sync/src/config/loader.ts:305-328#"snapshotGenerations"`);
 it only comes from `run --mode`.
 
 ## Merge order
@@ -60,59 +60,75 @@ it only comes from `run --mode`.
 
 1. `DEFAULTS`
    (`packages/agent-memory-sync/src/config/loader.ts:129-147#"snapshotGenerations: DEFAULT_SNAPSHOT_GENERATIONS"`);
-2. the environment, `readEnvConfig()`;
-3. the config file's settings;
+2. the config file's settings;
+3. the environment, `readEnvConfig()`;
 4. the command's CLI overrides, after `dropUndefined` removes keys whose
    value is `undefined`
-   (`packages/agent-memory-sync/src/config/loader.ts:194-201#"as RunConfig"`).
+   (`packages/agent-memory-sync/src/config/loader.ts:208-215#"as RunConfig"`).
 
-So a value in the config file overrides the same setting from an
-environment variable: with `branch` in the file and
-`AGENT_MEMORY_SYNC_BRANCH` set, the file's branch is used. An environment
-variable only takes effect for a key the config file does not set.
+So an environment variable overrides the same setting from the config
+file: with `branch` in the file and `AGENT_MEMORY_SYNC_BRANCH` set, the
+environment's branch is used. This is the documented order, CLI flags >
+environment > config file > defaults.
 
 `dropUndefined` removes `undefined` and nothing else
-(`packages/agent-memory-sync/src/config/loader.ts:701-705#"as Partial<T>"`):
+(`packages/agent-memory-sync/src/config/loader.ts:726-730#"as Partial<T>"`):
 an override that is `false`, `"text"` or `"default"` replaces whatever the
-lower layers said.
+lower layers said, which is why an option must stay `undefined` when its
+flag was not passed.
 
-## CLI option defaults that hide config and environment values
+## CLI options that carry no default
 
-Commander fills an option's declared default when the flag is absent, so
-these overrides are never `undefined`:
+`--output`, `--verbose`, `--quiet` and the `[profile]` positional of `run`
+and `watch` are declared without a commander default, so an omitted flag
+reaches `resolveRunConfig` as `undefined` and the config file or
+environment value applies:
 
-- `run` declares `[profile]` with default `default`, `--mode` with default
-  `sync`
-  (`packages/agent-memory-sync/src/commands/run.ts:38-40#"Sync mode: sync, push, pull"`),
-  and `--output` (`text`), `--verbose` (`false`), `--quiet` (`false`) and
-  `--no-color` (which makes `color` default to `true`)
-  (`packages/agent-memory-sync/src/commands/run.ts:72-76#"Disable colored diagnostics"`),
-  and passes all of them to `resolveRunConfig`
-  (`packages/agent-memory-sync/src/commands/run.ts:96-115#"?? undefined"`).
-- `watch` declares the same `[profile]`, `--output`, `--verbose`, `--quiet`
-  and `--no-color` defaults and passes them the same way
-  (`packages/agent-memory-sync/src/commands/watch.ts:80-94#"stateDir: options.stateDir"`).
-- `restore` passes `--output`, `--verbose`, `--quiet` and `--no-color` the
-  same way. Its profile comes from the first positional only in the
+- `run` builds its overrides in `buildRunOverrides`, which passes each
+  option through and turns `--no-color` into an override only when the
+  caller says the flag was passed
+  (`packages/agent-memory-sync/src/commands/run.ts:227-237#"color: colorOnlyFromCli ? options.color : undefined,"`).
+  Commander always reports `color === true` for a `--no-color` option, so
+  the action asks `command.getOptionValueSource("color") === "cli"`
+  (`packages/agent-memory-sync/src/commands/run.ts:103#"getOptionValueSource"`).
+  `--mode` is the exception that keeps its default `sync`
+  (`packages/agent-memory-sync/src/commands/run.ts:43-45#"Sync mode: sync, push, pull"`).
+- `watch` passes the same options inline and applies the same
+  `getOptionValueSource("color")` test
+  (`packages/agent-memory-sync/src/commands/watch.ts:93#"getOptionValueSource"`).
+- `restore` does the same for `--output`, `--verbose`, `--quiet` and
+  `--no-color`
+  (`packages/agent-memory-sync/src/commands/restore.ts:126#"getOptionValueSource"`).
+  Its profile comes from the first positional only in the
   `--from-commit`/`--from-snapshot` form; the older `restore <sha>` form
   passes no profile
-  (`packages/agent-memory-sync/src/commands/restore.ts:116#"? undefined : mode.profile"`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:122#"? undefined : mode.profile"`).
 
-The result for `run` and `watch`: the config-file keys `profile`,
-`outputFormat`, `verbose`, `quiet` and `color`, and the environment
-variables `AGENT_MEMORY_SYNC_PROFILE`, `AGENT_MEMORY_SYNC_OUTPUT_FORMAT`,
-`AGENT_MEMORY_SYNC_VERBOSE`, `AGENT_MEMORY_SYNC_QUIET` and
-`AGENT_MEMORY_SYNC_COLOR`, are always replaced by the CLI value, flag given
-or not. `NO_COLOR` only feeds `DEFAULTS.color` and is replaced the same way;
-`--no-color` is the switch that works. For `restore` the same holds for the
-output keys, and for `profile` in the destination forms. The profile matters
-beyond naming: it picks the default `stateDir` (below) and, for an
-`ownerScoped` sync path, which `<profile>.json` file counts as this
+The profile is `AGENT_MEMORY_SYNC_PROFILE` or the config file's `profile`
+when no positional is given, and `default` when none of the three is set
+(`packages/agent-memory-sync/src/config/loader.ts:217#"merged.profile ||"`).
+It matters beyond naming: it picks the default `stateDir` (below) and, for
+an `ownerScoped` sync path, which `<profile>.json` file counts as this
 machine's own.
 
-Options a command does not declare are not masked. `watch` passes no
-`schedule`, `conflictStrategy` or `reachabilityTimeoutMs`, so those come
-from the config file or the environment there.
+`color` is on by default unless `NO_COLOR` is set (`DEFAULTS.color`); the
+config key and `AGENT_MEMORY_SYNC_COLOR` can change that, `--no-color`
+overrides both when passed. The resolved value is not the final word:
+`applyColor` also drops color when `NO_COLOR` is set or stderr is not a
+terminal
+(`packages/agent-memory-sync/src/output.ts:55#"!process.stderr.isTTY"`).
+
+Options a command does not declare are not overridden at all. `watch`
+passes no `schedule`, `conflictStrategy` or `reachabilityTimeoutMs`, so
+those come from the config file or the environment there.
+
+## Invalid JSON in a config source
+
+A config file, an `AGENT_MEMORY_SYNC_SYNC_PATHS` value and a `config set`
+value for a JSON-valued key (`syncPaths`, `massDeleteGuard`,
+`reachabilityCheckCommand`) all go through `parseJson`, which turns a
+`JSON.parse` failure into a `CliError` with exit 3 naming the source
+(`packages/agent-memory-sync/src/config/loader.ts:196-201#"is not valid JSON"`).
 
 ## Settings derived after the merge
 
@@ -123,38 +139,38 @@ from the config file or the environment there.
   `AGENT_MEMORY_SYNC_AGENT_ID` or the host name, either one with every run
   of other characters than letters, digits, `.`, `_` and `-` replaced by
   `-`
-  (`packages/agent-memory-sync/src/config/loader.ts:203-207#"const stateDir = path.resolve(rootDir"`,
-  `packages/agent-memory-sync/src/config/loader.ts:707-709#"[^a-zA-Z0-9._-]+"`).
+  (`packages/agent-memory-sync/src/config/loader.ts:217-221#"const stateDir = path.resolve(rootDir"`,
+  `packages/agent-memory-sync/src/config/loader.ts:732-734#"[^a-zA-Z0-9._-]+"`).
 - An absent or empty `syncPaths` list becomes the default list of
   `MEMORY.md`, `daily` and `logs`
-  (`packages/agent-memory-sync/src/config/loader.ts:525-526#": DEFAULT_SYNC_PATHS;"`).
+  (`packages/agent-memory-sync/src/config/loader.ts:543-544#": DEFAULT_SYNC_PATHS;"`).
 - `massDeleteGuard: null` or an absent key means the default thresholds,
   never "no guard"
-  (`packages/agent-memory-sync/src/config/loader.ts:610-613#"return { ...DEFAULT_MASS_DELETE_GUARD };"`).
+  (`packages/agent-memory-sync/src/config/loader.ts:631-634#"return { ...DEFAULT_MASS_DELETE_GUARD };"`).
   The per-run overrides are the `--allow-mass-delete` and
   `--accept-mass-delete` flags, each for its own checks (see
   [destructive-write-safety-chain.md](destructive-write-safety-chain.md#the-two-override-flags)).
 - `queueEscalationThresholdMs: null` is a real value that disables queue
   escalation, distinct from an absent key, which means the default
-  (`packages/agent-memory-sync/src/config/loader.ts:596-602#"validatePositiveInteger(value,"`).
+  (`packages/agent-memory-sync/src/config/loader.ts:614-620#"validatePositiveInteger(value,"`).
   Only the config file can say `null`, written directly or with
   `config set queueEscalationThresholdMs null`
-  (`packages/agent-memory-sync/src/config/loader.ts:677-680#": validatePositiveInteger(Number(value)"`);
+  (`packages/agent-memory-sync/src/config/loader.ts:698-701#": validatePositiveInteger(Number(value)"`);
   the environment variable accepts a positive integer only
-  (`packages/agent-memory-sync/src/config/loader.ts:373-379#"DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS"`).
+  (`packages/agent-memory-sync/src/config/loader.ts:391-397#"DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS"`).
 
 ## Environment-only and config-only settings
 
 - `readEnvConfig` reads one variable per config key except
   `massDeleteGuard`, which has no environment variable
-  (`packages/agent-memory-sync/src/config/loader.ts:320-432#"return config;"`).
+  (`packages/agent-memory-sync/src/config/loader.ts:338-450#"return config;"`).
 - An unparsable or wrongly shaped `AGENT_MEMORY_SYNC_REACHABILITY_CHECK_COMMAND`
   is ignored with a warning on stderr, and the setting falls through to the
   config file or the default
-  (`packages/agent-memory-sync/src/config/loader.ts:407-428#"warnUnparsableReachabilityCheckCommandEnv("`).
+  (`packages/agent-memory-sync/src/config/loader.ts:425-446#"warnUnparsableReachabilityCheckCommandEnv("`).
 - `watch`'s debounce window has no config key: `--debounce-ms`, then
   `AGENT_MEMORY_SYNC_WATCH_DEBOUNCE_MS`, then 5000 ms
-  (`packages/agent-memory-sync/src/commands/watch.ts:583-594#"return DEFAULT_DEBOUNCE_MS;"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:589-600#"return DEFAULT_DEBOUNCE_MS;"`).
 
 ## The `config` subcommands
 
@@ -166,12 +182,12 @@ from the config file or the environment there.
 - `config get` on a supported key that the file does not set is exit 11
   (`packages/agent-memory-sync/src/commands/config.ts:42-44#"ConfigKeyNotSetError"`);
   an unsupported key is exit 3
-  (`packages/agent-memory-sync/src/config/loader.ts:651-655#"is not supported"`).
+  (`packages/agent-memory-sync/src/config/loader.ts:672-676#"is not supported"`).
 - `config set` validates the value with the same parsers the loader uses
   and rewrites the whole file from the normalized settings
   (`packages/agent-memory-sync/src/commands/config.ts:56-58#"writePersistedConfig(updated"`).
   Because `readPersistedConfig` normalizes what it reads
-  (`packages/agent-memory-sync/src/config/loader.ts:255-258#"settings: normalizeUserConfig("`),
+  (`packages/agent-memory-sync/src/config/loader.ts:269-271#"settings: normalizeUserConfig("`),
   the rewritten file has lost any unknown key and spells every snake_case
   key in camelCase.
 

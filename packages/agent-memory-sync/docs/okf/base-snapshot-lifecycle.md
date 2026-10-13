@@ -3,7 +3,7 @@ type: invariant
 title: Base snapshot lifecycle and per-path advance
 description: Every reader and writer of stateDir/base, when each one moves it, the per-path rule a successful push applies, how queued snapshots chain their bases inside one push, and the three filterUnmappedBaseMap call sites that keep unmapped hub paths out of it.
 tags: [base-snapshot, merge, pull, push, restore, invariant]
-timestamp: 2026-10-11T16:31:20Z
+timestamp: 2026-10-13T16:28:37Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/state-store.ts
   - packages/agent-memory-sync/src/memory-sync/pull.ts
@@ -103,14 +103,14 @@ Writers, each with its trigger:
   If the push then fails, the adoption stays.
 - **`restore --from-commit`** drops every entry under the restored
   destination
-  (`packages/agent-memory-sync/src/commands/restore.ts:693-697#"delete stored[key];"`)
+  (`packages/agent-memory-sync/src/commands/restore.ts:700-704#"delete stored[key];"`)
   and records the destination's files from the current hub tree, not from
   the restored commit
-  (`packages/agent-memory-sync/src/commands/restore.ts:724-727#"stateStore.replaceBaseSnapshots(stored);"`),
+  (`packages/agent-memory-sync/src/commands/restore.ts:731-734#"stateStore.replaceBaseSnapshots(stored);"`),
   so the next push sees the restored files as local changes against the
   hub and publishes them. `restore --from-snapshot` and the
   `restore <sha>` form do not touch the base
-  (`packages/agent-memory-sync/src/commands/restore.ts:558-560#"notes = moveBaseToCurrentRemote("`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:565-567#"notes = moveBaseToCurrentRemote("`).
 
 ## Chaining across queued snapshots in one push
 

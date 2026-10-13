@@ -3,7 +3,7 @@ type: runbook
 title: Responding to a stopped or refused sync run
 description: Per exit code (5, 6, 7, 8, 9, 12, 13), what state a stopped run leaves behind and the next step, taken from the remediation text each refusal prints.
 tags: [runbook, exit-codes, recovery, restore, mass-delete]
-timestamp: 2026-10-11T16:02:50Z
+timestamp: 2026-10-13T16:28:37Z
 sources:
   - packages/agent-memory-sync/src/errors.ts
   - packages/agent-memory-sync/src/memory-sync/guards.ts
@@ -82,7 +82,7 @@ sources:
      (`packages/agent-memory-sync/src/memory-sync/pull.ts:436-441#"removing generations, or the machine"`).
    - If a destination restore stops, fix the permission or the entry at the
      named path, or the alias it names, then run the restore again
-     (`packages/agent-memory-sync/src/commands/restore.ts:487-490#"then run the restore again"`).
+     (`packages/agent-memory-sync/src/commands/restore.ts:494-497#"then run the restore again"`).
 6. **Exit 13, stopped part way.** Some files were already written or
    removed; the message lists them and the snapshot generations that hold
    their previous content
