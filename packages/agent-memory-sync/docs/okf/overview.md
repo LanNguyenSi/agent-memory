@@ -3,7 +3,7 @@ type: overview
 title: agent-memory-sync overview
 description: Orientation for the agent-memory-sync package. The four commands, the state directory they share, the order one sync tick runs in, and the exit codes, with pointers to the docs that cover each mechanism in depth.
 tags: [overview, agent-memory-sync, cli, state-dir, exit-codes]
-timestamp: 2026-10-13T16:28:37Z
+timestamp: 2026-10-13T19:30:31Z
 sources:
   - packages/agent-memory-sync/src/main.ts
   - packages/agent-memory-sync/src/errors.ts
@@ -44,11 +44,11 @@ not repeat them.
 - `run` executes one mode per tick through `executeMode`: `push` calls
   `performPush`, `pull` calls `performPull`, and `sync` runs the pull and
   then the push
-  (`packages/agent-memory-sync/src/commands/run.ts:271-281#"const pushResult = await performPush(runConfig, options);"`).
+  (`packages/agent-memory-sync/src/commands/run.ts:276-278#"const pushResult = await performPush(runConfig, options);"`).
   With `--schedule` it repeats ticks on a five-field cron expression.
 - `watch` never pulls. Each debounce window becomes one `performPush` call
   with its own working-copy label `watch`
-  (`packages/agent-memory-sync/src/commands/watch.ts:193-198#"allowMassDelete: options.allowMassDelete"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:188-192#"allowMassDelete: options.allowMassDelete"`).
 - `restore` writes files back from a hub commit with no pre-apply
   snapshot, or replaces a whole sync destination from a commit or from a
   local pre-apply snapshot. `config` reads and writes the config file only.

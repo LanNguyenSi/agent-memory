@@ -3,12 +3,13 @@ type: module
 title: Configuration resolution and precedence
 description: How resolveRunConfig builds the run configuration. Config file path order, the merge order of defaults, config file, environment and CLI options, the settings derived afterwards, which CLI options carry no default, and how invalid JSON is reported.
 tags: [config, precedence, environment, cli, defaults]
-timestamp: 2026-10-13T16:28:37Z
+timestamp: 2026-10-13T19:30:31Z
 sources:
   - packages/agent-memory-sync/src/config/loader.ts
   - packages/agent-memory-sync/src/commands/run.ts
   - packages/agent-memory-sync/src/commands/watch.ts
   - packages/agent-memory-sync/src/commands/restore.ts
+  - packages/agent-memory-sync/src/commands/cli-options.ts
   - packages/agent-memory-sync/src/commands/config.ts
 ---
 
@@ -28,7 +29,7 @@ precedence surprises below come from.
 - `loadConfig`, `resolveRunConfig` and `requireRemoteUrl`, called in that
   order by `run`, `watch` and `restore`; `restore --from-snapshot` skips
   `requireRemoteUrl`, since it reads only the state directory
-  (`packages/agent-memory-sync/src/commands/restore.ts:133-135#"requireRemoteUrl(resolved);"`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:133#"requireRemoteUrl(resolved);"`).
 - `readPersistedConfig`, `writePersistedConfig`, `getConfigValue`,
   `setConfigValue`, used by the `config` subcommands.
 
@@ -84,25 +85,29 @@ and `watch` are declared without a commander default, so an omitted flag
 reaches `resolveRunConfig` as `undefined` and the config file or
 environment value applies:
 
-- `run` builds its overrides in `buildRunOverrides`, which passes each
-  option through and turns `--no-color` into an override only when the
-  caller says the flag was passed
-  (`packages/agent-memory-sync/src/commands/run.ts:227-237#"color: colorOnlyFromCli ? options.color : undefined,"`).
+- `run`, `watch` and `restore` all spread one shared helper,
+  `outputOverrides`, into their override objects. It passes `--output`,
+  `--verbose` and `--quiet` through as typed and turns `--no-color` into an
+  override only when the user typed it
+  (`packages/agent-memory-sync/src/commands/cli-options.ts:14-22#"color: colorFromCli(command, options)"`).
   Commander always reports `color === true` for a `--no-color` option, so
-  the action asks `command.getOptionValueSource("color") === "cli"`
-  (`packages/agent-memory-sync/src/commands/run.ts:103#"getOptionValueSource"`).
+  `colorFromCli` asks `command.getOptionValueSource("color") === "cli"` and
+  returns `undefined` otherwise
+  (`packages/agent-memory-sync/src/commands/cli-options.ts:4-8#"options.color : undefined;"`).
+  `run` builds its overrides in `buildRunOverrides`, which adds the profile
+  and the other options around that helper
+  (`packages/agent-memory-sync/src/commands/run.ts:232-234#"...outputOverrides(command, options),"`).
   `--mode` is the exception that keeps its default `sync`
-  (`packages/agent-memory-sync/src/commands/run.ts:43-45#"Sync mode: sync, push, pull"`).
-- `watch` passes the same options inline and applies the same
-  `getOptionValueSource("color")` test
-  (`packages/agent-memory-sync/src/commands/watch.ts:93#"getOptionValueSource"`).
+  (`packages/agent-memory-sync/src/commands/run.ts:46#"Sync mode: sync, push, pull"`).
+- `watch` spreads the same helper
+  (`packages/agent-memory-sync/src/commands/watch.ts:88#"...outputOverrides(command, options),"`).
 - `restore` does the same for `--output`, `--verbose`, `--quiet` and
   `--no-color`
-  (`packages/agent-memory-sync/src/commands/restore.ts:126#"getOptionValueSource"`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:124#"...outputOverrides(command, options),"`).
   Its profile comes from the first positional only in the
   `--from-commit`/`--from-snapshot` form; the older `restore <sha>` form
   passes no profile
-  (`packages/agent-memory-sync/src/commands/restore.ts:122#"? undefined : mode.profile"`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:123#"? undefined : mode.profile"`).
 
 The profile is `AGENT_MEMORY_SYNC_PROFILE` or the config file's `profile`
 when no positional is given, and `default` when none of the three is set
@@ -170,7 +175,7 @@ value for a JSON-valued key (`syncPaths`, `massDeleteGuard`,
   (`packages/agent-memory-sync/src/config/loader.ts:425-446#"warnUnparsableReachabilityCheckCommandEnv("`).
 - `watch`'s debounce window has no config key: `--debounce-ms`, then
   `AGENT_MEMORY_SYNC_WATCH_DEBOUNCE_MS`, then 5000 ms
-  (`packages/agent-memory-sync/src/commands/watch.ts:589-600#"return DEFAULT_DEBOUNCE_MS;"`).
+  (`packages/agent-memory-sync/src/commands/watch.ts:589-594#"return DEFAULT_DEBOUNCE_MS;"`).
 
 ## The `config` subcommands
 

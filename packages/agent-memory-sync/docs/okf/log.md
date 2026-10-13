@@ -2,6 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-13T19:30:31Z, re-pointed every citation into `run.ts`, `watch.ts` and
+  `restore.ts` after the output-flag handling of the three commands moved
+  into the shared `src/commands/cli-options.ts` (`colorFromCli`,
+  `outputOverrides`). `config-resolution.md` now cites that helper for
+  `--output`, `--verbose`, `--quiet` and `--no-color` instead of the
+  per-command `getOptionValueSource` sites, and lists it as a source.
+  `stopped-run-runbook.md` exit-code text re-checked and unchanged. Verified
+  with `okf-kit check --json --require-anchors packages/agent-memory-sync/docs/okf`.
+
 - 2026-10-13T16:28:37Z, re-pointed and corrected after the CLI behaviour pass on `run`,
   `watch`, `restore` and the config loader: every citation into
   `restore.ts`, `run.ts`, `watch.ts` and `loader.ts` moved to its current

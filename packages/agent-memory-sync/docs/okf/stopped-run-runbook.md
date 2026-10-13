@@ -3,7 +3,7 @@ type: runbook
 title: Responding to a stopped or refused sync run
 description: Per exit code (5, 6, 7, 8, 9, 12, 13), what state a stopped run leaves behind and the next step, taken from the remediation text each refusal prints.
 tags: [runbook, exit-codes, recovery, restore, mass-delete]
-timestamp: 2026-10-13T16:28:37Z
+timestamp: 2026-10-13T19:30:31Z
 sources:
   - packages/agent-memory-sync/src/errors.ts
   - packages/agent-memory-sync/src/memory-sync/guards.ts
@@ -113,4 +113,4 @@ sources:
 - After `restore --from-commit`, the base snapshot for the destination
   matches the current hub tree, so the next push publishes the recovered
   files
-  (`packages/agent-memory-sync/src/commands/restore.ts:82-84#"the next push publishes the recovered files as additions"`).
+  (`packages/agent-memory-sync/src/commands/restore.ts:82-85#"the next push publishes the recovered files as additions"`).

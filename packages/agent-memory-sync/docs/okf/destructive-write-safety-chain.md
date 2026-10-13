@@ -3,7 +3,7 @@ type: invariant
 title: Destructive-write safety chain and its exit codes
 description: The ordered checks a pull, a push and a destination restore pass before they delete or overwrite a local file or publish a deletion, the exit code each refusal carries (5, 7, 9, 12, 13), the mass-delete thresholds, which of --allow-mass-delete and --accept-mass-delete reaches which check, and the restore writes that bypass the chain.
 tags: [guards, mass-delete, pre-apply-snapshot, exit-codes, invariant]
-timestamp: 2026-10-13T16:28:37Z
+timestamp: 2026-10-13T19:30:31Z
 sources:
   - packages/agent-memory-sync/src/memory-sync/pull.ts
   - packages/agent-memory-sync/src/memory-sync/push.ts
@@ -83,7 +83,7 @@ flowchart TD
    A failing `git ls-remote` raises `RemoteUnavailableError` (exit 4); in
    `run --mode sync` that one error turns the tick into a push-only run
    instead of failing it
-   (`packages/agent-memory-sync/src/commands/run.ts:325-337#"notes: [...(pushResult.notes || []), diagnostic]"`).
+   (`packages/agent-memory-sync/src/commands/run.ts:331-334#"notes: [...(pushResult.notes || []), diagnostic]"`).
 3. **Checkout check, exit 7.** Before any merge, the fetched tree is
    compared with the base snapshot per destination
    (`packages/agent-memory-sync/src/memory-sync/pull.ts:140-141#"assertReliableCheckout({"`).
@@ -206,14 +206,14 @@ paths and has no cross-destination total.
 
 Passing both to one `run` is a usage error, exit 2, checked before the
 config is read
-(`packages/agent-memory-sync/src/commands/run.ts:91-92#"throw new CliError("`).
+(`packages/agent-memory-sync/src/commands/run.ts:92-93#"throw new CliError("`).
 `watch` has no `--accept-mass-delete`, since a flag on a long-running
 command would consent for every future tick
-(`packages/agent-memory-sync/src/commands/watch.ts:38-39#"consent for every"`).
+(`packages/agent-memory-sync/src/commands/watch.ts:39-40#"consent for every"`).
 A `watch` tick refused with exit 5 or 7 logs a warning and keeps watching;
 any other error from the tick's push stops the watcher with that error's
 exit code
-(`packages/agent-memory-sync/src/commands/watch.ts:585-587#"error instanceof UnreliableCheckoutError"`).
+(`packages/agent-memory-sync/src/commands/watch.ts:581#"error instanceof UnreliableCheckoutError"`).
 A tick that finds the state directory locked is deferred instead (see
 [offline-queue-and-lock.md](offline-queue-and-lock.md)).
 
@@ -223,24 +223,24 @@ A tick that finds the state directory locked is deferred instead (see
 straight over the local copy. It takes no pre-apply snapshot, so content
 that existed only in the overwritten local file is not kept anywhere
 under `stateDir`
-(`packages/agent-memory-sync/src/commands/restore.ts:269-270#"writeFileSync(absoluteLocalPath, content"`).
+(`packages/agent-memory-sync/src/commands/restore.ts:268#"writeFileSync(absoluteLocalPath, content"`).
 Without `--path` it needs `--yes` or `--dry-run`
-(`packages/agent-memory-sync/src/commands/restore.ts:137-139#"full-snapshot restore requires --yes"`).
+(`packages/agent-memory-sync/src/commands/restore.ts:135-137#"full-snapshot restore requires --yes"`).
 
 `restore <profile> <destination> --from-commit|--from-snapshot` replaces a
 whole destination, removals included. It refuses with exit 12, before any
 snapshot or write, when a target path cannot be written or removed
-(`packages/agent-memory-sync/src/commands/restore.ts:489-494#"throw new RestoreDestinationNotWritableError("`)
+(`packages/agent-memory-sync/src/commands/restore.ts:491-492#"throw new RestoreDestinationNotWritableError("`)
 or when a path it writes and a path it removes are the same file on the
 filesystem
-(`packages/agent-memory-sync/src/commands/restore.ts:509-514#"throw new RestoreDestinationNotWritableError("`).
+(`packages/agent-memory-sync/src/commands/restore.ts:511-512#"throw new RestoreDestinationNotWritableError("`).
 It then snapshots the destination's current files and writes; unlike pull,
 it does not read that snapshot back before writing
 (`packages/agent-memory-sync/src/commands/restore.ts:533-540#"generations: runConfig.snapshotGenerations"`).
 Its removals are not counted against the mass-delete thresholds: every
 file in the destination that the source does not hold is removed
-(`packages/agent-memory-sync/src/commands/restore.ts:452-454#"!sourcePaths.has(file.remoteRelativePath)"`,
-`packages/agent-memory-sync/src/commands/restore.ts:560-561#"rmSync(file.absolutePath, { force: true });"`).
+(`packages/agent-memory-sync/src/commands/restore.ts:450-451#"!sourcePaths.has(file.remoteRelativePath)"`,
+`packages/agent-memory-sync/src/commands/restore.ts:558-559#"rmSync(file.absolutePath, { force: true });"`).
 
 ## What breaks it
 
