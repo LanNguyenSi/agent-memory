@@ -6,6 +6,7 @@ const { hubMarkersPushNote, performPush } = require("../memory-sync/push");
 const { summarizeOperation } = require("../memory-sync/preview");
 const { nextScheduleTick, validateCronExpression } = require("../memory-sync/scheduler");
 const { writeDryRun, writeInfo, writeResult, writeWarning } = require("../output");
+const { colorFromCli } = require("./cli-options");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -100,7 +101,7 @@ function registerRunCommand(program: import("commander").Command): void {
 
       const loaded = await loadConfig(options.config, { requireExisting: true });
       const runConfig = requireRemoteUrl(
-        resolveRunConfig(loaded, buildRunOverrides(profile, options, command.getOptionValueSource("color") === "cli"))
+        resolveRunConfig(loaded, buildRunOverrides(profile, options, colorFromCli(command, options)))
       );
 
       if (runConfig.schedule) {
@@ -220,21 +221,21 @@ function registerRunCommand(program: import("commander").Command): void {
 // Builds the resolveRunConfig overrides from parsed CLI options. Kept as a
 // standalone function so the "omitted flag must stay undefined" contract
 // (dropUndefined in the loader then lets the config file / env values apply)
-// is unit-testable without driving the whole run action. colorOnlyFromCli
-// reflects command.getOptionValueSource("color") === "cli": commander always
-// reports color === true for --no-color-style options (its built-in default),
-// so color is only an override when the flag was actually passed.
+// is unit-testable without driving the whole run action. color arrives as the
+// colorFromCli() result (src/commands/cli-options.ts): the --no-color value
+// only when the flag was actually passed, undefined otherwise, so commander's
+// built-in color default never overrides the config file/env `color` key.
 function buildRunOverrides(
   profile: string | undefined,
   options: RunOptions,
-  colorOnlyFromCli: boolean
+  color: boolean | undefined
 ): Record<string, unknown> {
   return {
     profile,
     outputFormat: options.output,
     verbose: options.verbose,
     quiet: options.quiet,
-    color: colorOnlyFromCli ? options.color : undefined,
+    color,
     mode: options.mode,
     rootDir: options.rootDir,
     remoteUrl: options.remote,

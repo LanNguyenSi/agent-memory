@@ -12,7 +12,7 @@ const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { CliError } = require("../../src/errors");
-const { loadConfig, resolveRunConfig, setConfigValue } = require("../../src/config/loader");
+const { loadConfig, resolveRunConfig, setConfigValue, readPersistedConfig } = require("../../src/config/loader");
 const { buildRunOverrides } = require("../../src/commands/run");
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -46,6 +46,53 @@ function writeConfig(contents: string): string {
 }
 
 // ─── JSON parse errors -> CliError exit 3, naming the source ──────────────────
+
+test("readPersistedConfig (config show) of a config file that is not valid JSON throws CliError exit 3 naming the path", () => {
+  const file = writeConfig("{");
+  assert.throws(
+    () => readPersistedConfig(file),
+    (error: unknown) => {
+      assert.ok(error instanceof CliError, `expected CliError, got ${String(error)}`);
+      assert.equal((error as InstanceType<typeof CliError>).exitCode, 3);
+      assert.match((error as Error).message, /is not valid JSON/);
+      assert.ok(
+        (error as Error).message.includes(file),
+        `message should name the path ${file}, got: ${(error as Error).message}`
+      );
+      return true;
+    }
+  );
+});
+
+test("config set of massDeleteGuard with an invalid JSON value throws CliError exit 3 naming the key", () => {
+  assert.throws(
+    () => setConfigValue({}, "massDeleteGuard", "{"),
+    (error: unknown) => {
+      assert.ok(error instanceof CliError, `expected CliError, got ${String(error)}`);
+      assert.equal((error as InstanceType<typeof CliError>).exitCode, 3);
+      assert.ok(
+        (error as Error).message.includes("massDeleteGuard"),
+        `message should name the key, got: ${(error as Error).message}`
+      );
+      return true;
+    }
+  );
+});
+
+test("config set of reachabilityCheckCommand with an invalid JSON value throws CliError exit 3 naming the key", () => {
+  assert.throws(
+    () => setConfigValue({}, "reachabilityCheckCommand", "["),
+    (error: unknown) => {
+      assert.ok(error instanceof CliError, `expected CliError, got ${String(error)}`);
+      assert.equal((error as InstanceType<typeof CliError>).exitCode, 3);
+      assert.ok(
+        (error as Error).message.includes("reachabilityCheckCommand"),
+        `message should name the key, got: ${(error as Error).message}`
+      );
+      return true;
+    }
+  );
+});
 
 test("invalid JSON in the config file throws CliError exit 3 naming the path", async () => {
   const file = writeConfig("{ this is not json");
@@ -118,10 +165,12 @@ test("environment value overrides the config file; a CLI override beats both", a
 // action would otherwise require a full sandbox + remote to reach
 // resolveRunConfig). Options here mimic what commander hands the action when
 // the flag was never passed: output/verbose/quiet undefined, color defaulted
-// to true by commander's --no-color handling but NOT sourced from the CLI.
+// to true by commander's --no-color handling but NOT sourced from the CLI;
+// the colorFromCli(command, options) call the action actually makes then
+// yields undefined, which is what the third argument carries here.
 test("run: omitted --output/--verbose/--quiet/--no-color leave those keys to the config file", () => {
   const file = writeConfig(JSON.stringify({ outputFormat: "json", verbose: true, quiet: false }));
-  const overrides = buildRunOverrides(undefined, { mode: "sync", dryRun: false }, false);
+  const overrides = buildRunOverrides(undefined, { mode: "sync", dryRun: false }, undefined);
 
   assert.equal(overrides.outputFormat, undefined, "--output must be dropped when omitted");
   assert.equal(overrides.verbose, undefined, "--verbose must be dropped when omitted");
@@ -136,7 +185,7 @@ test("run: omitted --output/--verbose/--quiet/--no-color leave those keys to the
   assert.equal(runConfig.profile, "default", "an omitted profile argument falls back to the loader default");
 });
 
-test("run: --no-color passed (color source cli) overrides the config file color", () => {
-  const overrides = buildRunOverrides(undefined, { mode: "sync", dryRun: false, color: false }, true);
+test("run: --no-color passed (colorFromCli(command, options) === false) overrides the config file color", () => {
+  const overrides = buildRunOverrides(undefined, { mode: "sync", dryRun: false }, false);
   assert.equal(overrides.color, false, "color must be an override when --no-color was passed");
 });

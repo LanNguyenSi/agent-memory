@@ -22,6 +22,7 @@ const { readPreApplySnapshot, writePreApplySnapshot } = require("../memory-sync/
 const { findAliasedRestorePath } = require("../memory-sync/restore-alias");
 const { StateStore } = require("../memory-sync/state-store");
 const { writeDryRun, writeInfo, writeResult, writeWarning } = require("../output");
+const { colorFromCli } = require("./cli-options");
 
 type OutputFormat = "text" | "json" | "yaml";
 
@@ -123,7 +124,7 @@ function registerRestoreCommand(program: import("commander").Command): void {
           outputFormat: options.output,
           verbose: options.verbose,
           quiet: options.quiet,
-          color: command.getOptionValueSource("color") === "cli" ? options.color : undefined,
+          color: colorFromCli(command, options),
           rootDir: options.rootDir,
           remoteUrl: options.remote,
           branch: options.branch,

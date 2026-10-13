@@ -10,7 +10,7 @@ scanning, extraction and digest modules under `src/scanner/`, `src/extractor/` a
 
 1. **One module per top-level subcommand**: `run`, `generate` and `config` each live in their own file under
    `src/commands/`; `config.ts` also registers its `show` subcommand.
-2. **Fail fast with clear messages**: Validate inputs at parse time; emit actionable error messages to stderr.
+2. **Fail fast with clear messages**: Validate inputs at the start of the command, before any work; emit actionable error messages to stderr.
 3. **Exit codes are part of the interface**: Always exit with a meaningful code (see Exit Codes below).
 4. **Stdout for data, stderr for diagnostics**: Program output goes to stdout; logs, warnings, and errors go to stderr.
 5. **Composable with other tools**: Structured output where a command produces structured data (`run --output json`, `generate --json`).

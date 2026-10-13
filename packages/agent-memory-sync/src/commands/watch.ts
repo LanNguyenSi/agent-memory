@@ -15,6 +15,7 @@ const {
   resolveArmTimeoutMs,
   trackMissingPaths
 } = require("./watch-arming");
+const { colorFromCli } = require("./cli-options");
 
 type OutputFormat = "text" | "json" | "yaml";
 
@@ -87,10 +88,10 @@ function registerWatchCommand(program: import("commander").Command): void {
           outputFormat: options.output,
           verbose: options.verbose,
           quiet: options.quiet,
-          // Only override color when --no-color was actually passed; commander
-          // reports color === true as its built-in default otherwise, which
-          // would clobber the config file/env `color` key.
-          color: command.getOptionValueSource("color") === "cli" ? options.color : undefined,
+          // colorFromCli: only an override when --no-color was actually
+          // passed; commander reports color === true as its built-in default
+          // otherwise, which would clobber the config file/env `color` key.
+          color: colorFromCli(command, options),
           rootDir: options.rootDir,
           remoteUrl: options.remote,
           branch: options.branch,

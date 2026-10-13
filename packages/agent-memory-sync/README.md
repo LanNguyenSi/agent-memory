@@ -234,7 +234,14 @@ Each config key except `massDeleteGuard` can also be set through an
 environment variable named after it with the `AGENT_MEMORY_SYNC_` prefix
 (e.g. `AGENT_MEMORY_SYNC_REMOTE_URL`). Priority order (highest to lowest):
 CLI flags > environment variables > config file > defaults. An environment
-variable therefore overrides the config file for the key it names.
+variable therefore overrides the config file for the key it names. Before
+upgrading, check service units and shells for exported
+`AGENT_MEMORY_SYNC_*` variables that disagree with the config file (they now
+win, including the path and remote keys), and when the config file sets
+`profile` without `stateDir` and runs omit `[profile]`, the default state
+directory moves from `<rootDir>/.agent-memory-sync/default` to
+`<rootDir>/.agent-memory-sync/<profile>`, so set `stateDir` to the old
+directory or move it, or base snapshots and the offline queue stay behind.
 
 For `run`, `watch` and `restore`, `--output`, `--verbose`, `--quiet` and
 `--no-color` apply only when they are actually passed; an omitted flag
