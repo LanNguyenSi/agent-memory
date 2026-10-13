@@ -165,10 +165,14 @@ for (const [name, register] of commands) {
       color: undefined
     });
   });
-  test(`${name}: outputOverrides carries --no-color and -o json when passed`, async () => {
-    const [options, command] = optionsAndCommand(await capturedArgs(register, name, ["--no-color", "-o", "json"]));
+  test(`${name}: outputOverrides carries --no-color, -o json, -q and -v when passed`, async () => {
+    const [options, command] = optionsAndCommand(
+      await capturedArgs(register, name, ["--no-color", "-o", "json", "-q", "-v"])
+    );
     const o = outputOverrides(command, options);
     assert.equal(o.color, false);
+    assert.equal(o.quiet, true);
+    assert.equal(o.verbose, true);
     assert.equal(o.outputFormat, "json");
   });
 }
