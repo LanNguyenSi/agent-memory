@@ -187,16 +187,30 @@ async function loadConfig(overridePath?: string, options: { requireExisting?: bo
   const raw = readFileSync(configPath, "utf8");
   return {
     path: configPath,
-    settings: normalizeUserConfig(JSON.parse(raw) as Record<string, unknown>)
+    settings: normalizeUserConfig(parseJson(raw, `config file ${configPath}`) as Record<string, unknown>)
   };
 }
 
+// A malformed JSON config source is a config error (exit 3), not a crash:
+// describe names the source (path, env var or config-set key) in the message.
+function parseJson(text: string, describe: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new CliError(`${describe} is not valid JSON: ${reason}`, 3);
+  }
+}
+
+// Merge order (lowest to highest): compiled-in defaults < config file <
+// environment variables < CLI overrides. An environment variable overrides
+// the config file for the key it names (operator decision: env beats file).
 function resolveRunConfig(loaded: LoadedConfig, overrides: RunConfigOverrides = {}): RunConfig {
   const normalizedOverrides = dropUndefined(overrides as Record<string, unknown>);
   const merged = {
     ...DEFAULTS,
-    ...readEnvConfig(),
     ...loaded.settings,
+    ...readEnvConfig(),
     ...normalizedOverrides
   } as RunConfig;
 
@@ -254,7 +268,9 @@ function readPersistedConfig(overridePath?: string): { path: string; settings: U
 
   return {
     path: configPath,
-    settings: normalizeUserConfig(JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>)
+    settings: normalizeUserConfig(
+      parseJson(readFileSync(configPath, "utf8"), `config file ${configPath}`) as Record<string, unknown>
+    )
   };
 }
 
@@ -358,7 +374,9 @@ function readEnvConfig(): UserConfig {
     config.conflictStrategy = validateConflictStrategy(env.AGENT_MEMORY_SYNC_CONFLICT_STRATEGY as ConflictStrategy);
   }
   if (env.AGENT_MEMORY_SYNC_SYNC_PATHS) {
-    config.syncPaths = normalizeSyncPathConfigList(JSON.parse(env.AGENT_MEMORY_SYNC_SYNC_PATHS) as SyncPathConfig[]);
+    config.syncPaths = normalizeSyncPathConfigList(
+      parseJson(env.AGENT_MEMORY_SYNC_SYNC_PATHS, "AGENT_MEMORY_SYNC_SYNC_PATHS") as SyncPathConfig[]
+    );
   }
   if (env.AGENT_MEMORY_SYNC_GIT_BINARY) {
     config.gitBinary = env.AGENT_MEMORY_SYNC_GIT_BINARY;
@@ -604,9 +622,12 @@ function validateQueueEscalationThresholdMs(value: number | null | undefined): n
 // Explicit `null` (or an absent key) means "use the defaults" rather than
 // "no guard": a mass-delete guard that can be turned off from a config file
 // would reintroduce the exact failure mode this package just closed, and the
-// per-run escape hatch is the --allow-mass-delete flag, which is visible in
-// the invocation that used it. Each key is validated independently so a
-// profile can tighten one rule and inherit the other.
+// per-run escape hatches are the CLI flags, visible in the invocation that
+// used them: --allow-mass-delete for the push-side guard this threshold feeds,
+// and --accept-mass-delete for the pull-side guard (it accepts a remote change
+// that deletes more of a destination than the guard allows, for one run only).
+// Each key is validated independently so a profile can tighten one rule and
+// inherit the other.
 function normalizeMassDeleteGuard(value?: MassDeleteGuardConfig | null): Required<MassDeleteGuardConfig> {
   if (!value) {
     return { ...DEFAULT_MASS_DELETE_GUARD };
@@ -661,7 +682,7 @@ function parseConfigValue(key: string, value: string): unknown {
     case "color":
       return parseBoolean(value);
     case "syncPaths":
-      return normalizeSyncPathConfigList(JSON.parse(value) as SyncPathConfig[]);
+      return normalizeSyncPathConfigList(parseJson(value, `value for ${key}`) as SyncPathConfig[]);
     case "schedule":
       return value === "null" ? null : value;
     case "outputFormat":
@@ -679,9 +700,13 @@ function parseConfigValue(key: string, value: string): unknown {
         ? null
         : validatePositiveInteger(Number(value), "queueEscalationThresholdMs", DEFAULT_QUEUE_ESCALATION_THRESHOLD_MS);
     case "massDeleteGuard":
-      return value === "null" ? null : normalizeMassDeleteGuard(JSON.parse(value) as MassDeleteGuardConfig);
+      return value === "null"
+        ? null
+        : normalizeMassDeleteGuard(parseJson(value, `value for ${key}`) as MassDeleteGuardConfig);
     case "reachabilityCheckCommand":
-      return value === "null" ? null : normalizeReachabilityCheckCommand(JSON.parse(value) as string[]);
+      return value === "null"
+        ? null
+        : normalizeReachabilityCheckCommand(parseJson(value, `value for ${key}`) as string[]);
     default:
       return value;
   }

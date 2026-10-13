@@ -13,10 +13,15 @@ type RunMode = "sync" | "push" | "pull";
 interface RunOptions {
   config?: string;
   dryRun: boolean;
-  output: OutputFormat;
-  verbose: boolean;
-  quiet: boolean;
-  color: boolean;
+  // outputFormat/verbose/quiet/color carry no commander defaults: they stay
+  // undefined when the flag is not passed, so dropUndefined in the loader
+  // lets the config file/env values apply. color is only present when the
+  // user actually passed --no-color (commander otherwise defaults it to true
+  // without recording a CLI value source), see the action below.
+  output?: OutputFormat;
+  verbose?: boolean;
+  quiet?: boolean;
+  color?: boolean;
   mode: RunMode;
   rootDir?: string;
   remote?: string;
@@ -35,7 +40,7 @@ function registerRunCommand(program: import("commander").Command): void {
   program
     .command("run")
     .description("Sync local memory files with the configured Git repository")
-    .argument("[profile]", "Configuration profile to execute", "default")
+    .argument("[profile]", "Configuration profile to execute")
     .option("--config <path>", "Override config file path")
     .option("--mode <mode>", "Sync mode: sync, push, pull", "sync")
     .option("--root-dir <path>", "Override the local workspace root")
@@ -70,11 +75,11 @@ function registerRunCommand(program: import("commander").Command): void {
       false
     )
     .option("--dry-run", "Preview without making changes", false)
-    .option("-o, --output <format>", "Output format: text, json, yaml", "text")
-    .option("-v, --verbose", "Enable verbose diagnostics", false)
-    .option("-q, --quiet", "Suppress non-error diagnostics", false)
+    .option("-o, --output <format>", "Output format: text, json, yaml")
+    .option("-v, --verbose", "Enable verbose diagnostics")
+    .option("-q, --quiet", "Suppress non-error diagnostics")
     .option("--no-color", "Disable colored diagnostics")
-    .action(async (profile: string, options: RunOptions) => {
+    .action(async (profile: string | undefined, options: RunOptions, command: import("commander").Command) => {
       // Checked before the config is even read: a usage error must not
       // depend on what the config file says. The two flags answer opposite
       // questions, and together they re-enact the incident: accepting adopts
@@ -95,23 +100,7 @@ function registerRunCommand(program: import("commander").Command): void {
 
       const loaded = await loadConfig(options.config, { requireExisting: true });
       const runConfig = requireRemoteUrl(
-        resolveRunConfig(loaded, {
-          profile,
-          outputFormat: options.output,
-          verbose: options.verbose,
-          quiet: options.quiet,
-          color: options.color,
-          mode: options.mode,
-          rootDir: options.rootDir,
-          remoteUrl: options.remote,
-          branch: options.branch,
-          repositorySubdir: options.repositorySubdir,
-          stateDir: options.stateDir,
-          schedule: options.schedule,
-          conflictStrategy: options.conflictStrategy,
-          reachabilityTimeoutMs:
-            parseOptionalInteger(options.reachabilityTimeoutMs, "--reachability-timeout-ms") ?? undefined
-        })
+        resolveRunConfig(loaded, buildRunOverrides(profile, options, command.getOptionValueSource("color") === "cli"))
       );
 
       if (runConfig.schedule) {
@@ -226,6 +215,36 @@ function registerRunCommand(program: import("commander").Command): void {
         throw queueEscalationError;
       }
     });
+}
+
+// Builds the resolveRunConfig overrides from parsed CLI options. Kept as a
+// standalone function so the "omitted flag must stay undefined" contract
+// (dropUndefined in the loader then lets the config file / env values apply)
+// is unit-testable without driving the whole run action. colorOnlyFromCli
+// reflects command.getOptionValueSource("color") === "cli": commander always
+// reports color === true for --no-color-style options (its built-in default),
+// so color is only an override when the flag was actually passed.
+function buildRunOverrides(
+  profile: string | undefined,
+  options: RunOptions,
+  colorOnlyFromCli: boolean
+): Record<string, unknown> {
+  return {
+    profile,
+    outputFormat: options.output,
+    verbose: options.verbose,
+    quiet: options.quiet,
+    color: colorOnlyFromCli ? options.color : undefined,
+    mode: options.mode,
+    rootDir: options.rootDir,
+    remoteUrl: options.remote,
+    branch: options.branch,
+    repositorySubdir: options.repositorySubdir,
+    stateDir: options.stateDir,
+    schedule: options.schedule,
+    conflictStrategy: options.conflictStrategy,
+    reachabilityTimeoutMs: parseOptionalInteger(options.reachabilityTimeoutMs, "--reachability-timeout-ms") ?? undefined
+  };
 }
 
 async function executeMode(
@@ -352,4 +371,4 @@ function unique(values: string[]): string[] {
   return Array.from(new Set(values)).sort();
 }
 
-module.exports = { registerRunCommand };
+module.exports = { registerRunCommand, buildRunOverrides };

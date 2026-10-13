@@ -62,7 +62,7 @@ server.registerTool(
   'memory_search',
   {
     description:
-      'Raw semantic search over memories in MEMORY_ROUTER_DIR. Returns top-k hits from the sqlite-vec index as JSON. Returns an empty list if the index is missing or OPENAI_API_KEY is not set — call `memory-router index <dir>` to build the index. Use this when you want to check "is there a memory about X" without firing the full gate stack.',
+      'Raw semantic search over memories in MEMORY_ROUTER_DIR. Returns top-k hits from the sqlite-vec index as JSON. The list is empty when the index is missing, or when MEMORY_ROUTER_EMBED_PROVIDER=openai is set without OPENAI_API_KEY; a failed embedding call (provider unreachable, timeout) returns a tool error instead. Ollama is auto-detected when reachable — call `memory-router index <dir>` to build the index. Use this when you want to check "is there a memory about X" without firing the full gate stack.',
     inputSchema: {
       query: z
         .string()

@@ -307,6 +307,7 @@ coverage-gated test suite on every pull request and push to `master`.
 - [docs/scoring.md](docs/scoring.md) - score-blend rationale, full calibration measurements, embedding provider reference
 - [docs/memory-schema.md](docs/memory-schema.md) - frontmatter fields, accepted locations, topic vocabulary, `verify:` staleness
 - [docs/commands.md](docs/commands.md) - CLI JSON schemas, programmatic API, coverage suite, operational recipes
+- [docs/okf/index.md](docs/okf/index.md) - curated knowledge bundle: code anchors behind the cross-file mechanics
 
 ## License
 
