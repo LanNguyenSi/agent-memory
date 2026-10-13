@@ -1,5 +1,12 @@
 # Bundle log
 
+- 2026-10-13T19:31:28Z, re-pointed the `cli.ts` citations that the earlier re-point had
+  left nine lines short: `gate-composition-and-dedup.md` (`:765-778`,
+  `:765`, `:770`) and `semantic-search-silent-noop.md` (`:769-778`,
+  `:776`, `:582-583`, `:1145-1148`), each now starting on a content
+  line. Claims unchanged. `score-blend-resolver.md` re-verified (the
+  `server.ts` line it cites did not move) and re-stamped with the other two.
+
 - 2026-10-13T16:28:37Z, `cli.ts` gained six lines in the `index` and `test` help text and the
   `memory_search` MCP tool description and the README's documentation list
   changed. Re-pointed the `cli.ts` citations in
