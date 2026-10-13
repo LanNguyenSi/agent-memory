@@ -39,11 +39,11 @@ for (const value of ["0", "-1", "abc", "7x", "", "1.5"]) {
   });
 }
 
-test("CLI generate with a missing --dir exits 1 with an error: line", () => {
+test("CLI generate with an unwritable --output exits 1 with an error: line", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "generate-cli-"));
-  const missingDir = path.join(root, "does-not-exist");
+  const badOutput = path.join(root, "does-not-exist-subdir", "out.md");
 
-  const { status, stderr } = runCli(["generate", "--dir", missingDir]);
+  const { status, stderr } = runCli(["generate", "--dir", root, "--output", badOutput]);
 
   assert.equal(status, 1);
   assert.match(stderr, /error:/);

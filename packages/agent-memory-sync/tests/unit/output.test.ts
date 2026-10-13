@@ -10,7 +10,7 @@
 // output can be asserted without spawning a subprocess.
 //
 // applyColor now requires THREE things for a message to be colored: options
-// .color true, NO_COLOR unset/empty, and process.stderr.isTTY true (B2). The
+// .color true, NO_COLOR unset/empty, and process.stderr.isTTY true. The
 // test runner's stderr is not a TTY and NO_COLOR may or may not be set in the
 // environment, so the color tests drive that state explicitly via
 // withStderrTTY and every touched variable is saved/restored in afterEach.

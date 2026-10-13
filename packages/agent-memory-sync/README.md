@@ -241,7 +241,7 @@ For `run`, `watch` and `restore`, `--output`, `--verbose`, `--quiet` and
 leaves the decision to the `outputFormat`, `verbose`, `quiet` and `color`
 keys (config file or environment variable). Diagnostics on stderr are
 colored only when the resolved `color` is on, `NO_COLOR` is unset/empty,
-and stderr is a terminal — `NO_COLOR` or piping stderr turns color off even
+and stderr is a terminal: `NO_COLOR` or piping stderr turns color off even
 when `color` is on. Likewise, `run` and `watch` take `profile` from their
 `[profile]` argument when it is given, otherwise from `AGENT_MEMORY_SYNC_PROFILE`
 or the file's `profile` key, otherwise `default`.

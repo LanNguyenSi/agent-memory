@@ -32,14 +32,6 @@ export function registerGenerateCommand(program: Command) {
       const daysBack = parsePositiveInt("days", options.days);
       const maxInsights = parsePositiveInt("max", options.max);
 
-      // Fail fast on a missing --dir instead of scanning nothing silently;
-      // the error propagates to main.ts, which reports it and sets the
-      // exit code.
-      const dirStat = await fs.stat(options.dir).catch(() => null);
-      if (!dirStat?.isDirectory()) {
-        throw new Error(`--dir "${options.dir}" is not an existing directory`);
-      }
-
       // Scan memory files
       console.error(`Scanning ${options.dir}...`);
       const scanResult = await scanMemoryFiles({

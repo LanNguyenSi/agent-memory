@@ -1,4 +1,4 @@
-// B8 coverage for the loader precedence + JSON-parse-error + commander-default
+// Coverage for the loader precedence + JSON-parse-error + commander-default
 // changes in src/config/loader.ts and src/commands/run.ts.
 //
 // Hermetic: loadConfig/resolveRunConfig/setConfigValue are driven directly
