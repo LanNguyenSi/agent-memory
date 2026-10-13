@@ -6,7 +6,7 @@ const { hubMarkersPushNote, performPush } = require("../memory-sync/push");
 const { summarizeOperation } = require("../memory-sync/preview");
 const { nextScheduleTick, validateCronExpression } = require("../memory-sync/scheduler");
 const { writeDryRun, writeInfo, writeResult, writeWarning } = require("../output");
-const { colorFromCli } = require("./cli-options");
+const { outputOverrides } = require("./cli-options");
 
 type OutputFormat = "text" | "json" | "yaml";
 type RunMode = "sync" | "push" | "pull";
@@ -100,9 +100,7 @@ function registerRunCommand(program: import("commander").Command): void {
       }
 
       const loaded = await loadConfig(options.config, { requireExisting: true });
-      const runConfig = requireRemoteUrl(
-        resolveRunConfig(loaded, buildRunOverrides(profile, options, colorFromCli(command, options)))
-      );
+      const runConfig = requireRemoteUrl(resolveRunConfig(loaded, buildRunOverrides(profile, options, command)));
 
       if (runConfig.schedule) {
         validateCronExpression(runConfig.schedule);
@@ -221,21 +219,19 @@ function registerRunCommand(program: import("commander").Command): void {
 // Builds the resolveRunConfig overrides from parsed CLI options. Kept as a
 // standalone function so the "omitted flag must stay undefined" contract
 // (dropUndefined in the loader then lets the config file / env values apply)
-// is unit-testable without driving the whole run action. color arrives as the
-// colorFromCli() result (src/commands/cli-options.ts): the --no-color value
-// only when the flag was actually passed, undefined otherwise, so commander's
-// built-in color default never overrides the config file/env `color` key.
+// is unit-testable without driving the whole run action. The output flags come
+// from outputOverrides (src/commands/cli-options.ts), which run, watch and
+// restore share: --no-color counts only when it was actually passed, so
+// commander's built-in color default never overrides the config file/env
+// `color` key.
 function buildRunOverrides(
   profile: string | undefined,
   options: RunOptions,
-  color: boolean | undefined
+  command: { getOptionValueSource(name: string): string | undefined }
 ): Record<string, unknown> {
   return {
     profile,
-    outputFormat: options.output,
-    verbose: options.verbose,
-    quiet: options.quiet,
-    color,
+    ...outputOverrides(command, options),
     mode: options.mode,
     rootDir: options.rootDir,
     remoteUrl: options.remote,

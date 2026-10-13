@@ -17,7 +17,7 @@ const path = require("node:path");
 const { registerRunCommand, buildRunOverrides } = require("../../src/commands/run");
 const { registerWatchCommand } = require("../../src/commands/watch");
 const { registerRestoreCommand } = require("../../src/commands/restore");
-const { colorFromCli } = require("../../src/commands/cli-options");
+const { colorFromCli, outputOverrides } = require("../../src/commands/cli-options");
 const { resolveRunConfig } = require("../../src/config/loader");
 
 type CapturedOptions = { output?: unknown; verbose?: unknown; quiet?: unknown; color?: boolean };
@@ -136,7 +136,7 @@ test("run: captured no-flag options keep the config file outputFormat/verbose/co
   writeFileSync(file, JSON.stringify(settings), "utf8");
 
   const loaded = { path: file, settings };
-  const overrides = buildRunOverrides(profile, options, colorFromCli(command, options));
+  const overrides = buildRunOverrides(profile, options, command);
   const runConfig = resolveRunConfig(loaded, overrides);
 
   assert.equal(runConfig.outputFormat, "json", 'config file outputFormat: "json" must be honored');
@@ -144,3 +144,31 @@ test("run: captured no-flag options keep the config file outputFormat/verbose/co
   assert.equal(runConfig.color, false, "config file color must be honored");
   assert.equal(runConfig.profile, "p1", "config file profile must be honored");
 });
+
+// ─── The shared output overrides each command hands to resolveRunConfig ──────
+
+// run, watch and restore all spread outputOverrides(command, options) into
+// their resolveRunConfig overrides, so pinning it per parsed command pins
+// what each action passes on.
+const commands: [string, typeof registerRunCommand][] = [
+  ["run", registerRunCommand],
+  ["watch", registerWatchCommand],
+  ["restore", registerRestoreCommand]
+];
+for (const [name, register] of commands) {
+  test(`${name}: outputOverrides of a no-flag parse overrides nothing`, async () => {
+    const [options, command] = optionsAndCommand(await capturedArgs(register, name, []));
+    assert.deepEqual(outputOverrides(command, options), {
+      outputFormat: undefined,
+      verbose: undefined,
+      quiet: undefined,
+      color: undefined
+    });
+  });
+  test(`${name}: outputOverrides carries --no-color and -o json when passed`, async () => {
+    const [options, command] = optionsAndCommand(await capturedArgs(register, name, ["--no-color", "-o", "json"]));
+    const o = outputOverrides(command, options);
+    assert.equal(o.color, false);
+    assert.equal(o.outputFormat, "json");
+  });
+}

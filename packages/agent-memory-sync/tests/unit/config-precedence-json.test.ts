@@ -166,11 +166,14 @@ test("environment value overrides the config file; a CLI override beats both", a
 // resolveRunConfig). Options here mimic what commander hands the action when
 // the flag was never passed: output/verbose/quiet undefined, color defaulted
 // to true by commander's --no-color handling but NOT sourced from the CLI;
-// the colorFromCli(command, options) call the action actually makes then
-// yields undefined, which is what the third argument carries here.
+// the command stub reports no CLI source for color, as commander does then.
 test("run: omitted --output/--verbose/--quiet/--no-color leave those keys to the config file", () => {
   const file = writeConfig(JSON.stringify({ outputFormat: "json", verbose: true, quiet: false }));
-  const overrides = buildRunOverrides(undefined, { mode: "sync", dryRun: false }, undefined);
+  const overrides = buildRunOverrides(
+    undefined,
+    { mode: "sync", dryRun: false, color: true },
+    { getOptionValueSource: () => "default" }
+  );
 
   assert.equal(overrides.outputFormat, undefined, "--output must be dropped when omitted");
   assert.equal(overrides.verbose, undefined, "--verbose must be dropped when omitted");
@@ -185,7 +188,11 @@ test("run: omitted --output/--verbose/--quiet/--no-color leave those keys to the
   assert.equal(runConfig.profile, "default", "an omitted profile argument falls back to the loader default");
 });
 
-test("run: --no-color passed (colorFromCli(command, options) === false) overrides the config file color", () => {
-  const overrides = buildRunOverrides(undefined, { mode: "sync", dryRun: false }, false);
+test("run: --no-color passed overrides the config file color", () => {
+  const overrides = buildRunOverrides(
+    undefined,
+    { mode: "sync", dryRun: false, color: false },
+    { getOptionValueSource: (name: string) => (name === "color" ? "cli" : undefined) }
+  );
   assert.equal(overrides.color, false, "color must be an override when --no-color was passed");
 });
