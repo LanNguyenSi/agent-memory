@@ -1,5 +1,13 @@
 # Bundle log
 
+- 2026-10-25T08:12:28Z, release cut 0.7.4 bumped `package.json` and the `PACKAGE_VERSION`
+  constant in the `UserPromptSubmit` hook source (one-line change, no line
+  shift). Re-verified `gate-composition-and-dedup.md` (`ctx` built without
+  `tool`, still on line 40 of the hook), `score-blend-resolver.md`
+  (`resolveBlended` call, still on line 54 of the hook) and
+  `native-deps-and-ci-smoke.md` (`better-sqlite3` and `sqlite-vec` are
+  declared dependencies in `package.json`); claims unchanged; re-stamped.
+
 - 2026-10-13T19:31:28Z, re-pointed the `cli.ts` citations that the earlier re-point had
   left nine lines short: `gate-composition-and-dedup.md` (`:765-778`,
   `:765`, `:770`) and `semantic-search-silent-noop.md` (`:769-778`,
