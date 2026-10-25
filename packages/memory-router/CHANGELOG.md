@@ -6,9 +6,15 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-25
+
 ### Security
 
 - **`@modelcontextprotocol/sdk` 1.32.1** (GHSA-6qxp-vccf-f47h, task aff72e2b): the lockfile resolves 1.32.1 and the dependency range is now `^1.32.1`, so consumers cannot resolve an affected version. Since 1.30.1 the SDK's HTTP server transports apply a 4 MiB default request-body limit and a 100-message batch cap.
+
+### Changed
+
+- The `memory_search` MCP tool description and the `index`, `test` and `eval` help texts now name both embedding providers: OpenAI when `OPENAI_API_KEY` is set, otherwise a locally running Ollama unless `MEMORY_ROUTER_EMBED_PROVIDER` is set explicitly, and an unreachable Ollama fails at the embedding call. Text only; no behaviour change.
 
 ## [0.7.3] - 2026-10-04
 
