@@ -585,8 +585,16 @@ async function runIndex(dir: string): Promise<void> {
     process.stderr.write(`${result.reason}\n`);
     process.exit(1);
   }
+  // Chunk counts only show up when the run actually (re)built chunk
+  // vectors, so an unchanged corpus keeps printing the pre-chunking line
+  // verbatim; a first run after upgrading to the v3 schema prints e.g.
+  // "indexed 0 file(s) (42 up-to-date, 0 removed, 96 chunk(s) embedded)".
+  const chunkPart =
+    result.chunksEmbedded > 0
+      ? `, ${result.chunksEmbedded} chunk(s) embedded`
+      : '';
   process.stdout.write(
-    `indexed ${result.embedded} file(s) (${result.skipped} up-to-date, ${result.removed} removed)\n`,
+    `indexed ${result.embedded} file(s) (${result.skipped} up-to-date, ${result.removed} removed${chunkPart})\n`,
   );
 }
 
