@@ -1,5 +1,12 @@
 # Bundle log
 
+- 2026-10-26T22:20:09Z, review fixes on the chunked embeddings (final heading section kept,
+  stale chunks dropped with a re-embedded document, k cut, remove() chunk
+  cleanup) shifted lines in `indexer.ts` and `index-store.ts`.
+  Re-pointed the citations in `semantic-search-silent-noop.md` (claims
+  unchanged) and re-verified `native-deps-and-ci-smoke.md` (the
+  `require` pair and the `new Database(...)` / `sqliteVec.load(db)` lines
+  still sit on the cited lines); re-stamped both.
 - 2026-10-26T21:32:26Z, chunked embeddings (index schema v3): `semanticSearch` now also
   runs a chunk KNN and scores a memory as max(document, best chunk);
   `remove()` drops chunk rows; readonly opens create no chunk tables.
