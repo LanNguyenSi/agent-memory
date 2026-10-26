@@ -1,5 +1,11 @@
 # Bundle log
 
+- 2026-10-26T22:27:05Z, `remove()` lost its dead `chunks`-table probe (every writable open
+  runs the migrations) and the table probe is prepared on first use; every
+  `index-store.ts` line from `remove()` on moved down by three. Re-pointed
+  those citations in `semantic-search-silent-noop.md` (claims unchanged)
+  and re-verified `native-deps-and-ci-smoke.md` (its cited lines sit above
+  the change); re-stamped both.
 - 2026-10-26T22:20:09Z, review fixes on the chunked embeddings (final heading section kept,
   stale chunks dropped with a re-embedded document, k cut, remove() chunk
   cleanup) shifted lines in `indexer.ts` and `index-store.ts`.

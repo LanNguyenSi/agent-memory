@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-10-26T22:20:09Z
+timestamp: 2026-10-26T22:27:05Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -52,23 +52,23 @@ writing (comments, imports, and the definition set aside):
 The paths known at the time of writing, from
 `rg -n 'return \[\]|\.filter\(' packages/memory-router/src/embed/indexer.ts packages/memory-router/src/embed/index-store.ts`
 plus a reading of `search()`
-(`packages/memory-router/src/embed/index-store.ts:1066-1109`) and
-`searchChunks()` (`packages/memory-router/src/embed/index-store.ts:1121-1162`)
+(`packages/memory-router/src/embed/index-store.ts:1069-1112`) and
+`searchChunks()` (`packages/memory-router/src/embed/index-store.ts:1124-1165`)
 for a KNN query that itself returns no rows:
 
 | # | Condition | Where checked | stderr |
 |---|---|---|---|
 | 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:334-335` | none |
 | 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:338-346` | one line per process (`missingIndexWarned`, `packages/memory-router/src/embed/indexer.ts:339-340`) |
-| 3 | Index exists, nothing has ever been embedded into it, and no width is recorded yet (see the `lint --conflicts --semantic` note below) | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:1071` | none |
-| 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:242-245`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:839-858`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
-| 5 | Every row inside the KNN window carries a different model tag (or a pre-v2 `NULL` tag) than the caller's model: the window starts at `k` and widens x4 per retry up to sqlite-vec's 4096-row KNN ceiling (`MAX_KNN_K`), and the search stops early once the index is exhausted, so this needs at least that many stale rows nearer to the query than the nearest current-model row | model filter inside the widening loop, `packages/memory-router/src/embed/index-store.ts:1082-1104` (documents) and `:1146-1155` (chunks) | see below |
+| 3 | Index exists, nothing has ever been embedded into it, and no width is recorded yet (see the `lint --conflicts --semantic` note below) | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:1074` | none |
+| 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:242-245`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:842-861`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
+| 5 | Every row inside the KNN window carries a different model tag (or a pre-v2 `NULL` tag) than the caller's model: the window starts at `k` and widens x4 per retry up to sqlite-vec's 4096-row KNN ceiling (`MAX_KNN_K`), and the search stops early once the index is exhausted, so this needs at least that many stale rows nearer to the query than the nearest current-model row | model filter inside the widening loop, `packages/memory-router/src/embed/index-store.ts:1085-1107` (documents) and `:1146-1155` (chunks) | see below |
 | 6 | A returned hit's `id` is not in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:422-441` | none |
 
 A memory whose chunks are absent or all stale scores on its document
 vector alone: `searchChunks()` returns `[]` when the file has no chunk
 tables or no chunk rows yet (a v2 index migrated but not yet re-indexed,
-`packages/memory-router/src/embed/index-store.ts:1126-1128`), and that
+`packages/memory-router/src/embed/index-store.ts:1129-1131`), and that
 path is silent by design. It can only ever lower the chunk contribution,
 never the document one, so it never produces an empty result on its own.
 
@@ -81,7 +81,7 @@ that call's results lost anything to the filter, and it reports a
 corpus-wide count, not which query was affected. Later calls in the same
 process stay silent, and a call that finds no stale rows does not use up
 the one warning. Row 5 is no longer a crowding-out case: `search()` filters by model while
-it widens the KNN window (`packages/memory-router/src/embed/index-store.ts:1082-1104`),
+it widens the KNN window (`packages/memory-router/src/embed/index-store.ts:1085-1107`),
 so stale rows inside the top `k` no longer take slots that current-model
 rows just outside it should fill. A query returns fewer than `k` results
 only when fewer than `k` current-model rows exist within the reachable
@@ -93,7 +93,7 @@ otherwise up to one extra full-table KNN scan per x4 widening (bounded by
 the ceiling), with no schema change to existing index files.
 `searchChunks()` widens the same way but stops on `k` DISTINCT memory ids
 rather than `k` rows, keeping one best chunk per id
-(`packages/memory-router/src/embed/index-store.ts:1142-1155`), because a
+(`packages/memory-router/src/embed/index-store.ts:1145-1158`), because a
 long memory's own chunks would otherwise fill any plain `LIMIT` and crowd
 every other memory out of the top k.
 
@@ -135,14 +135,14 @@ from `rg -n 'throw ' packages/memory-router/src/embed/index-store.ts packages/me
   `vec`/`chunk_vec` width disagreement
   (`packages/memory-router/src/embed/index-store.ts:491-499`).
 - Fresh-query dimension mismatch, thrown by `putCachedQuery`
-  (`packages/memory-router/src/embed/index-store.ts:1044-1048`, message
+  (`packages/memory-router/src/embed/index-store.ts:1047-1051`, message
   starting `cached embedding dimension`), which `semanticSearch` calls at
   `packages/memory-router/src/embed/indexer.ts:389`, before `search()` at
   `packages/memory-router/src/embed/indexer.ts:397`.
 - `search()`'s own query-dimension check
-  (`packages/memory-router/src/embed/index-store.ts:1072-1076`) and
+  (`packages/memory-router/src/embed/index-store.ts:1075-1079`) and
   `searchChunks()`'s identical one
-  (`packages/memory-router/src/embed/index-store.ts:1129-1133`), reached
+  (`packages/memory-router/src/embed/index-store.ts:1132-1136`), reached
   only when the query vector came from the query cache
   (`packages/memory-router/src/embed/indexer.ts:367`), since a freshly
   embedded vector meets `putCachedQuery`'s check first.
@@ -152,7 +152,7 @@ from `rg -n 'throw ' packages/memory-router/src/embed/index-store.ts packages/me
 
 `upsert`'s throws (`packages/memory-router/src/embed/index-store.ts:803-822`)
 and `replaceChunks`' throws
-(`packages/memory-router/src/embed/index-store.ts:883-908`) are not on
+(`packages/memory-router/src/embed/index-store.ts:886-911`) are not on
 this path: `semanticSearch()` does not write.
 
 ### What each caller does with them
@@ -198,7 +198,7 @@ writing:
   the open never creates the vector table or records a width: on an index
   with no recorded width the lookup finds no stored embeddings (the
   `dimensions === null` guard in `getEmbedding`,
-  `packages/memory-router/src/embed/index-store.ts:919`) and the pass
+  `packages/memory-router/src/embed/index-store.ts:922`) and the pass
   embeds the pairs fresh, and a later `semanticSearch()` still takes row 3
   under any model width. An `openIndex()` throw at this call site is
   caught (`packages/memory-router/src/lint/conflicts.ts:498-515`): one
@@ -219,7 +219,7 @@ writing:
   readonly rule covers the schema v3 chunk tables: a readonly open neither
   creates nor migrates them, and its chunk reads return nothing when the
   file does not have them
-  (`packages/memory-router/src/embed/index-store.ts:1126-1128`), so a
+  (`packages/memory-router/src/embed/index-store.ts:1129-1131`), so a
   pre-v3 index file is left byte-identical by such an open too.
 - The consolidate near-duplicate pass
   (`packages/memory-router/src/consolidate/near-dupes.ts:141-157`) opens it
