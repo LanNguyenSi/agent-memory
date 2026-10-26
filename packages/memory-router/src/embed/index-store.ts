@@ -823,19 +823,37 @@ function openIndex(opts: IndexStoreOptions): {
     upsertTx(id, mtime, model, toBlob(embedding));
   }
 
+  // Live existence probe for a table: the `chunkTablesReady` /
+  // `chunkVecTableExists` flags were taken at OPEN time, and another
+  // process can have created (and filled) the chunk tables since, so an
+  // open-time false flag is only a lower bound. A positive probe caches
+  // the flag; a lazily-prepared chunk statement is then compiled against
+  // a table that exists now.
+  const probeTableStmt = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  );
+  function tableExists(name: string): boolean {
+    return probeTableStmt.get(name) !== undefined;
+  }
+
   function remove(id: string): void {
+    // A removed memory must not leave orphan chunk rows behind either.
+    // The chunk deletes run INDEPENDENTLY of the entries-row lookup
+    // below: chunk rows can exist without one (they outlived an older
+    // build's remove(), or another process wrote them while this
+    // connection still saw the pre-migration file). Only the `chunk_vec`
+    // delete is guarded on that virtual table's existence, and the guard
+    // re-probes sqlite_master instead of trusting the open-time flag.
+    if (chunkTablesReady || tableExists('chunks')) {
+      if (chunkVecTableExists || tableExists('chunk_vec')) {
+        chunkVecTableExists = true;
+        deleteChunkVecByIdStmt().run(id);
+      }
+      deleteChunksStmt().run(id);
+    }
     const row = selectRowid.get(id) as { rowid: number } | undefined;
     if (!row) return;
     deleteVecStmt().run(BigInt(row.rowid));
-    // A removed memory must not leave orphan chunk rows behind either.
-    // Guarded by chunkVecTableExists (not just chunkTablesReady) so a
-    // lazily-prepared statement is never compiled against a table this
-    // file does not have; chunk rows can only exist once both exist
-    // (replaceChunks writes them in one transaction).
-    if (chunkTablesReady && chunkVecTableExists) {
-      deleteChunkVecByIdStmt().run(id);
-      deleteChunksStmt().run(id);
-    }
     deleteEntry.run(id);
   }
 

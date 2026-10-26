@@ -12,10 +12,16 @@
 //   list items (`- `, `* `, `1. ` at column 0), blank-line paragraphs;
 // - merge adjacent pieces up to CHUNK_TARGET_CHARS; a chunk never ENDS on
 //   a dangling heading (the heading moves to the next chunk with its
-//   content);
+//   content; at the very end of the body there is no next chunk, and the
+//   trailing heading section is kept as the last chunk, never dropped);
 // - a single piece longer than CHUNK_MAX_CHARS is split further at a
 //   line boundary, then a sentence boundary, then (last resort, e.g. one
-//   huge line with no break at all) hard at the cap;
+//   huge line with no break at all) hard at the cap; CHUNK_MAX_CHARS is
+//   a HARD upper bound on EVERY chunk: a carried heading run that no
+//   longer fits together with the next piece is emitted as one
+//   heading-only chunk of its own;
+// - no body text is ever lost: every non-whitespace character of the
+//   body lies inside some chunk;
 // - a fenced code block (``` or ~~~) is one atomic piece: the boundaries
 //   inside it never split, and it is only split further when the block
 //   alone exceeds CHUNK_MAX_CHARS;
@@ -178,17 +184,23 @@ function splitOversized(body: string, pieces: Piece[]): Piece[] {
 // Merge adjacent pieces into chunks of about CHUNK_TARGET_CHARS.
 function mergePieces(body: string, pieces: Piece[]): MemoryChunk[] {
   const chunks: MemoryChunk[] = [];
+  // Emit the body range [first.start, last.end) as one chunk (trailing
+  // whitespace trimmed; a whitespace-only range produces nothing).
+  const emitRange = (first: Piece, last: Piece): void => {
+    const text = body
+      .slice(first.start, last.end)
+      .replace(/\s+$/, '');
+    if (text !== '') chunks.push({ index: chunks.length, offset: first.start, text });
+  };
+  // A heading at the very end of a chunk is separated from the content
+  // it introduces, so hand it (and any other trailing headings) to the
+  // next chunk instead - unless the chunk is nothing but headings.
+  // Returns the carried heading pieces (always a run of headings, and
+  // every non-carried piece of `list` was emitted as a chunk).
   const emit = (list: Piece[]): Piece[] => {
-    // A heading at the very end of a chunk is separated from the content
-    // it introduces, so hand it (and any other trailing headings) to the
-    // next chunk instead - unless the chunk is nothing but headings.
     let n = list.length;
     while (n > 1 && list[n - 1].heading) n--;
-    const kept = list.slice(0, n);
-    const text = body
-      .slice(kept[0].start, kept[kept.length - 1].end)
-      .replace(/\s+$/, '');
-    if (text !== '') chunks.push({ index: chunks.length, offset: kept[0].start, text });
+    emitRange(list[0], list[n - 1]);
     return list.slice(n);
   };
   let cur: Piece[] = [];
@@ -202,8 +214,29 @@ function mergePieces(body: string, pieces: Piece[]): MemoryChunk[] {
       continue;
     }
     cur = emit(cur).concat([p]);
+    // CHUNK_MAX_CHARS is a HARD upper bound on every chunk: the carried
+    // heading run was prepended to p without a size check, and a run of
+    // long heading pieces (each <= CHUNK_MAX_CHARS after splitOversized)
+    // plus p can span more than the cap. The carried pieces are headings
+    // already separated from their content, so emit the whole run as one
+    // (merged) chunk of its own and start the next chunk at p; p alone
+    // never exceeds the cap.
+    while (
+      cur.length > 1 &&
+      cur[cur.length - 1].end - cur[0].start > CHUNK_MAX_CHARS
+    ) {
+      emitRange(cur[0], cur[cur.length - 2]);
+      cur = cur.slice(-1);
+    }
   }
-  if (cur.length > 0) emit(cur);
+  // End of body: every piece still in `cur` must be emitted. The trailing
+  // headings a mid-body emit() would have carried forward cannot move to
+  // a next chunk here because there is none - dropping them (the old
+  // behavior) loses body text, e.g. a final `## Rules\nNever push to
+  // main.` section. Their span is <= CHUNK_MAX_CHARS: every way `cur`
+  // gets built (single piece, push under the target, capped concat above)
+  // keeps it within the cap.
+  if (cur.length > 0) emitRange(cur[0], cur[cur.length - 1]);
   return chunks;
 }
 

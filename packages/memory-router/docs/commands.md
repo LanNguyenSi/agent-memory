@@ -84,11 +84,21 @@ OpenAI embeddings when `OPENAI_API_KEY` is set and an Ollama endpoint
 - **After upgrading to index schema v3, run `memory-router index <dir>`
   once** (for example
   `memory-router index ~/.claude/projects/PROJECT/memory`) to build the
-  chunks. The existing index keeps working until you do: an open
-  migrates the file in place (no chunk rows yet, so search behaves exactly
-  as before on document vectors alone), and that first `index` run embeds
-  chunks for every memory even though no file changed; the run reports it
-  as `indexed 0 file(s) (N up-to-date, 0 removed, M chunk(s) embedded)`.
+  chunks. The existing index keeps working until you do: the first
+  writable open migrates the file in place (no chunk rows yet, so search
+  behaves exactly as before on document vectors alone), and that first
+  `index` run embeds chunks for every memory even though no file changed;
+  the run reports it as `indexed 0 file(s) (N up-to-date, 0 removed,
+  M chunk(s) embedded)`.
+- **The v3 migration is one-way.** After a file has been migrated, older
+  memory-router versions refuse to open it for writing
+  (`on-disk schema_version 3 is newer than this code supports (2);
+  upgrade memory-router`); older read-only opens keep working. So
+  restart long-running memory-router processes (an MCP server you
+  started earlier) right after upgrading: until they restart, every
+  `memory_search` they serve fails. Downgrading to a version before v3
+  means deleting `<dir>/.memory-router/index.sqlite` and running
+  `memory-router index <dir>` to rebuild the index from scratch.
 - Without an index, or with `MEMORY_ROUTER_EMBED_PROVIDER=openai` set but
   no `OPENAI_API_KEY`, the semantic match returns no hits; the Topic and
   Tool Gates still fire. A failed embedding call (provider unreachable,

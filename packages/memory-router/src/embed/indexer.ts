@@ -196,9 +196,11 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
     const jobs: EmbedJob[] = [];
     // Memories whose chunk rows get rewritten wholesale by this run (in
     // plan order), their planned chunks, and the vectors collected per
-    // chunk index while the batches run. `replaceChunks` runs only after
-    // all embeds succeeded, so a failed run leaves the previous chunk set
-    // of every memory intact.
+    // chunk index while the batches run. `replaceChunks` for a memory
+    // runs only after all embeds succeeded; a stale document is paired
+    // with dropping that memory's old chunk rows up front (see the
+    // docStale guard in the planning loop), so an interrupted run leaves
+    // no memory scoring on chunks of a body it no longer has.
     const chunkPlan: string[] = [];
     const plannedChunks = new Map<string, { index: number; offset: number; text: string }[]>();
     const chunkVectors = new Map<string, number[][]>();
@@ -218,6 +220,17 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
           chunkPlan.push(memory.id);
           plannedChunks.set(memory.id, chunks);
           chunkVectors.set(memory.id, []);
+          // A stale document's new mtime commits as soon as its batch
+          // lands, while this memory's new chunk vectors only land after
+          // ALL embed requests succeeded. Drop the old chunk rows right
+          // now so an interrupted run cannot leave them paired with the
+          // new mtime: the next run sees "no chunk rows" and re-chunks
+          // the memory (document-only scoring in the meantime), instead
+          // of skipping it forever while it ranks on text its body no
+          // longer contains.
+          if (docStale && chunkedIds.has(memory.id)) {
+            store.replaceChunks(memory.id, cfg.model, []);
+          }
           for (const chunk of chunks) {
             jobs.push({ memory, mtime, chunk });
           }
@@ -230,6 +243,15 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
       if (seen.has(id)) continue;
       store.remove(id);
       removed++;
+    }
+    // Chunk rows whose id has neither an entries row nor a memory file
+    // (orphans an older build's remove() could leave behind) are
+    // invisible to the loop above, which iterates entries: purge them by
+    // chunk id too, so no memory-less chunk ever scores.
+    for (const id of store.listChunkIds()) {
+      if (!seen.has(id) && !existing.has(id)) {
+        store.replaceChunks(id, cfg.model, []);
+      }
     }
 
     // OpenAI accepts up to ~2048 inputs per call; for 20 memories we can

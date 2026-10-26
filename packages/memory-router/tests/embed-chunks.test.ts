@@ -115,8 +115,12 @@ interface FetchStub {
 // Stubs fetch so every embed input gets `resolve(text)`; unregistered
 // inputs get OFF and are recorded so tests can assert on them. `calls()`
 // counts HTTP requests, which is how the batching tests pin "one request
-// per 64 INPUTS".
-function stubFetch(resolve: (input: string) => number[]): FetchStub {
+// per 64 INPUTS". `failOnRequest` makes the n-th request reject like a
+// dead provider would (for the interrupted-rebuild tests).
+function stubFetch(
+  resolve: (input: string) => number[],
+  opts?: { failOnRequest?: number },
+): FetchStub {
   const orig = (globalThis as { fetch?: typeof fetch }).fetch;
   const seen: string[] = [];
   let requests = 0;
@@ -125,6 +129,9 @@ function stubFetch(resolve: (input: string) => number[]): FetchStub {
     init?: { body?: string },
   ) => {
     requests++;
+    if (opts?.failOnRequest === requests) {
+      throw new Error(`stubbed embed failure on request ${requests}`);
+    }
     const body = JSON.parse(init?.body ?? '{}') as { input: string[] };
     seen.push(...body.input);
     const data = body.input.map((text, index) => ({
@@ -314,7 +321,59 @@ test('remove(id) drops the memory AND its chunk rows', () => {
   }
 });
 
-test('AC2: many chunks of one memory produce ONE hit and never crowd another memory out of k', () => {
+test('remove() also deletes chunk rows this connection opened before the chunk_vec table existed', () => {
+  const dir = tmpDir('chunks-remove-cross-connection');
+  const dbPath = path.join(dir, 'idx.sqlite');
+  // `early` opens while the file has no chunk_vec table yet; a second
+  // connection then creates that table and writes chunk rows through it.
+  // remove() on the early connection must not skip the chunk deletes
+  // just because its open-time existence flag said the table was absent.
+  const early = openIndex({ path: dbPath, dimensions: 2 });
+  const other = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    other.upsert('b', 100, M, [0, 1]);
+    other.replaceChunks('b', M, [
+      { index: 0, offset: 0, embedding: [1, 0] },
+      { index: 1, offset: 900, embedding: [1, 0.1] },
+    ]);
+    assert.equal(chunkRowCount(dbPath, 'b'), 2, 'the other connection wrote chunk rows');
+    early.remove('b');
+    assert.equal(chunkRowCount(dbPath, 'b'), 0, 'the chunk rows are gone');
+    assert.equal(chunkVecRowCount(dbPath), 0, 'and their vectors too');
+    assert.deepEqual(other.searchChunks([1, 0], 5, M), []);
+    assert.equal(other.listEntries().length, 0, 'the entries row is gone as well');
+  } finally {
+    early.close();
+    other.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('remove() deletes chunk rows of an id that has no entries row at all', () => {
+  const dir = tmpDir('chunks-remove-no-entry');
+  const dbPath = path.join(dir, 'idx.sqlite');
+  const store = openIndex({ path: dbPath, dimensions: 2 });
+  try {
+    store.upsert('seed', 100, M, [1, 0]);
+    store.replaceChunks('seed', M, [{ index: 0, offset: 0, embedding: [1, 0] }]);
+    // A chunk row with no entries row: what an older build's remove()
+    // could leave behind. remove() must not stop at the missing row.
+    insertRawChunk(dbPath, 'ghost', 0, 0, M, [1, 0]);
+    store.remove('ghost');
+    assert.equal(chunkRowCount(dbPath, 'ghost'), 0, 'the orphan chunk row is deleted');
+    assert.equal(chunkTotal(dbPath), 1, "the seeded memory's chunk stays");
+    assert.equal(
+      chunkVecRowCount(dbPath),
+      chunkTotal(dbPath),
+      'no orphan chunk vector is left for the ghost id',
+    );
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('many chunks of one memory produce ONE hit and never crowd another memory out of k', () => {
   const dir = tmpDir('chunks-overfetch');
   const dbPath = path.join(dir, 'idx.sqlite');
   const store = openIndex({ path: dbPath, dimensions: 2 });
@@ -513,7 +572,7 @@ test('readonly open of a v2 file neither creates nor migrates the chunk tables',
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('AC3: a v2 index migrates and searches exactly as document vectors alone; rebuildIndex then builds chunks despite unchanged mtimes', async () => {
+test('a v2 index migrates and searches exactly as document vectors alone; rebuildIndex then builds chunks despite unchanged mtimes', async () => {
   const dir = tmpDir('chunks-migrate');
   const memDir = tmpDir('chunks-migrate-corpus');
   const body = 'Always run the linter before pushing.\n\nMore prose about why.';
@@ -608,7 +667,7 @@ function bumpMtime(file: string): void {
   fs.utimesSync(file, stat.atime, new Date(stat.mtimeMs + 5_000));
 }
 
-test('AC4: re-embedding a changed memory replaces all its chunks (a shorter body leaves no orphans)', async () => {
+test('re-embedding a changed memory replaces all its chunks (a shorter body leaves no orphans)', async () => {
   const memDir = tmpDir('chunks-reembed');
   const longBody = Array.from(
     { length: 6 },
@@ -674,7 +733,7 @@ test('AC4: re-embedding a changed memory replaces all its chunks (a shorter body
   }
 });
 
-test('AC4: removing a memory removes its chunk rows on the next rebuild', async () => {
+test('removing a memory removes its chunk rows on the next rebuild', async () => {
   const memDir = tmpDir('chunks-remove-file');
   const longBody = Array.from(
     { length: 4 },
@@ -789,9 +848,8 @@ test('a corpus larger than the batch size splits across requests without misalig
 });
 
 // =========================================================================
-// AC5: which input wins the max (one test per input combination). Each
-// test registers its OWN vector table, so the test name states which input
-// is expected to win.
+// Which input wins the max. Each test registers its OWN vector table,
+// so the test name states which input is expected to win.
 // =========================================================================
 
 const MULTI_SECTION_BODY = Array.from(
@@ -799,7 +857,7 @@ const MULTI_SECTION_BODY = Array.from(
   (_, i) => `section ${i} body ${'a'.repeat(1500)}`,
 ).join('\n\n');
 
-test('AC5 document vector only: chunks exist but none matches, the document score wins and no chunk is attributed', async () => {
+test('document vector only: chunks exist but none matches, the document score wins and no chunk is attributed', async () => {
   await withProviderEnv(async () => {
     const memDir = tmpDir('chunks-ac5-doc-only');
     const body = MULTI_SECTION_BODY;
@@ -831,7 +889,7 @@ test('AC5 document vector only: chunks exist but none matches, the document scor
   });
 });
 
-test('AC5 chunks only better: the document vector misses, a later chunk matches and supplies both score and offset', async () => {
+test('chunks only better: the document vector misses, a later chunk matches and supplies both score and offset', async () => {
   await withProviderEnv(async () => {
     const memDir = tmpDir('chunks-ac5-chunk-better');
     const body = `${MULTI_SECTION_BODY}\n\nthe secret passphrase is zebra-quantum-flux\n\n${MULTI_SECTION_BODY}`;
@@ -875,7 +933,7 @@ test('AC5 chunks only better: the document vector misses, a later chunk matches 
   });
 });
 
-test('AC5 document vector better: a partial chunk match loses to the strong document vector', async () => {
+test('document vector better: a partial chunk match loses to the strong document vector', async () => {
   await withProviderEnv(async () => {
     const memDir = tmpDir('chunks-ac5-doc-better');
     const body = MULTI_SECTION_BODY;
@@ -908,7 +966,7 @@ test('AC5 document vector better: a partial chunk match loses to the strong docu
   });
 });
 
-test('AC5 empty body: no chunk rows at all, score comes from the document vector alone', async () => {
+test('empty body: no chunk rows at all, score comes from the document vector alone', async () => {
   await withProviderEnv(async () => {
     const memDir = tmpDir('chunks-ac5-empty');
     const body = '';
@@ -946,7 +1004,7 @@ test('AC5 empty body: no chunk rows at all, score comes from the document vector
   });
 });
 
-test('AC5 stale-model chunk rows present: they never score, the document vector decides', async () => {
+test('stale-model chunk rows present: they never score, the document vector decides', async () => {
   await withProviderEnv(async () => {
     const memDir = tmpDir('chunks-ac5-stale-chunks');
     const body = MULTI_SECTION_BODY;
@@ -987,10 +1045,10 @@ test('AC5 stale-model chunk rows present: they never score, the document vector 
 });
 
 // =========================================================================
-// AC1: the long-memory recall case, through the hook entry point
+// The long-memory recall case, through the hook entry point
 // =========================================================================
 
-test('AC1: a memory whose only match sits past char 10,000 of its body is found by semanticSearch', async () => {
+test('a memory whose only match sits past char 10,000 of its body is found by semanticSearch', async () => {
   const memDir = tmpDir('chunks-ac1');
   const body = longBodyWithMarker();
   const markerAt = body.indexOf(MARKER);
@@ -1040,4 +1098,296 @@ test('AC1: a memory whose only match sits past char 10,000 of its body is found 
     stub.restore();
     fs.rmSync(memDir, { recursive: true, force: true });
   }
+});
+
+// =========================================================================
+// the only match sits under a FINAL heading-led section (the chunker must
+// never drop the body's last section, and the index must carry it)
+// =========================================================================
+
+test('a memory whose only match sits under a final ## heading past char 10,000 is found by semanticSearch', async () => {
+  const memDir = tmpDir('chunks-final-heading');
+  const filler = Array.from(
+    { length: 120 },
+    (_, i) => `filler paragraph ${i} ${'f'.repeat(80)}`,
+  ).join('\n\n');
+  // The marker lives in the LAST section of the body, heading-led with no
+  // blank line after the heading: exactly the shape the chunker used to
+  // drop from every chunk.
+  const body = `${filler}\n\n## Deep rule\n${MARKER}`;
+  const markerAt = body.indexOf(MARKER);
+  if (markerAt <= 10_000) throw new Error('fixture marker too shallow');
+  const memory = {
+    id: 'deep',
+    path: '',
+    frontmatter: { name: 'Deep rule', description: 'Final buried section' },
+    body,
+  };
+  const table = new Map<string, number[]>([['zebra-final?', ON]]);
+  table.set(docInput(memory as never), OFF);
+  const chunks = chunkBody(body);
+  const carriers = chunks.filter((c: { text: string }) => c.text.includes(MARKER));
+  assert.equal(carriers.length, 1, 'the final section survives in exactly one chunk');
+  for (const c of chunks) {
+    table.set(
+      chunkInput(memory as never, c.text),
+      c.text.includes(MARKER) ? ON : OFF,
+    );
+  }
+  const stub = stubFetch((input) => table.get(input) ?? OFF);
+  try {
+    await withProviderEnv(async () => {
+      writeMemory(memDir, 'deep.md', {
+        name: 'Deep rule',
+        description: 'Final buried section',
+        body,
+      });
+      const result = await rebuildIndex(memDir);
+      assert.equal(result.embedded, 1);
+      assert.ok(result.chunksEmbedded >= 8);
+      const hits = await semanticSearch('zebra-final?', loadMemoriesFromDir(memDir), memDir, 3);
+      assert.equal(hits.length, 1, 'the final-section memory is found');
+      assert.equal(hits[0].memory.id, 'deep');
+      assert.ok(hits[0].score > 0.99, 'the chunk match dominates');
+      assert.equal(hits[0].chunk?.index, carriers[0].index);
+      assert.equal(hits[0].chunk?.offset, carriers[0].offset);
+      assert.ok(markerAt > 10_000 && carriers[0].offset > 8000);
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});
+
+// =========================================================================
+// interrupted rebuilds and orphan cleanup: a failed run must never leave
+// a memory scoring on chunks of a body it no longer has
+// =========================================================================
+
+test('a rebuild interrupted mid-way re-chunks the edited memory on the next run (no stale chunks survive)', async () => {
+  const memDir = tmpDir('chunks-interrupted');
+  const word = (w: string, n: number): string =>
+    Array.from({ length: n }, () => w).join(' ');
+  const fm = { name: 'AX', description: 'The edited memory' };
+  const oldBody = `alpha\n\n${word('oldphrase', 1500)}`;
+  const newBody = `beta\n\n${word('newphrase', 1500)}`;
+  const file = writeMemory(memDir, 'ax.md', { ...fm, body: oldBody });
+  const docOld = docInput({ frontmatter: fm, body: oldBody } as never);
+  const docNew = docInput({ frontmatter: fm, body: newBody } as never);
+
+  await withProviderEnv(async () => {
+    // Run 1: everything embeds; the old chunks score on the old text.
+    const stub1 = stubFetch(
+      (input) => (input === docOld ? OFF : input.includes('oldphrase') ? ON : OFF),
+    );
+    try {
+      await rebuildIndex(memDir);
+      const idxPath = indexPath(memDir);
+      assert.ok(chunkRowCount(idxPath, 'ax') >= 3, 'fixture: the old body chunks up');
+      const store = openIndex({ path: idxPath, dimensions: 2 });
+      try {
+        const top = store.searchChunks(ON, 5, MODEL);
+        assert.equal(top.length, 1);
+        assert.equal(top[0].id, 'ax', 'the old chunk vectors score on the old text');
+        assert.ok(top[0].similarity > 0.99);
+      } finally {
+        store.close();
+      }
+    } finally {
+      stub1.restore();
+    }
+
+    // The memory is edited AND 40 memories are added, so the embed work
+    // spans more than one 64-input request.
+    const idxPath = indexPath(memDir);
+    const mtimeBefore = (
+      rawQuery<{ mtime: number }[]>(idxPath, "SELECT mtime FROM entries WHERE id = 'ax'")
+    )[0].mtime;
+    bumpMtime(file);
+    writeMemory(memDir, 'ax.md', { ...fm, body: newBody });
+    for (let i = 0; i < 40; i++) {
+      writeMemory(memDir, `m${String(i).padStart(2, '0')}.md`, {
+        name: `M${i}`,
+        description: 'Filler memory',
+        body: `filler body ${i} ${'v'.repeat(1600)}`,
+      });
+    }
+
+    // Run 2: the first request succeeds (the edited document row commits
+    // with its new mtime), the second one fails like a dead provider.
+    const stub2 = stubFetch(
+      (input) => (input === docNew || input === docOld ? OFF : input.includes('newphrase') ? ON : OFF),
+      { failOnRequest: 2 },
+    );
+    try {
+      await assert.rejects(() => rebuildIndex(memDir), /stubbed embed failure on request 2/);
+      // Precondition of the repro: the edited document row DID commit.
+      const mtimeAfter = (
+        rawQuery<{ mtime: number }[]>(idxPath, "SELECT mtime FROM entries WHERE id = 'ax'")
+      )[0].mtime;
+      assert.ok(mtimeAfter > mtimeBefore, 'run 2 committed the new document mtime');
+      // The failed state: the OLD chunk vectors must not survive next to
+      // that new mtime, or every later run would skip the memory and it
+      // would keep ranking on text its body no longer contains.
+      const store = openIndex({ path: idxPath, dimensions: 2 });
+      try {
+        assert.deepEqual(
+          store.searchChunks(ON, 10, MODEL).filter((h: { id: string }) => h.id === 'ax'),
+          [],
+          'no old chunk vector of the edited memory survives the failed run',
+        );
+        // And the full hook path does not rank it by the old text either.
+        const stubQ = stubFetch((input) => (input === 'q-old' ? ON : OFF));
+        try {
+          const hits = await semanticSearch('q-old', loadMemoriesFromDir(memDir), memDir, 3);
+          for (const h of hits) {
+            assert.ok(
+              h.score < 0.9,
+              `nothing may rank first on the old text (got ${h.memory.id} at ${h.score})`,
+            );
+          }
+        } finally {
+          stubQ.restore();
+        }
+      } finally {
+        store.close();
+      }
+    } finally {
+      stub2.restore();
+    }
+
+    // Run 3 (clean): the edited memory is RE-chunked from its current
+    // body (the missing-chunks rule, not the mtime), and its chunk rows
+    // now match that body exactly.
+    const stub3 = stubFetch(
+      (input) => (input === docNew || input === docOld ? OFF : input.includes('newphrase') ? ON : OFF),
+    );
+    try {
+      const third = await rebuildIndex(memDir);
+      const expected = chunkBody(newBody);
+      assert.ok(expected.length >= 3, 'fixture: the new body chunks up');
+      const rows = rawQuery<{ chunk_index: number; char_offset: number }[]>(
+        idxPath,
+        'SELECT chunk_index, char_offset FROM chunks WHERE id = \'ax\' ORDER BY chunk_index',
+      );
+      assert.deepEqual(
+        rows,
+        expected.map((c: { index: number; offset: number }) => ({
+          chunk_index: c.index,
+          char_offset: c.offset,
+        })),
+        'the chunks match the current body exactly',
+      );
+      assert.equal(
+        chunkVecRowCount(idxPath),
+        chunkTotal(idxPath),
+        'no orphan chunk vectors after the recovery run',
+      );
+      const store = openIndex({ path: idxPath, dimensions: 2 });
+      try {
+        const top = store.searchChunks(ON, 10, MODEL);
+        const ax = top.filter((h: { id: string }) => h.id === 'ax');
+        assert.equal(ax.length, 1);
+        assert.ok(ax[0].similarity > 0.99, 'the new chunks carry the new text');
+      } finally {
+        store.close();
+      }
+      assert.ok(third.total > 40);
+    } finally {
+      stub3.restore();
+    }
+  });
+  fs.rmSync(memDir, { recursive: true, force: true });
+});
+
+test('a rebuild purges orphan chunk rows whose id has no memory and no entries row', async () => {
+  const memDir = tmpDir('chunks-purge');
+  writeMemory(memDir, 'stay.md', {
+    name: 'Staying',
+    description: 'Stays in the corpus',
+    body: 'A short body that stays.',
+  });
+  const stub = stubFetch(() => OFF);
+  try {
+    await withProviderEnv(async () => {
+      await rebuildIndex(memDir);
+      const idxPath = indexPath(memDir);
+      // A chunk row for an id with neither a file nor an entries row:
+      // what an older build's remove() could leave behind. The removal
+      // loop iterates entries only, so the rebuild must also sweep chunk
+      // ids.
+      insertRawChunk(idxPath, 'ghost', 0, 0, MODEL, ON);
+      const result = await rebuildIndex(memDir);
+      assert.equal(result.removed, 0, 'no entries row existed to remove');
+      assert.equal(chunkRowCount(idxPath, 'ghost'), 0, 'the orphan chunk row is purged');
+      assert.ok(chunkRowCount(idxPath, 'stay') > 0, 'the real memory keeps its chunks');
+      assert.equal(chunkVecRowCount(idxPath), chunkTotal(idxPath));
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});
+
+// =========================================================================
+// the k cut: the merged document + chunk ranking must be cut to exactly k
+// hits, not k per source list
+// =========================================================================
+
+test('the merged result is cut to exactly k when the document top-k and the chunk top-k are disjoint', async () => {
+  await withProviderEnv(async () => {
+    const memDir = tmpDir('chunks-k-cut');
+    const body = MULTI_SECTION_BODY;
+    const memA = {
+      id: 'a',
+      path: '',
+      frontmatter: { name: 'Alpha', description: 'Doc winner' },
+      body,
+    };
+    const memB = {
+      id: 'b',
+      path: '',
+      frontmatter: { name: 'Beta', description: 'Chunk winner' },
+      body,
+    };
+    const chunksB = chunkBody(body);
+    const bWinners = chunksB.filter((c: { text: string }) => c.text.includes('section 0'));
+    assert.equal(bWinners.length, 1);
+    const table = new Map<string, number[]>([['q-doc', ON], ['q-chunk', PARTIAL]]);
+    table.set(docInput(memA as never), ON); // A wins the document list
+    table.set(docInput(memB as never), OFF);
+    for (const c of chunkBody(body)) table.set(chunkInput(memA as never, c.text), OFF);
+    for (const c of chunksB) {
+      table.set(
+        chunkInput(memB as never, c.text),
+        c.text.includes('section 0') ? PARTIAL : OFF,
+      ); // B wins the chunk list
+    }
+    const stub = stubFetch((input) => table.get(input) ?? OFF);
+    try {
+      writeMemory(memDir, 'a.md', { name: 'Alpha', description: 'Doc winner', body });
+      writeMemory(memDir, 'b.md', { name: 'Beta', description: 'Chunk winner', body });
+      await rebuildIndex(memDir);
+      const memories = loadMemoriesFromDir(memDir);
+
+      // k = 1 with disjoint winners: without the final cut the merge
+      // returns up to 2k hits (one per source list).
+      const docWin = await semanticSearch('q-doc', memories, memDir, 1);
+      assert.equal(docWin.length, 1, 'exactly k hits, not one per source list');
+      assert.equal(docWin[0].memory.id, 'a', 'the document winner leads');
+      assert.ok(docWin[0].score > 0.99);
+      assert.equal(docWin[0].chunk, undefined, 'its document vector produced the score');
+
+      // Same corpus, chunk-favoring query: exactly k on that side too.
+      const chunkWin = await semanticSearch('q-chunk', memories, memDir, 1);
+      assert.equal(chunkWin.length, 1, 'exactly k hits');
+      assert.equal(chunkWin[0].memory.id, 'b', 'the chunk winner leads');
+      assert.ok(chunkWin[0].score > 0.99, 'chunk similarity');
+      assert.equal(chunkWin[0].chunk?.index, bWinners[0].index);
+      assert.equal(chunkWin[0].chunk?.offset, bWinners[0].offset);
+    } finally {
+      stub.restore();
+      fs.rmSync(memDir, { recursive: true, force: true });
+    }
+  });
 });
