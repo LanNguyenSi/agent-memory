@@ -823,28 +823,31 @@ function openIndex(opts: IndexStoreOptions): {
     upsertTx(id, mtime, model, toBlob(embedding));
   }
 
-  // Live existence probe for a table: the `chunkTablesReady` /
-  // `chunkVecTableExists` flags were taken at OPEN time, and another
-  // process can have created (and filled) the chunk tables since, so an
-  // open-time false flag is only a lower bound. A positive probe caches
-  // the flag; a lazily-prepared chunk statement is then compiled against
-  // a table that exists now.
-  const probeTableStmt = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  );
+  // Live existence probe for a table. `chunk_vec` is created lazily on
+  // the first chunk upsert, possibly by another process after this
+  // connection opened, so the open-time `chunkVecTableExists` flag is
+  // only a lower bound. A positive probe caches the flag; a
+  // lazily-prepared chunk statement is then compiled against a table
+  // that exists now. Prepared on first use, so search-only opens skip it.
+  let _probeTable: { get: (name: string) => unknown } | null = null;
   function tableExists(name: string): boolean {
-    return probeTableStmt.get(name) !== undefined;
+    if (!_probeTable) {
+      _probeTable = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      );
+    }
+    return _probeTable!.get(name) !== undefined;
   }
 
   function remove(id: string): void {
     // A removed memory must not leave orphan chunk rows behind either.
     // The chunk deletes run INDEPENDENTLY of the entries-row lookup
     // below: chunk rows can exist without one (they outlived an older
-    // build's remove(), or another process wrote them while this
-    // connection still saw the pre-migration file). Only the `chunk_vec`
-    // delete is guarded on that virtual table's existence, and the guard
-    // re-probes sqlite_master instead of trusting the open-time flag.
-    if (chunkTablesReady || tableExists('chunks')) {
+    // build's remove()). Every writable open runs the migrations, so the
+    // `chunks` table always exists here; only the lazily created
+    // `chunk_vec` delete is guarded, and that guard re-probes
+    // sqlite_master instead of trusting the open-time flag.
+    if (chunkTablesReady) {
       if (chunkVecTableExists || tableExists('chunk_vec')) {
         chunkVecTableExists = true;
         deleteChunkVecByIdStmt().run(id);

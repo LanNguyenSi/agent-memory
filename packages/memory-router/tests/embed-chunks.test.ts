@@ -1300,6 +1300,60 @@ test('a rebuild interrupted mid-way re-chunks the edited memory on the next run 
   fs.rmSync(memDir, { recursive: true, force: true });
 });
 
+test('a rebuild that fails on its first request leaves the edited memory document-only and re-chunks it next run', async () => {
+  const memDir = tmpDir('chunks-first-request-fails');
+  const word = (w: string, n: number): string =>
+    Array.from({ length: n }, () => w).join(' ');
+  const fm = { name: 'AX', description: 'The edited memory' };
+  const oldBody = `alpha\n\n${word('oldphrase', 1500)}`;
+  const newBody = `beta\n\n${word('newphrase', 1500)}`;
+  const file = writeMemory(memDir, 'ax.md', { ...fm, body: oldBody });
+  const idxPath = indexPath(memDir);
+
+  await withProviderEnv(async () => {
+    const stub1 = stubFetch((input) => (input.includes('oldphrase') ? ON : OFF));
+    try {
+      await rebuildIndex(memDir);
+      assert.ok(chunkRowCount(idxPath, 'ax') >= 3, 'fixture: the old body chunks up');
+    } finally {
+      stub1.restore();
+    }
+    const mtimeBefore = (
+      rawQuery<{ mtime: number }[]>(idxPath, "SELECT mtime FROM entries WHERE id = 'ax'")
+    )[0].mtime;
+    bumpMtime(file);
+    writeMemory(memDir, 'ax.md', { ...fm, body: newBody });
+
+    // Run 2 fails before any document upsert commits.
+    const stub2 = stubFetch(() => OFF, { failOnRequest: 1 });
+    try {
+      await assert.rejects(() => rebuildIndex(memDir), /stubbed embed failure on request 1/);
+      const mtimeAfter = (
+        rawQuery<{ mtime: number }[]>(idxPath, "SELECT mtime FROM entries WHERE id = 'ax'")
+      )[0].mtime;
+      assert.equal(mtimeAfter, mtimeBefore, 'the document row was not rewritten');
+      assert.equal(chunkRowCount(idxPath, 'ax'), 0, 'the old chunks were dropped anyway');
+    } finally {
+      stub2.restore();
+    }
+
+    // Run 3: the stale document and the missing chunks are both rebuilt;
+    // run 4 has nothing left to do.
+    const stub3 = stubFetch((input) => (input.includes('newphrase') ? ON : OFF));
+    try {
+      const third = await rebuildIndex(memDir);
+      assert.equal(third.embedded, 1);
+      assert.equal(chunkRowCount(idxPath, 'ax'), chunkBody(newBody).length);
+      const fourth = await rebuildIndex(memDir);
+      assert.equal(fourth.embedded, 0);
+      assert.equal(fourth.chunksEmbedded, 0);
+    } finally {
+      stub3.restore();
+    }
+  });
+  fs.rmSync(memDir, { recursive: true, force: true });
+});
+
 test('a rebuild purges orphan chunk rows whose id has no memory and no entries row', async () => {
   const memDir = tmpDir('chunks-purge');
   writeMemory(memDir, 'stay.md', {
