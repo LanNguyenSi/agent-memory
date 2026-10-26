@@ -1,5 +1,16 @@
 # Bundle log
 
+- 2026-10-26T21:32:26Z, chunked embeddings (index schema v3): `semanticSearch` now also
+  runs a chunk KNN and scores a memory as max(document, best chunk);
+  `remove()` drops chunk rows; readonly opens create no chunk tables.
+  Re-verified and updated `semantic-search-silent-noop.md`; re-pointed the
+  drifted `cli.ts` and `index-store.ts` citations in
+  `gate-composition-and-dedup.md` and `native-deps-and-ci-smoke.md`
+  (claims unchanged); re-verified `score-blend-resolver.md` against the
+  changed `docs/scoring.md` (no content change). The earlier source
+  changes these docs were stale against (hook version bump, `package.json`
+  release cut, `mcp/server.ts` help text) were re-checked in the same pass;
+  re-stamped all four.
 - 2026-10-25T08:12:28Z, release cut 0.7.4 bumped `package.json` and the `PACKAGE_VERSION`
   constant in the `UserPromptSubmit` hook source (one-line change, no line
   shift). Re-verified `gate-composition-and-dedup.md` (`ctx` built without
