@@ -1,5 +1,11 @@
 # Bundle log
 
+- 2026-10-27T11:06:16Z, release cut 0.8.0 bumped `package.json` and the `PACKAGE_VERSION`
+  constant in the `UserPromptSubmit` hook source (one-line change, no line
+  shift). Re-verified `gate-composition-and-dedup.md` and
+  `score-blend-resolver.md` (hook lines 40, 54 and 64 unchanged) and
+  `native-deps-and-ci-smoke.md` (`better-sqlite3` and `sqlite-vec` still
+  declared dependencies); claims unchanged; re-stamped.
 - 2026-10-27T10:46:38Z, `src/render.ts`: one comment line above `renderHitsBudgeted`
   reworded (drops are relative to the top hit's form); no line moved, no
   claim affected. Re-verified and re-stamped `gate-composition-and-dedup.md`
