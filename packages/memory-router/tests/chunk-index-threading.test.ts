@@ -140,6 +140,20 @@ test('resolveBlended: a keyword-only admission carries the chunk the id token ma
   assert.equal(hits[0].chunkIndex, 3);
 });
 
+test('resolveBlended: with a live semantic path, a keyword-only admission still carries its own chunk', async () => {
+  // "sem" clears the floor, so this is the active-blend branch (not the
+  // degraded one); "kw" has no semantic hit and is admitted by its id token.
+  const hits = await resolveWith(
+    [fakeMemory('sem'), fakeMemory('kw')],
+    [{ id: 'sem', score: 0.9, chunk: { index: 2, offset: 40 } }],
+    [{ id: 'kw', chunkIndex: 4 }],
+  );
+  const byId = new Map<string, GateHit>(hits.map((h) => [h.memory.id, h]));
+  assert.equal(byId.get('kw')?.gate, 'keyword');
+  assert.equal(byId.get('kw')?.chunkIndex, 4);
+  assert.equal(byId.get('sem')?.chunkIndex, 2, 'the semantic hit keeps its own chunk');
+});
+
 test('resolveBlended: keyword admission in the degraded branch (semantic silent) also carries its chunk', async () => {
   // Every semantic candidate below the floor: the semantic path contributes
   // nothing, so the degraded branch builds the keyword-first slots.

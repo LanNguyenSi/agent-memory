@@ -291,7 +291,23 @@ test('best chunk holding a fenced block: the fence is kept whole and balanced', 
   assert.equal(fenceLines(out) % 2, 0, 'no unbalanced fence');
 });
 
-test('a fenced block longer than the chunk cap is split by the chunker: every injected piece is still balanced', () => {
+// Expected injected text for a chunk of a body: the chunk, wrapped in the
+// fence marker it starts inside (reopened) and/or ends inside (closed).
+function expectedBalanced(body: string, chunk: MemoryChunk, marker: string): string {
+  const fenceLine = /^\s*(?:`{3,}|~{3,})/;
+  const count = (text: string): number => text.split('\n').filter((l) => fenceLine.test(l)).length;
+  const startsOpen = count(body.slice(0, chunk.offset)) % 2 === 1;
+  const text = startsOpen ? `${marker}\n${chunk.text}` : chunk.text;
+  return count(text) % 2 === 1 ? `${text}\n${marker}` : text;
+}
+
+function excerptOf(out: string): string {
+  const start = out.indexOf(':_\n');
+  const end = out.indexOf('\n\n_Full memory:');
+  return out.slice(start + 3, end);
+}
+
+test('a fenced block longer than the chunk cap is split by the chunker: every injected piece is reopened/closed so the fences balance', () => {
   const lines = Array.from({ length: 220 }, (_, i) => `echo line ${i} ${'y'.repeat(20)}`);
   const body = `${para('INTRO', 200)}\n\n\`\`\`bash\n${lines.join('\n')}\n\`\`\`\n\n${para('OUTRO', 200)}`;
   const m = mem('bigfence', body);
@@ -300,10 +316,22 @@ test('a fenced block longer than the chunk cap is split by the chunker: every in
     .map((c: MemoryChunk, i: number) => ({ i, n: (c.text.match(/^```/gm) ?? []).length }))
     .filter((c: { n: number }) => c.n % 2 === 1);
   assert.ok(unbalanced.length >= 2, 'fixture: the chunker splits the fence across chunks');
+  let reopened = 0;
+  let closed = 0;
   for (let i = 0; i < chunks.length; i++) {
     const out = renderHitsBudgeted([hit(m, 0.8, { chunkIndex: i })]);
     assert.equal(fenceLines(out) % 2, 0, `chunk ${i}: balanced fences in the injected text`);
+    const excerpt = excerptOf(out);
+    assert.ok(excerpt.startsWith(chunks[i].text) || excerpt.startsWith('```\n'), `chunk ${i}`);
+    // Structure, not just parity: a chunk cut inside the fence gets its
+    // opening marker back at the start and a closing one at the end.
+    const expected = expectedBalanced(m.body, chunks[i], '```');
+    assert.ok(excerpt.startsWith(expected), `chunk ${i}: excerpt starts with the balanced chunk`);
+    if (excerpt.startsWith('```\n') && !chunks[i].text.startsWith('```')) reopened++;
+    if (expected.endsWith('\n```') && !chunks[i].text.endsWith('```')) closed++;
   }
+  assert.ok(reopened >= 1, 'fixture exercised the reopen path');
+  assert.ok(closed >= 1, 'fixture exercised the close path');
 });
 
 test('a tilde fence is balanced with its own marker', () => {
