@@ -130,6 +130,14 @@ another band, so recalibrate with `MEMORY_ROUTER_BLEND_RETIRED_PENALTY` and a
 negative-control result did not move at any penalty, and the mean injected
 size fell from 5,485 to 5,316 bytes.
 
+Marking a file by editing it bumps its mtime, and the recency modifier
+(up to 0.05 for a fresh file) is added after the floor, so it can offset the
+penalty in the ranking among memories that survive the floor, but it cannot
+bring back one the floor dropped. Replaying with the three marked files
+touched (index refreshed for them) gave the same result at penalties 0.05,
+0.1 and 0.15: 0 of 3 stale prompts violating, MRR 0.698, negative controls
+11/13.
+
 ## The keyword gate (schema v4)
 
 Embeddings blur exact identifiers: a task id like `4e7729ab` or a build
