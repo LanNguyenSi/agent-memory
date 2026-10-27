@@ -1,6 +1,6 @@
 # Bundle log
 
-- 2026-10-27T10:24:42Z, injection budget rule: `renderHitsBudgeted` builds
+- 2026-10-27T10:26:36Z, injection budget rule: `renderHitsBudgeted` builds
   each hit's ladder strictly decreasing in bytes (a shorter form only when its
   block is smaller than the last rung kept, so a ladder can be just the whole
   body) and picks, among the outputs that fit, the best one by the top hit's
