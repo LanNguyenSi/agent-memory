@@ -9,6 +9,7 @@ const {
   INDEX_DEFAULT_TIMEOUT_MS,
 } = require('./provider');
 const { openIndex } = require('./index-store');
+const { chunkBody } = require('./chunking');
 const { debug } = require('../debug');
 
 // Legacy constant, kept only as a backward-compatible export of this
@@ -103,12 +104,39 @@ function buildEmbedInput(memory: Memory): string {
   return parts.filter(Boolean).join('\n').slice(0, 8000);
 }
 
+// Chunk-level embed input (schema v3): the same name + description prefix
+// as the document input above, followed by ONE chunk of the body instead
+// of the whole body, under the same 8,000-char cap. Chunks come from
+// src/embed/chunking.ts, so a long memory's deeper text gets its own vector
+// instead of being cut off by the document input's cap.
+function buildChunkEmbedInput(memory: Memory, chunkText: string): string {
+  const parts = [
+    memory.frontmatter.name,
+    memory.frontmatter.description,
+    chunkText,
+  ];
+  return parts.filter(Boolean).join('\n').slice(0, 8000);
+}
+
 interface IndexResult {
   total: number;
   embedded: number;
   removed: number;
   skipped: number;
+  // Chunk vectors (re)written by this run (schema v3 chunked embeddings).
+  chunksEmbedded: number;
   reason?: string;
+}
+
+// One semanticSearch result: a memory plus its score = max(document vector
+// similarity, best chunk similarity). `chunk` is set only when a CHUNK
+// vector is what produced that score, carrying the winning chunk's index
+// within the body and its char offset, so a later task can highlight the
+// matching region; existing callers ignore the field.
+interface SemanticHit {
+  memory: Memory;
+  score: number;
+  chunk?: { index: number; offset: number };
 }
 
 async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
@@ -123,6 +151,7 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
       embedded: 0,
       removed: 0,
       skipped: 0,
+      chunksEmbedded: 0,
       reason:
         'MEMORY_ROUTER_EMBED_PROVIDER=openai selected but OPENAI_API_KEY is not set - confidence gate will remain silent',
     };
@@ -147,16 +176,66 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
         .listEntries()
         .map((e: { id: string; mtime: number }) => [e.id, e.mtime]),
     );
+    // Ids that already have at least one chunk row. A v3-migrated index
+    // has none for ANY memory while its `entries` mtimes are all still
+    // current, so the mtime skip alone would never build chunks: the
+    // chunk pass below keys off this set instead (and off a changed
+    // document, which makes existing chunks stale too).
+    const chunkedIds = new Set<string>(store.listChunkIds());
     const seen = new Set<string>();
 
-    const toEmbed: { memory: Memory; mtime: number }[] = [];
+    // One flat queue for BOTH document and chunk embeds, so batching is
+    // per INPUT (see the BATCH comment below): chunks make the input count
+    // much larger than the memory count. A job with `chunk` set embeds that
+    // chunk's text; a job without it embeds the whole document.
+    interface EmbedJob {
+      memory: Memory;
+      mtime: number;
+      chunk?: { index: number; offset: number; text: string };
+    }
+    const jobs: EmbedJob[] = [];
+    // Memories whose chunk rows get rewritten wholesale by this run (in
+    // plan order), their planned chunks, and the vectors collected per
+    // chunk index while the batches run. `replaceChunks` for a memory
+    // runs only after all embeds succeeded; a stale document is paired
+    // with dropping that memory's old chunk rows up front (see the
+    // docStale guard in the planning loop), so an interrupted run leaves
+    // no memory scoring on chunks of a body it no longer has.
+    const chunkPlan: string[] = [];
+    const plannedChunks = new Map<string, { index: number; offset: number; text: string }[]>();
+    const chunkVectors = new Map<string, number[][]>();
 
     for (const memory of memories) {
       seen.add(memory.id);
       const mtime = Math.floor(statSync(memory.path).mtimeMs);
       const prev = existing.get(memory.id);
-      if (prev === mtime) continue;
-      toEmbed.push({ memory, mtime });
+      const docStale = prev !== mtime;
+      if (docStale) jobs.push({ memory, mtime });
+      if (docStale || !chunkedIds.has(memory.id)) {
+        const chunks = chunkBody(memory.body);
+        // Only schedule work when there is something to write or an old
+        // chunk set to delete (a memory whose body became empty must have
+        // its orphan chunks removed).
+        if (chunks.length > 0 || chunkedIds.has(memory.id)) {
+          chunkPlan.push(memory.id);
+          plannedChunks.set(memory.id, chunks);
+          chunkVectors.set(memory.id, []);
+          // A stale document's new mtime commits as soon as its batch
+          // lands, while this memory's new chunk vectors only land after
+          // ALL embed requests succeeded. Drop the old chunk rows right
+          // now so an interrupted run cannot leave them paired with the
+          // new mtime: the next run sees "no chunk rows" and re-chunks
+          // the memory (document-only scoring in the meantime), instead
+          // of skipping it forever while it ranks on text its body no
+          // longer contains.
+          if (docStale && chunkedIds.has(memory.id)) {
+            store.replaceChunks(memory.id, cfg.model, []);
+          }
+          for (const chunk of chunks) {
+            jobs.push({ memory, mtime, chunk });
+          }
+        }
+      }
     }
 
     let removed = 0;
@@ -165,21 +244,36 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
       store.remove(id);
       removed++;
     }
+    // Chunk rows whose id has neither an entries row nor a memory file
+    // (orphans an older build's remove() could leave behind) are
+    // invisible to the loop above, which iterates entries: purge them by
+    // chunk id too, so no memory-less chunk ever scores.
+    for (const id of store.listChunkIds()) {
+      if (!seen.has(id) && !existing.has(id)) {
+        store.replaceChunks(id, cfg.model, []);
+      }
+    }
 
     // OpenAI accepts up to ~2048 inputs per call; for 20 memories we can
     // always do a single batch. For safety when the corpus grows, chunk at
-    // 64 per request — still one HTTP round-trip per ~1000 memories.
+    // 64 per REQUEST (inputs, not memories: a long memory contributes many
+    // chunk inputs); still one HTTP round-trip per ~1000 inputs.
     const BATCH = 64;
     let embedded = 0;
-    for (let i = 0; i < toEmbed.length; i += BATCH) {
-      const batch = toEmbed.slice(i, i + BATCH);
+    let chunksEmbedded = 0;
+    for (let i = 0; i < jobs.length; i += BATCH) {
+      const batch = jobs.slice(i, i + BATCH);
       let vectors: number[][];
       try {
         vectors = await embedBatch({
           apiKey: cfg.apiKey,
           model: cfg.model,
           baseUrl: cfg.baseUrl,
-          inputs: batch.map((b) => buildEmbedInput(b.memory)),
+          inputs: batch.map((b) =>
+            b.chunk === undefined
+              ? buildEmbedInput(b.memory)
+              : buildChunkEmbedInput(b.memory, b.chunk.text),
+          ),
           // Index rebuild gets its own, larger budget than embedBatch's
           // hook-tight default — see INDEX_DEFAULT_TIMEOUT_MS in provider.ts
           // for the measured Ollama batch times that motivated this.
@@ -189,9 +283,34 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
         throw describeEmbedError(err, cfg);
       }
       for (let j = 0; j < batch.length; j++) {
-        store.upsert(batch[j].memory.id, batch[j].mtime, cfg.model, vectors[j]);
-        embedded++;
+        const job = batch[j];
+        // embedBatch() sorts the response by `index`, so vectors[j] is the
+        // embedding of inputs[j] = this exact job (document or chunk).
+        if (job.chunk === undefined) {
+          store.upsert(job.memory.id, job.mtime, cfg.model, vectors[j]);
+          embedded++;
+        } else {
+          chunkVectors.get(job.memory.id)![job.chunk.index] = vectors[j];
+          chunksEmbedded++;
+        }
       }
+    }
+
+    // Write each planned memory's full chunk set in one transaction: old
+    // rows for the id are deleted first, so a shorter new version of a
+    // memory can never keep scoring on orphan chunks of the old one.
+    for (const id of chunkPlan) {
+      const chunks = plannedChunks.get(id) ?? [];
+      const vectors = chunkVectors.get(id) ?? [];
+      store.replaceChunks(
+        id,
+        cfg.model,
+        chunks.map((c, n) => ({
+          index: c.index,
+          offset: c.offset,
+          embedding: vectors[n],
+        })),
+      );
     }
 
     return {
@@ -199,6 +318,7 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
       embedded,
       removed,
       skipped: memories.length - embedded,
+      chunksEmbedded,
     };
   } finally {
     store.close();
@@ -210,7 +330,7 @@ async function semanticSearch(
   memories: Memory[],
   memoryDir: string,
   k: number,
-): Promise<{ memory: Memory; score: number }[]> {
+): Promise<SemanticHit[]> {
   const cfg = resolveProviderConfig({ autoDetectOllama: true });
   if (!cfg) return [];
 
@@ -268,17 +388,56 @@ async function semanticSearch(
       }
       store.putCachedQuery(prompt, queryVec);
     }
+    // Semantic score of a memory = max(document vector similarity, best
+    // chunk similarity). `search` returns one hit per memory id;
+    // `searchChunks` returns at most one hit per memory id as well (its
+    // nearest chunk), so the merge below can never produce one hit per
+    // chunk: maxHits, the blend's relevance floor and the router's dedup
+    // all keep their meaning.
     const hits = store.search(queryVec, k, cfg.model);
+    const chunkHits = store.searchChunks(queryVec, k, cfg.model);
+    const bestById = new Map<
+      string,
+      { similarity: number; chunk?: { index: number; offset: number } }
+    >();
+    for (const h of hits) bestById.set(h.id, { similarity: h.similarity });
+    for (const c of chunkHits) {
+      const prev = bestById.get(c.id);
+      const chunk = { index: c.chunkIndex, offset: c.charOffset };
+      if (prev === undefined) {
+        bestById.set(c.id, { similarity: c.similarity, chunk });
+      } else if (c.similarity > prev.similarity) {
+        prev.similarity = c.similarity;
+        prev.chunk = chunk;
+      }
+    }
+    // A union of the two top-k lists always contains the true top-k of the
+    // max score (a memory in the true top-k must have its winning score
+    // from either the document or a chunk vector), so sorting the merge and
+    // cutting at k is exact. `Array.prototype.sort` is stable, so ties keep
+    // the document-then-chunk insertion order.
+    const ranked = [...bestById.entries()]
+      .sort((a, b) => b[1].similarity - a[1].similarity)
+      .slice(0, k);
     const byId = new Map(memories.map((m) => [m.id, m]));
-    return hits
-      .map((h: { id: string; similarity: number }) => ({
-        memory: byId.get(h.id),
-        score: h.similarity,
+    return ranked
+      .map(([id, best]) => ({
+        memory: byId.get(id),
+        score: best.similarity,
+        // Best chunk's position in the body when the chunk vector is what
+        // won this memory's score; undefined when the document vector won
+        // (or the memory has no chunks). Callers that don't know this
+        // field simply ignore it.
+        chunk: best.chunk,
       }))
       .filter(
         (h: {
           memory: Memory | undefined;
-        }): h is { memory: Memory; score: number } => h.memory !== undefined,
+        }): h is {
+          memory: Memory;
+          score: number;
+          chunk: { index: number; offset: number } | undefined;
+        } => h.memory !== undefined,
       );
   } finally {
     store.close();

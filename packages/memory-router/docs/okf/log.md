@@ -1,5 +1,29 @@
 # Bundle log
 
+- 2026-10-26T22:27:05Z, `remove()` lost its dead `chunks`-table probe (every writable open
+  runs the migrations) and the table probe is prepared on first use; every
+  `index-store.ts` line from `remove()` on moved down by three. Re-pointed
+  those citations in `semantic-search-silent-noop.md` (claims unchanged)
+  and re-verified `native-deps-and-ci-smoke.md` (its cited lines sit above
+  the change); re-stamped both.
+- 2026-10-26T22:20:09Z, review fixes on the chunked embeddings (final heading section kept,
+  stale chunks dropped with a re-embedded document, k cut, remove() chunk
+  cleanup) shifted lines in `indexer.ts` and `index-store.ts`.
+  Re-pointed the citations in `semantic-search-silent-noop.md` (claims
+  unchanged) and re-verified `native-deps-and-ci-smoke.md` (the
+  `require` pair and the `new Database(...)` / `sqliteVec.load(db)` lines
+  still sit on the cited lines); re-stamped both.
+- 2026-10-26T21:32:26Z, chunked embeddings (index schema v3): `semanticSearch` now also
+  runs a chunk KNN and scores a memory as max(document, best chunk);
+  `remove()` drops chunk rows; readonly opens create no chunk tables.
+  Re-verified and updated `semantic-search-silent-noop.md`; re-pointed the
+  drifted `cli.ts` and `index-store.ts` citations in
+  `gate-composition-and-dedup.md` and `native-deps-and-ci-smoke.md`
+  (claims unchanged); re-verified `score-blend-resolver.md` against the
+  changed `docs/scoring.md` (no content change). The earlier source
+  changes these docs were stale against (hook version bump, `package.json`
+  release cut, `mcp/server.ts` help text) were re-checked in the same pass;
+  re-stamped all four.
 - 2026-10-25T08:12:28Z, release cut 0.7.4 bumped `package.json` and the `PACKAGE_VERSION`
   constant in the `UserPromptSubmit` hook source (one-line change, no line
   shift). Re-verified `gate-composition-and-dedup.md` (`ctx` built without

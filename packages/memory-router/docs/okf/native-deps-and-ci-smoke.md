@@ -3,7 +3,7 @@ type: module
 title: Native-dependency smoke check
 description: Pointer doc. Why the CI matrix runs a dedicated native-addon load before typecheck/build, which matrix leg it exercises, and how its probe relates to the calls index-store.ts makes at runtime.
 tags: [native-deps, ci-smoke, better-sqlite3, sqlite-vec]
-timestamp: 2026-10-25T08:12:28Z
+timestamp: 2026-10-26T22:27:05Z
 sources:
   - .github/workflows/ci.yml
   - packages/memory-router/package.json
@@ -40,11 +40,11 @@ The step's command,
 makes the same kinds of calls
 `packages/memory-router/src/embed/index-store.ts` depends on: it requires
 both modules (index-store.ts does so at module scope,
-`packages/memory-router/src/embed/index-store.ts:81-82`, with the two
+`packages/memory-router/src/embed/index-store.ts:85-86`, with the two
 `require`s in the opposite order), constructs a database, and calls
 `load` on it (index-store.ts does `new Database(...)` then
 `sqliteVec.load(db)` per open,
-`packages/memory-router/src/embed/index-store.ts:300-303`), against an
+`packages/memory-router/src/embed/index-store.ts:383-385`), against an
 in-memory database instead of an index file. A green step shows that the
 addons load and the extension attaches on that runner's Node, not only
 that the packages installed.

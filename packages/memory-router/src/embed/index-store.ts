@@ -1,8 +1,12 @@
 // sqlite-vec-backed vector store for memory embeddings. Table layout is the
-// minimum needed for exact-knn cosine search on ~100 memory files; no
-// chunking, no metadata beyond (id, mtime) — the memory body itself is
-// re-read from disk when we return a hit. Embeddings are blob-serialized
-// float32 so sqlite-vec can MATCH them directly via `vec0` virtual tables.
+// minimum needed for exact-knn cosine search on ~100 memory files:
+// one document vector per memory (entries + vec, unchanged since v1), plus
+// since schema v3 one vector per body CHUNK for long-memory recall
+// (chunks + chunk_vec, see the v3 note below and src/embed/chunking.ts);
+// no other metadata beyond (id, mtime) and per-chunk (chunk_index,
+// char_offset, model); the memory body itself is re-read from disk when
+// we return a hit. Embeddings are blob-serialized float32 so sqlite-vec
+// can MATCH them directly via `vec0` virtual tables.
 //
 // Schema migration contract:
 //   The `meta` table holds a single `schema_version` row that tracks the
@@ -91,8 +95,23 @@ const { createHash } = require('node:crypto');
 // mixing is detectable. Pre-v2 rows get NULL on the new column; readers
 // that pass an `expectedModel` reject NULL rows (forcing a rebuild), so a
 // silent meaningless-cosine result is no longer possible.
+//
+// v3 (2026-10-26): adds the chunk tables for chunked embeddings (long
+// memories are findable by any part of their body, not just the first
+// 8,000 chars; see src/embed/chunking.ts):
+//   - `chunks (id, chunk_index, char_offset, model)`: one row per body
+//     chunk; `char_offset` is the chunk's first character in the raw body.
+//   - `chunk_vec`: a second vec0 virtual table keyed by `chunks.rowid`
+//     (same fixed width as `vec`, same deferred-creation rule: it can only
+//     be created once a width is known, so the migration itself does not
+//     create it, `replaceChunks` and open do).
+//   A freshly migrated index simply has no chunk rows and behaves exactly
+//   like v2 (document vectors only) until `rebuildIndex` embeds chunks for
+//   every memory that has none (the mtime skip must not hide that, see
+//   src/embed/indexer.ts). The per-memory document vector (entries + vec)
+//   and `getEmbedding` are deliberately unchanged for near-dupes/lint.
 const SCHEMA_VERSION_BASELINE = 1;
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 interface Migration {
   from: number;
@@ -136,6 +155,36 @@ const migrations: Migration[] = [
       }[];
       if (!cols.some((c) => c.name === 'model')) {
         db.exec('ALTER TABLE entries ADD COLUMN model TEXT');
+      }
+    },
+  },
+  {
+    from: 2,
+    to: 3,
+    run: (db) => {
+      // Chunk tables (see the v3 note above). `chunk_vec` (vec0) is NOT
+      // created here: its FLOAT[N] width must come from a real embedding,
+      // and an index can legitimately migrate before anything has ever
+      // been embedded (no recorded width yet). ensureChunkVecTable creates
+      // it the moment a width is known, same deferred-creation rule as
+      // `vec`.
+      //
+      // Idempotency: same pre-meta-file probe pattern as the 1→2 entry
+      // above, so a file that already carries `chunks` never double-applies.
+      const tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as { name: string }[];
+      if (!tables.some((t) => t.name === 'chunks')) {
+        db.exec(`
+          CREATE TABLE chunks (
+            id TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            char_offset INTEGER NOT NULL,
+            model TEXT
+          );
+          CREATE INDEX chunks_id_idx ON chunks(id);
+          CREATE UNIQUE INDEX chunks_id_chunk_index_idx ON chunks(id, chunk_index);
+        `);
       }
     },
   },
@@ -263,6 +312,23 @@ interface SearchHit {
   similarity: number;
 }
 
+// One chunk vector to (re)write for a memory (schema v3 chunk tables).
+// `index`/`offset` are the chunk's index within its memory body and its
+// character offset into the raw body (see src/embed/chunking.ts).
+interface ChunkInput {
+  index: number;
+  offset: number;
+  embedding: number[];
+}
+
+// A chunk-level KNN hit: the best (nearest) chunk of one memory id.
+interface ChunkSearchHit {
+  id: string;
+  similarity: number;
+  chunkIndex: number;
+  charOffset: number;
+}
+
 function openIndex(opts: IndexStoreOptions): {
   // Stores the embedding under `model`. Readers that pass an
   // `expectedModel` to getEmbedding/search reject rows whose stored model
@@ -285,6 +351,22 @@ function openIndex(opts: IndexStoreOptions): {
     k: number,
     expectedModel?: string,
   ) => SearchHit[];
+  // Schema v3 chunk tables. `replaceChunks` atomically replaces ALL chunk
+  // rows of one memory (an empty `chunks` list just deletes them, so a
+  // shorter new version of a memory never keeps orphan chunks of the old
+  // one). `listChunkIds` returns the distinct ids that have at least one
+  // chunk row (lets rebuildIndex detect a freshly migrated index that
+  // still needs chunks despite unchanged mtimes). `searchChunks` runs the
+  // chunk KNN and returns AT MOST ONE hit per memory id (the nearest
+  // chunk), over-fetched so many chunks of one memory cannot crowd other
+  // memories out of `k`.
+  replaceChunks: (id: string, model: string, chunks: ChunkInput[]) => void;
+  listChunkIds: () => string[];
+  searchChunks: (
+    queryEmbedding: number[],
+    k: number,
+    expectedModel?: string,
+  ) => ChunkSearchHit[];
   // Count of `entries` rows whose `model` is NULL or mismatches the
   // argument. Surfaces "you ran with model A, the index has model B" so
   // CLI callers can warn the user without re-running their own probes.
@@ -345,6 +427,28 @@ function openIndex(opts: IndexStoreOptions): {
     physicalDimensions = Number(m[1]);
   }
 
+  // Same physical-width recovery for the schema v3 chunk table (see the v3
+  // note above): `chunk_vec` may already exist from an earlier writable
+  // open, and its width must agree with `vec`'s (chunk and document
+  // vectors come from the same model, so they always share one space).
+  const existingChunkVecRow = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunk_vec'",
+    )
+    .get() as { sql: string } | undefined;
+  let chunkVecTableExists = false;
+  let chunkPhysicalDimensions: number | null = null;
+  if (existingChunkVecRow) {
+    chunkVecTableExists = true;
+    const m = existingChunkVecRow.sql.match(/FLOAT\[(\d+)\]/);
+    if (!m) {
+      throw new Error(
+        `cannot determine the embedding dimension of the existing chunk vector table in ${opts.path}; the file may be corrupted`,
+      );
+    }
+    chunkPhysicalDimensions = Number(m[1]);
+  }
+
   // Run migrations BEFORE preparing statements that reference v2 columns
   // (or the embed-provenance meta rows below). The query_cache table is
   // created later but applyMigrations only operates on entries/meta here;
@@ -378,6 +482,19 @@ function openIndex(opts: IndexStoreOptions): {
   ) {
     throw new Error(
       `embedding index at ${opts.path} is internally inconsistent: recorded dimensions=${storedDimensions} but the on-disk vector table is FLOAT[${physicalDimensions}]. The file is likely corrupted — delete it and rebuild.`,
+    );
+  }
+
+  // Same internal-consistency check for the schema v3 chunk table: chunk
+  // and document vectors are produced by the same model, so the two vec0
+  // tables must have the same width.
+  if (
+    chunkPhysicalDimensions !== null &&
+    physicalDimensions !== null &&
+    chunkPhysicalDimensions !== physicalDimensions
+  ) {
+    throw new Error(
+      `embedding index at ${opts.path} is internally inconsistent: the on-disk vector table is FLOAT[${physicalDimensions}] but the chunk vector table is FLOAT[${chunkPhysicalDimensions}]. The file is likely corrupted - delete it and rebuild.`,
     );
   }
 
@@ -486,6 +603,32 @@ function openIndex(opts: IndexStoreOptions): {
   }
   if (dimensions !== null) ensureVecTable(dimensions);
 
+  // --- Schema v3 chunk tables (see the v3 note at the top of the file). ---
+  // Whether the `chunks` table exists on THIS connection: true for every
+  // writable open (applyMigrations created it above) and for a readonly
+  // open of an index some earlier writable open already migrated; false
+  // only for a readonly open of a pre-v3 file (readonly never migrates).
+  // Every chunk statement below is prepared lazily and every chunk read
+  // path checks this flag first, so a readonly pre-v3 open neither creates
+  // anything nor throws on the new tables it never had.
+  const chunkTablesReady =
+    db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks'",
+      )
+      .get() !== undefined;
+
+  // Same deferred-creation rule as ensureVecTable: chunk_vec's FLOAT[N]
+  // width can only come from a known `dimensions` value.
+  function ensureChunkVecTable(dim: number): void {
+    if (chunkVecTableExists) return;
+    if (opts.readonly) return;
+    db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(embedding FLOAT[${dim}] distance_metric=cosine);`,
+    );
+    chunkVecTableExists = true;
+  }
+
   // Record provenance the first time it's known, whether that's now (an
   // existing file/hint being opened for the first time under this feature)
   // or later from upsert(). ON CONFLICT DO NOTHING means this is a no-op
@@ -565,6 +708,70 @@ function openIndex(opts: IndexStoreOptions): {
     return _searchStmt;
   }
 
+  // Chunk-table statements (schema v3), lazily prepared for the same
+  // reason as the vec ones: a readonly open of a pre-v3 file has neither
+  // table, so preparing any of these eagerly at open would break it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _insertChunk: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _insertChunkVec: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _deleteChunks: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _deleteChunkVecById: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _listChunkIds: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _chunkSearchStmt: any = null;
+  function insertChunkStmt() {
+    if (!_insertChunk) {
+      _insertChunk = db.prepare(
+        'INSERT INTO chunks (id, chunk_index, char_offset, model) VALUES (?, ?, ?, ?)',
+      );
+    }
+    return _insertChunk;
+  }
+  function insertChunkVecStmt() {
+    if (!_insertChunkVec) {
+      _insertChunkVec = db.prepare(
+        'INSERT INTO chunk_vec (rowid, embedding) VALUES (?, ?)',
+      );
+    }
+    return _insertChunkVec;
+  }
+  function deleteChunksStmt() {
+    if (!_deleteChunks) _deleteChunks = db.prepare('DELETE FROM chunks WHERE id = ?');
+    return _deleteChunks;
+  }
+  function deleteChunkVecByIdStmt() {
+    if (!_deleteChunkVecById) {
+      _deleteChunkVecById = db.prepare(
+        'DELETE FROM chunk_vec WHERE rowid IN (SELECT rowid FROM chunks WHERE id = ?)',
+      );
+    }
+    return _deleteChunkVecById;
+  }
+  function listChunkIdsStmt() {
+    if (!_listChunkIds) _listChunkIds = db.prepare('SELECT DISTINCT id FROM chunks');
+    return _listChunkIds;
+  }
+  function chunkSearchStmtLazy() {
+    if (!_chunkSearchStmt) {
+      _chunkSearchStmt = db.prepare(`
+        SELECT chunks.id AS id, chunks.model AS model,
+               chunks.chunk_index AS chunkIndex,
+               chunks.char_offset AS charOffset,
+               chunk_vec.distance AS distance
+        FROM chunk_vec
+        JOIN chunks ON chunks.rowid = chunk_vec.rowid
+        WHERE chunk_vec.embedding MATCH ?
+          AND k = ?
+        ORDER BY chunk_vec.distance ASC
+      `);
+    }
+    return _chunkSearchStmt;
+  }
+
   function toBlob(vec: number[]): Buffer {
     const f32 = new Float32Array(vec);
     return Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength);
@@ -616,7 +823,37 @@ function openIndex(opts: IndexStoreOptions): {
     upsertTx(id, mtime, model, toBlob(embedding));
   }
 
+  // Live existence probe for a table. `chunk_vec` is created lazily on
+  // the first chunk upsert, possibly by another process after this
+  // connection opened, so the open-time `chunkVecTableExists` flag is
+  // only a lower bound. A positive probe caches the flag; a
+  // lazily-prepared chunk statement is then compiled against a table
+  // that exists now. Prepared on first use, so search-only opens skip it.
+  let _probeTable: { get: (name: string) => unknown } | null = null;
+  function tableExists(name: string): boolean {
+    if (!_probeTable) {
+      _probeTable = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      );
+    }
+    return _probeTable!.get(name) !== undefined;
+  }
+
   function remove(id: string): void {
+    // A removed memory must not leave orphan chunk rows behind either.
+    // The chunk deletes run INDEPENDENTLY of the entries-row lookup
+    // below: chunk rows can exist without one (they outlived an older
+    // build's remove()). Every writable open runs the migrations, so the
+    // `chunks` table always exists here; only the lazily created
+    // `chunk_vec` delete is guarded, and that guard re-probes
+    // sqlite_master instead of trusting the open-time flag.
+    if (chunkTablesReady) {
+      if (chunkVecTableExists || tableExists('chunk_vec')) {
+        chunkVecTableExists = true;
+        deleteChunkVecByIdStmt().run(id);
+      }
+      deleteChunksStmt().run(id);
+    }
     const row = selectRowid.get(id) as { rowid: number } | undefined;
     if (!row) return;
     deleteVecStmt().run(BigInt(row.rowid));
@@ -625,6 +862,56 @@ function openIndex(opts: IndexStoreOptions): {
 
   function listEntries(): IndexEntry[] {
     return listStmt.all() as IndexEntry[];
+  }
+
+  // Atomically replace all chunk rows of one memory (schema v3). An empty
+  // `chunks` list is a pure delete: a memory whose new version is shorter
+  // (or whose body became empty) must never keep scoring on orphan chunks
+  // of the old version. Width mismatches throw inside the transaction and
+  // roll it back, so the previous chunk set stays intact on failure.
+  const replaceChunksTx = db.transaction(
+    (id: string, model: string, chunks: ChunkInput[]) => {
+      deleteChunkVecByIdStmt().run(id);
+      deleteChunksStmt().run(id);
+      for (const c of chunks) {
+        const info = insertChunkStmt().run(id, c.index, c.offset, model);
+        insertChunkVecStmt().run(
+          BigInt(info.lastInsertRowid as number),
+          toBlob(c.embedding),
+        );
+      }
+    },
+  );
+
+  function replaceChunks(id: string, model: string, chunks: ChunkInput[]): void {
+    if (typeof model !== 'string' || model.length === 0) {
+      throw new Error('replaceChunks requires a non-empty model name');
+    }
+    if (!Array.isArray(chunks)) {
+      throw new Error('replaceChunks requires an array of chunks');
+    }
+    if (dimensions === null) {
+      if (chunks.length === 0) return; // nothing to embed, nothing to delete
+      // Same deferred width learning as upsert(): a fresh index derives its
+      // dimension from the first real embedding it is given.
+      dimensions = chunks[0].embedding.length;
+      ensureVecTable(dimensions);
+      recordProvenance(dimensions);
+    }
+    ensureChunkVecTable(dimensions);
+    for (const c of chunks) {
+      if (c.embedding.length !== dimensions) {
+        throw new Error(
+          `chunk embedding dimension ${c.embedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
+        );
+      }
+    }
+    replaceChunksTx(id, model, chunks);
+  }
+
+  function listChunkIds(): string[] {
+    if (!chunkTablesReady) return [];
+    return (listChunkIdsStmt().all() as { id: string }[]).map((r) => r.id);
   }
 
   const countStaleModelStmt = db.prepare(
@@ -824,6 +1111,59 @@ function openIndex(opts: IndexStoreOptions): {
     }));
   }
 
+  // Chunk-level KNN (schema v3). Two differences from search() above:
+  // - results are deduplicated to AT MOST ONE hit per memory id (the
+  //   nearest chunk wins, so a memory's semantic score stays a single
+  //   number and callers keep one hit per memory);
+  // - the over-fetch loop widens until k DISTINCT ids survive rather than
+  //   until k rows: a single long memory's chunks can legitimately fill
+  //   any plain `LIMIT`, which would crowd every other memory out of the
+  //   top k. The loop stops when that is satisfied, the index is
+  //   exhausted, or the KNN ceiling is hit; the model filter applies to
+  //   chunk rows too (stale-model chunks never score).
+  function searchChunks(
+    queryEmbedding: number[],
+    k: number,
+    expectedModel?: string,
+  ): ChunkSearchHit[] {
+    if (dimensions === null || !chunkTablesReady || !chunkVecTableExists) {
+      return []; // nothing embedded yet, or an index without chunk support
+    }
+    if (queryEmbedding.length !== dimensions) {
+      throw new Error(
+        `query dimension ${queryEmbedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
+      );
+    }
+    const blob = toBlob(queryEmbedding);
+    type Row = {
+      id: string;
+      model: string | null;
+      chunkIndex: number;
+      charOffset: number;
+      distance: number;
+    };
+    // Rows come back ordered by distance ASC, so the FIRST row of an id is
+    // its best chunk; insertion order of the Map is therefore already the
+    // best-first result order.
+    const best = new Map<string, Row>();
+    let fetch = Math.min(k, MAX_KNN_K);
+    for (;;) {
+      const all = chunkSearchStmtLazy().all(blob, fetch) as Row[];
+      for (const r of all) {
+        if (expectedModel !== undefined && r.model !== expectedModel) continue;
+        if (!best.has(r.id)) best.set(r.id, r);
+      }
+      if (best.size >= k || all.length < fetch || fetch >= MAX_KNN_K) break;
+      fetch = Math.min(fetch * 4, MAX_KNN_K);
+    }
+    return [...best.values()].slice(0, k).map((r) => ({
+      id: r.id,
+      similarity: Math.max(0, 1 - r.distance / 2),
+      chunkIndex: r.chunkIndex,
+      charOffset: r.charOffset,
+    }));
+  }
+
   function close(): void {
     db.close();
   }
@@ -835,6 +1175,9 @@ function openIndex(opts: IndexStoreOptions): {
     getEmbedding,
     countEntriesWithStaleModel,
     search,
+    replaceChunks,
+    listChunkIds,
+    searchChunks,
     getCachedQuery,
     putCachedQuery,
     cacheSize,

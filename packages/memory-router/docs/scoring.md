@@ -10,10 +10,23 @@ for the headline defaults this document backs.
 
 | Signal | What it is | Role in the blend |
 |------|--------|---------------|
-| **Semantic score** | sqlite-vec cosine similarity between the prompt and each memory's embedding | The dominant signal, when an embedding index + provider are available. A score below the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, model/provider-conditional default, see [Calibration](../README.md#calibration)) is dropped before it can enter the blend at all |
+| **Semantic score** | sqlite-vec cosine similarity between the prompt and the memory's vectors: `max(document vector, best body chunk)` (see below) | The dominant signal, when an embedding index + provider are available. A score below the relevance floor (`MEMORY_ROUTER_BLEND_MIN_SEMANTIC`, model/provider-conditional default, see [Calibration](../README.md#calibration)) is dropped before it can enter the blend at all |
 | **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory, not a standalone full-score hit |
 | **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
 | **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker |
+
+The semantic score is one number per memory: the better of the memory's
+document vector (`name` + `description` + body, cut at 8,000 characters)
+and the best-matching CHUNK of its body (schema v3 index,
+`memory-router index` builds both). Chunking exists because the document
+vector cannot see text past that cut; a long memory is now findable by a
+rule written at character 12,000 of its body. Because the chunk pass can
+only ever raise a memory's score to its best match, a memory still yields
+at most one hit, `maxHits` still means memories (not chunks), and the
+relevance floor below applies unchanged. Indexes built before the v3
+schema simply have no chunk rows and score on the document vector alone
+until `memory-router index <dir>` is run once against them (see
+[commands.md](commands.md#building-the-embedding-index)).
 
 A memory with neither a semantic score (once the relevance floor is
 applied) nor a topic match contributes nothing and is excluded. Blend
