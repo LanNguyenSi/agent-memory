@@ -3,7 +3,7 @@ type: invariant
 title: Three resolvers, two dedup rules
 description: memory-router exports three resolvers that combine gate/signal hits into a ranked list; this maps each production call site to its resolver and gate set, and states how the two dedup/ranking functions underneath them differ.
 tags: [gate-composition, dedup, resolveBlended, resolve, rankWithToolPrivilege]
-timestamp: 2026-10-27T11:06:16Z
+timestamp: 2026-10-27T13:44:19Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/render.ts
@@ -39,11 +39,13 @@ allocate result slots differently.
 The two hook callers also differ in how they render their hits, not only in
 which resolver produced them: `UserPromptSubmit` renders through
 `renderHitsBudgeted` (`packages/memory-router/src/hooks/user-prompt-submit.ts:64`,
-`packages/memory-router/src/render.ts:327`), which injects short memories
-whole and long ones as description + matching chunk + path under a byte
+`packages/memory-router/src/render.ts:399`), which injects short memories
+whole and long ones as description + matching chunk + path (a long
+`type: feedback` memory's excerpt also carries its `How to apply` paragraph
+when the matched chunk misses it) under a byte
 budget, while `PreToolUse` renders through the unbudgeted
 `renderHitsAsContext` (`packages/memory-router/src/hooks/pre-tool-use.ts:31`,
-`packages/memory-router/src/render.ts:122`) and so always injects each hit's
+`packages/memory-router/src/render.ts:134`) and so always injects each hit's
 full body.
 
 Two things worth stating explicitly:
