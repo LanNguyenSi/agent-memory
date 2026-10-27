@@ -168,3 +168,46 @@ test('a corrupt FTS index (broken after open): blendedSearch keeps the semantic 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a corrupt FTS index: ftsMatch on its own returns no rows and warns once', async () => {
+  // ftsDocCount runs before ftsMatch on the blendedSearch path and takes the
+  // once-per-process warning first, so the ftsMatch catch is pinned here by
+  // calling it directly on a fresh store module.
+  const dir = tmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'task.md'),
+    '---\nname: task\ndescription: task tracker\ntype: reference\n---\n\ncarry task 4e7729ab across branches\n',
+  );
+  const restoreFetch = stubFetch();
+  try {
+    const { rebuildIndex, indexPath } = require('../src/embed/indexer');
+    await rebuildIndex(dir);
+
+    const raw = new Database(indexPath(dir));
+    raw.exec('DROP TABLE chunks_fts');
+    raw.exec(
+      'CREATE TABLE chunks_fts (name TEXT, description TEXT, text TEXT, mid TEXT, cidx INTEGER)',
+    );
+    raw.close();
+
+    delete require.cache[STORE_PATH];
+    const { openIndex } = require('../src/embed/index-store');
+    const store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
+    try {
+      const captured = await captureStderr(async () => {
+        assert.deepEqual(store.ftsMatch('"4e7729ab"', 5), [], 'a failing MATCH degrades to no rows');
+        assert.deepEqual(store.ftsMatch('"4e7729ab"', 5), [], 'and keeps degrading');
+      });
+      assert.equal(
+        (captured.match(FTS_WARN_RE) ?? []).length,
+        1,
+        'exactly one FTS warning line from ftsMatch',
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    restoreFetch();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -255,8 +255,8 @@ export interface EvalReport {
   semanticContributedCount: number;
   /**
    * How many of the golden set's prompts had at least one hit attributed
-    * to the KEYWORD path (resolveBlended's `gate: 'keyword'`, i.e. a memory
-    * admitted by the FTS5 keyword gate WITHOUT a semantic score clearing
+   * to the KEYWORD path (resolveBlended's `gate: 'keyword'`, i.e. a memory
+   * admitted by the FTS5 keyword gate WITHOUT a semantic score clearing
    * the relevance floor, see src/router.ts and src/embed/keyword.ts).
    * Out of `perPrompt.length` total prompts, same accounting shape as
    * `semanticContributedCount` above and printed next to it. A keyword
