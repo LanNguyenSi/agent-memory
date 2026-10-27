@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-10-27T10:02:19Z
+timestamp: 2026-10-27T14:19:20Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -138,7 +138,11 @@ while a read-only open still neither creates nor migrates the table (the
 same rule as the v3 chunk tables above). Only id tokens are ever queried
 (see `isIdToken` in `packages/memory-router/src/embed/keyword.ts`), so
 the FTS reads a prompt costs are two per id token at most, and a prompt
-without one reads the FTS index not at all.
+without one reads the FTS index not at all. Since an id PART of a larger
+token (a `task:4e7729ab` or `src/a1b2c3.ts` reference) now counts as an
+id token for this bound, a token with several id parts costs two reads
+per part; the bound is a cost description, not a cap - there is no code
+limit on how many id tokens one prompt may carry.
 
 ## Errors that can propagate out of `semanticSearch()`
 
@@ -183,7 +187,7 @@ from `rg -n 'throw ' packages/memory-router/src/embed/index-store.ts packages/me
 
 `upsert`'s throws (`packages/memory-router/src/embed/index-store.ts:965-984`)
 and `replaceChunks`' throws
-(`packages/memory-router/src/embed/index-store.ts:1053-1078`) are not on
+(`packages/memory-router/src/embed/index-store.ts:1053-1077`) are not on
 this path: `semanticSearch()` does not write.
 
 ### What each caller does with them

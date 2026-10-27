@@ -1,5 +1,6 @@
 # Bundle log
 
+- 2026-10-27T14:19:20Z, `src/embed/keyword.ts`: a whitespace token is also split at the id separators (`: / . # ? = '`, `-`, U+2019; not `_`) and every part that passes the unchanged `isIdToken` becomes its own keyword term; whole tokens and queried id phrases dedupe separately, so a stopword prefix cannot swallow an id part. `score-blend-resolver.md` (separator claim) and `semantic-search-silent-noop.md` (two FTS reads per id term, now per id part) re-verified claim by claim against the current tree, including every line citation; the `replaceChunks` range in `semantic-search-silent-noop.md` was tightened to end at the function's closing line. Re-stamped both.
 - 2026-10-27T13:44:19Z, `src/render.ts`: a long `type: feedback` hit's excerpt appends its
   `**How to apply:**` paragraph (capped) when the picked chunks miss it;
   containment is compared on LF text without trailing whitespace. Lines

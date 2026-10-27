@@ -23,6 +23,7 @@ const {
 } = require('../src/embed/indexer');
 const { loadMemoriesFromDir } = require('../src/memory/loader');
 const { resolveBlended, resolve } = require('../src/router');
+const { isIdToken } = require('../src/embed/keyword');
 
 const MODEL = 'text-embedding-3-small';
 
@@ -705,15 +706,48 @@ test('Bonsai-Baum negative control: not an id token, never queried, silent even 
     for (const prompt of [
       'Wie pflege ich einen Bonsai-Baum',
       'fix the strata-builds pipeline',
-      'see task-4e7729ab now',
     ]) {
       const outcome = await blendedSearch(prompt, loadMemoriesFromDir(dir), dir, 5);
       assert.deepEqual(
         outcome.keyword,
         [],
-        `"${prompt}": hyphenated words are not id tokens - neither the whole word nor its parts are queried, so nothing admits even where the phrase matches`,
+        `"${prompt}": neither the whole hyphenated word nor any of its parts is an id token, so nothing admits even where the phrase matches`,
       );
     }
+  } finally {
+    stub.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// An id wrapped inside a larger prompt token (a `task:` reference, a URL, a
+// path) reaches the keyword path through the id-separator split. At run base
+// collectKeywordMatches only ever asked isIdToken about the WHOLE whitespace
+// token, so `task:4e7729ab` failed the gate, was never FTS-queried, and the
+// memory that contained the id stayed un-matched. The split now surfaces the
+// id part and admits the memory.
+// ---------------------------------------------------------------------------
+
+test('id subtoken end-to-end: prompt task:4e7729ab matches the memory containing 4e7729ab (run base did not)', async () => {
+  const dir = tmpDir();
+  const stub = stubFetch();
+  try {
+    writeMemory(dir, 'task-memory', 'carry task 4e7729ab across branches');
+    writeMemory(dir, 'other', 'unrelated body about rocks');
+    await rebuildIndex(dir);
+
+    // Run-base gate: the WHOLE token is not an id, so at run base
+    // collectKeywordMatches skipped it and issued no FTS query at all.
+    assert.equal(isIdToken('task:4e7729ab'), false, 'run base: task:4e7729ab was not an id token');
+
+    const memories = loadMemoriesFromDir(dir);
+    const outcome = await blendedSearch('task:4e7729ab', memories, dir, 5);
+    const hit = outcome.keyword.find(
+      (k: { memory: Memory }) => k.memory.id === 'task-memory',
+    );
+    assert.ok(hit, 'the id part 4e7729ab of task:4e7729ab now admits the memory');
+    assert.deepEqual(hit.idTerms, ['4e7729ab']);
   } finally {
     stub.restore();
     fs.rmSync(dir, { recursive: true, force: true });

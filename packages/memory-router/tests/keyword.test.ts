@@ -184,6 +184,151 @@ test('quotePhrase: wraps in FTS5 double quotes; phrase bodies can never contain 
   }
 });
 
+// --- id subtokens inside a larger token (URLs, paths, task: refs) ----------
+//
+// A whitespace token is ALSO split at the id separators (`:` `/` `.` `#`
+// `?` `=` `'` `-` and the typographic apostrophe U+2019; the underscore is
+// NOT a separator) and every part that passes the UNCHANGED isIdToken
+// becomes its own term whose term and phrase are that part. Whole-token
+// behaviour is kept, so a token that is already an id yields one term (never
+// a duplicate). One named case per example.
+
+function idTerms(prompt: string): string[] {
+  return extractKeywordTerms(prompt)
+    .filter((t: { term: string }) => isIdToken(t.term))
+    .map((t: { term: string }) => t.term);
+}
+
+test('subtoken: task:4e7729ab yields the id term 4e7729ab', () => {
+  assert.deepEqual(idTerms('task:4e7729ab'), ['4e7729ab']);
+});
+
+test("subtoken: 4e7729ab's yields the id term 4e7729ab", () => {
+  assert.deepEqual(idTerms("4e7729ab's"), ['4e7729ab']);
+});
+
+test('subtoken: https://x/t/4e7729ab yields the id term 4e7729ab', () => {
+  assert.deepEqual(idTerms('https://x/t/4e7729ab'), ['4e7729ab']);
+});
+
+test('subtoken: src/a1b2c3.ts yields the id term a1b2c3', () => {
+  assert.deepEqual(idTerms('src/a1b2c3.ts'), ['a1b2c3']);
+});
+
+test('subtoken: task-4e7729ab yields the id term 4e7729ab', () => {
+  assert.deepEqual(idTerms('task-4e7729ab'), ['4e7729ab']);
+});
+
+test('subtoken: v0.7.4 yields no id (v0, 7 and 4 are not ids)', () => {
+  assert.deepEqual(idTerms('v0.7.4'), []);
+});
+
+test('subtoken: studio-tb yields no id (studio and tb are not ids)', () => {
+  assert.deepEqual(idTerms('studio-tb'), []);
+});
+
+test('subtoken: foo:bar yields no id (letters-only parts)', () => {
+  assert.deepEqual(idTerms('foo:bar'), []);
+});
+
+test('subtoken: snake_a1b2c3 yields no id (underscore is not a separator, the whole token is not an id)', () => {
+  assert.deepEqual(idTerms('snake_a1b2c3'), []);
+});
+
+test('subtoken: a bare id yields exactly one term, no duplicate', () => {
+  const terms = extractKeywordTerms('4e7729ab');
+  assert.equal(terms.length, 1, 'the whole-token pass and the split pass dedupe to one');
+  assert.deepEqual(terms.map((t: { term: string }) => t.term), ['4e7729ab']);
+});
+
+test('subtoken: a1b2c3/a1b2c3 yields the id once (deduped across the two equal parts)', () => {
+  assert.deepEqual(idTerms('a1b2c3/a1b2c3'), ['a1b2c3']);
+});
+
+test('subtoken: each id separator alone surfaces the id part', () => {
+  for (const tok of [
+    'x:a1b2c3',
+    'x/a1b2c3',
+    'x.a1b2c3',
+    'x#a1b2c3',
+    'x=a1b2c3',
+    "x'a1b2c3",
+    'x-a1b2c3',
+    'x\u2019a1b2c3',
+  ]) {
+    assert.deepEqual(idTerms(tok), ['a1b2c3'], `"${tok}" must yield the id a1b2c3`);
+  }
+});
+
+test('subtoken: empty parts from edge separators yield the id and no empty term (::a1b2c3::)', () => {
+  const terms = extractKeywordTerms('::a1b2c3::');
+  assert.deepEqual(
+    terms.filter((t: { term: string }) => isIdToken(t.term)).map((t: { term: string }) => t.term),
+    ['a1b2c3'],
+  );
+  for (const t of terms as { term: string; phrase: string }[]) {
+    assert.notEqual(t.term, '', 'no empty term');
+    assert.notEqual(t.phrase, '', 'no empty phrase');
+  }
+});
+
+test('subtoken FTS safety: an id part taken from a URL yields an FTS-safe phrase (letters, digits, spaces only)', () => {
+  const idTerm = (extractKeywordTerms('https://x/t/4e7729ab') as {
+    term: string;
+    phrase: string;
+  }[]).find((t) => t.term === '4e7729ab');
+  if (!idTerm) throw new Error('the id part 4e7729ab must be extracted from the URL');
+  assert.match(
+    idTerm.phrase,
+    /^[\p{L}\p{N}]+( [\p{L}\p{N}]+)*$/u,
+    'a phrase may only contain letters, digits and single spaces',
+  );
+  assert.ok(!idTerm.phrase.includes('"'), 'the phrase body cannot break out of quotePhrase');
+});
+
+// --- Stopword-prefixed tokens: a whole-token phrase never swallows the id ---
+//
+// Dropping the stopword prefix makes the WHOLE token's phrase equal the id
+// part's phrase (e.g. `the:a1b2c3` has phrase `a1b2c3`) while the whole
+// token itself is no id and is never queried; only terms that are (or could
+// be) queried may dedupe, so the id part must survive. One named case per
+// example.
+
+test('subtoken: stopword prefix the: does not swallow the id (the:a1b2c3 yields a1b2c3)', () => {
+  assert.deepEqual(idTerms('the:a1b2c3'), ['a1b2c3']);
+});
+
+test('subtoken: stopword prefix get- does not swallow the id (get-4e7729ab yields 4e7729ab)', () => {
+  assert.deepEqual(idTerms('get-4e7729ab'), ['4e7729ab']);
+});
+
+test('subtoken: stopword prefix for/ does not swallow the id (for/4e7729ab yields 4e7729ab)', () => {
+  assert.deepEqual(idTerms('for/4e7729ab'), ['4e7729ab']);
+});
+
+test('subtoken: stopword prefix a/ does not swallow the id (a/a1b2c3.ts yields a1b2c3)', () => {
+  assert.deepEqual(idTerms('a/a1b2c3.ts'), ['a1b2c3']);
+});
+
+test('subtoken: stopword prefix use/ does not swallow the id (use/a1b2c3 yields a1b2c3)', () => {
+  assert.deepEqual(idTerms('use/a1b2c3'), ['a1b2c3']);
+});
+
+test('subtoken: for/x1y2z3 and x1y2z3 yields exactly one id term x1y2z3', () => {
+  assert.deepEqual(idTerms('for/x1y2z3 and x1y2z3'), ['x1y2z3']);
+});
+
+test('subtoken: a bare id after a token whose part covers it yields no second term (x:a1b2c3 a1b2c3)', () => {
+  // `x` is no stopword, so the whole phrase `x a1b2c3` differs from the id
+  // phrase; only the part pass marks `a1b2c3` as queried, and the later bare
+  // id token must see that and stay deduped (one FTS read, not two).
+  assert.deepEqual(idTerms('x:a1b2c3 a1b2c3'), ['a1b2c3']);
+});
+
+test('subtoken: the typographic apostrophe U+2019 splits, 4e7729ab\u2019s yields the id term 4e7729ab', () => {
+  assert.deepEqual(idTerms('4e7729ab\u2019s'), ['4e7729ab']);
+});
+
 // --- Reason text -------------------------------------------------------------
 
 test('keywordReason: the single reason form names the matched id tokens', () => {

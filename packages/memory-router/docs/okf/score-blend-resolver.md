@@ -3,7 +3,7 @@ type: invariant
 title: Score-blend resolver, degraded mode, and confidence-floor provenance
 description: Pointer doc plus code anchors. Which function the blend callers run through, the router.ts lines behind each degraded-mode branch, and which confidence.ts branch sets each minSemanticScoreSource tag value that gates the floor-drop hint.
 tags: [score-blend, degraded-mode, relevance-floor, confidence-floor-provenance, resolveBlended]
-timestamp: 2026-10-27T13:44:19Z
+timestamp: 2026-10-27T14:19:20Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/render.ts
@@ -92,11 +92,15 @@ implemented in `packages/memory-router/src/embed/keyword.ts`);
 (`packages/memory-router/src/router.ts:303`) so all keyword logic below
 is inert. Only ID tokens reach the search layer at all: `isIdToken` in
 `packages/memory-router/src/embed/keyword.ts` admits a prompt token to
-the FTS query only as a single ASCII letter/digit run of at least
-`KEYWORD_MIN_ID_LENGTH` (6) characters carrying at least one letter and
-one digit, and the store then skips a term contained by more than
-`KEYWORD_MAX_DF` (12) memories, so every candidate the router receives is
-an id-token match (plain words are never queried, corroborated or
+the FTS query only when the whole token (edge punctuation trimmed) - or,
+after splitting the token at the id separators `:` `/` `.` `#` `?` `=` `'`
+`-` and the typographic apostrophe U+2019 (the underscore is not one), one
+of its parts - is a single ASCII
+letter/digit run of at least `KEYWORD_MIN_ID_LENGTH` (6) characters
+carrying at least one letter and one digit, and the store then skips a
+term contained by more than `KEYWORD_MAX_DF` (12) memories, so every
+candidate the router receives is an id-token match (plain words and
+non-id parts are never queried, corroborated or
 admitted). Admission loop
 (`packages/memory-router/src/router.ts:311-317`): only memories with NO
 above-floor semantic hit, at most `KEYWORD_MAX_HITS` (2) per prompt, best
