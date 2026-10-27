@@ -3,7 +3,7 @@
 // --json schema (stable, documented in docs/commands.md's eval section):
 //   {
 //     goldenPath, dir, corpusSize, semanticPathActive, vocabularySource,
-//     unknownExpectIds, semanticContributedCount,
+//     unknownExpectIds, semanticContributedCount, keywordContributedCount,
 //     perPrompt: [{ prompt, expect, got, isNegativeControl, precision, recall, reciprocalRank }],
 //     aggregate: { precision, recall, mrr, positiveCount,
 //                  negativeControls: { total, passed, failed, rate } }
@@ -25,6 +25,9 @@ function formatEvalReportText(report: EvalReportLike): string {
   lines.push(`vocabulary: ${report.vocabularySource}`);
   lines.push(
     `semantic contributed: ${report.semanticContributedCount}/${report.perPrompt.length} prompts`,
+  );
+  lines.push(
+    `keyword contributed: ${report.keywordContributedCount}/${report.perPrompt.length} prompts`,
   );
   if (report.unknownExpectIds.length > 0) {
     lines.push(
@@ -85,6 +88,7 @@ interface EvalReportLike {
   vocabularySource: string;
   unknownExpectIds: string[];
   semanticContributedCount: number;
+  keywordContributedCount: number;
   perPrompt: {
     prompt: string;
     expect: string[];

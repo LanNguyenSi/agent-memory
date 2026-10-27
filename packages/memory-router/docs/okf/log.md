@@ -1,5 +1,54 @@
 # Bundle log
 
+- 2026-10-27T08:33:57Z, `src/eval/runner.ts`: whitespace-only re-indent of the
+  `keywordContributedCount` doc comment; no line moved, no claim affected.
+  Re-verified and re-stamped `gate-composition-and-dedup.md` and
+  `score-blend-resolver.md`.
+- 2026-10-27T08:26:46Z, review round 2 on the keyword path (no design
+  change): `ftsField` in `indexer.ts` normalizes a non-string frontmatter
+  `name` (e.g. `name: 2026`) and a missing `description` before `replaceFts`
+  so a rebuild no longer throws on ordinary memories; `resolveBlended` now
+  boosts an id match only on an above-floor semantic hit (`else if
+  hasSemanticHit`), never on a beyond-the-cap topic-only candidate; the
+  `df > KEYWORD_MAX_DF` bound and the FTS orphan purge on rebuild gained
+  regression tests; and the store's `ftsDocCount`/`ftsMatch` FTS reads now
+  emit one stderr line per process (`warnFtsFailed`) instead of swallowing
+  silently. Docs `docs/scoring.md`, `docs/commands.md`, `README.md` and
+  `CHANGELOG.md` reworded to one statement: an admitted memory enters at
+  the floor edge plus the usual topic, type and recency modifiers, and a
+  below-floor cosine is never lifted or blended. `semantic-search-silent-noop.md`
+  keyword paragraph updated for the store-level warning and its
+  `indexer.ts`/`index-store.ts`/`router.ts` citations re-pointed for the
+  added lines; `gate-composition-and-dedup.md`, `native-deps-and-ci-smoke.md`
+  and `score-blend-resolver.md` citations re-pointed for the router and
+  index-store line shift (claims unchanged).
+- 2026-10-27T07:15:20Z, keyword gate narrowed to identifier tokens only:
+  the shape rule and the plain-word admission routes (cosine
+  corroboration, the 2-term route, `MEMORY_ROUTER_KEYWORD_CORROBORATION`)
+  are gone; `isIdToken` in `keyword.ts` (ASCII alnum run, 6+ chars, one
+  letter and one digit) is the only way a prompt token reaches the FTS
+  query, and the store's `cosinesForIds` batch was removed with them.
+  Rewrote `score-blend-resolver.md` (admissions/boost section now states
+  the id rule, corroboration removed; router citations re-pointed) and
+  `semantic-search-silent-noop.md` (keyword paragraph: id-only query
+  sentence, wrapper passes `keywordEnabled: false`; `router.ts`,
+  `indexer.ts` and `index-store.ts` citations re-pointed for the removed
+  lines); re-verified `gate-composition-and-dedup.md` and
+  `native-deps-and-ci-smoke.md` (claims unchanged, their `router.ts` and
+  `index-store.ts` citations re-pointed for the line shift).
+- 2026-10-27T06:27:22Z, FTS5 keyword path (index schema v4):
+  `semanticSearch` is now a wrapper over the shared `runBlendedSearch`
+  engine, `blendedSearch` adds the keyword pass, `resolveBlended` admits
+  at most 2 keyword-only memories (gate `keyword`, floor-edge score) and
+  boosts above-floor strong matches, and the degraded branch puts keyword
+  admissions first. Rewrote and re-pointed `semantic-search-silent-noop.md`
+  (new keyword silent-no-op paragraph, `indexer.ts`/`index-store.ts`/
+  `router.ts` citations), `score-blend-resolver.md` (new admissions/boost
+  section, degraded-branch and router citations),
+  `gate-composition-and-dedup.md` and `native-deps-and-ci-smoke.md`
+  (router/index-store citations re-pointed, FTS5-is-bundled note added);
+  claims updated where behavior changed, anchors re-verified against the
+  checked-out source.
 - 2026-10-26T22:27:05Z, `remove()` lost its dead `chunks`-table probe (every writable open
   runs the migrations) and the table probe is prepared on first use; every
   `index-store.ts` line from `remove()` on moved down by three. Re-pointed
@@ -60,7 +109,7 @@
   summarizes the CI steps; `ci.yml` changed only by the agent-memory-sync
   Format step, and the matrix `ci.yml:24-27`, smoke step `:47-53`, probe
   command `:52`, requires `index-store.ts:81-82` and open-and-load
-  `index-store.ts:300-303` anchors hold), `score-blend-resolver.md` and
+  `index-store.ts:481-483` anchors hold), `score-blend-resolver.md` and
   `semantic-search-silent-noop.md` (their README and `scoring.md` links
   point at sections this pass did not change); claims unchanged;
   re-stamped. `okf-kit check --json packages/memory-router/docs/okf`

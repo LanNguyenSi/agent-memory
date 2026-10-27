@@ -2,7 +2,9 @@
 // minimum needed for exact-knn cosine search on ~100 memory files:
 // one document vector per memory (entries + vec, unchanged since v1), plus
 // since schema v3 one vector per body CHUNK for long-memory recall
-// (chunks + chunk_vec, see the v3 note below and src/embed/chunking.ts);
+// (chunks + chunk_vec, see the v3 note below and src/embed/chunking.ts),
+// plus since schema v4 one FTS5 keyword row per chunk (chunks_fts, see the
+// v4 note below and src/embed/keyword.ts);
 // no other metadata beyond (id, mtime) and per-chunk (chunk_index,
 // char_offset, model); the memory body itself is re-read from disk when
 // we return a hit. Embeddings are blob-serialized float32 so sqlite-vec
@@ -86,6 +88,20 @@ const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
 const { createHash } = require('node:crypto');
 
+// Warned at most once per process, the same shape as the keyword/missing-
+// index/stale-model warnings in src/embed/indexer.ts: an FTS read that throws
+// (a corrupt or dropped chunks_fts table) must degrade to "no keyword
+// matches" with ONE visible stderr line, never a silent error and never one
+// line per query. Module-level so it survives every openIndex() call.
+let ftsWarned = false;
+function warnFtsFailed(err: unknown): void {
+  if (ftsWarned) return;
+  ftsWarned = true;
+  process.stderr.write(
+    `memory-router: FTS keyword index query failed, continuing without keyword matches: ${String(err)}\n`,
+  );
+}
+
 // SCHEMA_VERSION_BASELINE is the version every shipped DB has at minimum:
 // fresh DBs and pre-meta DBs both start here. CURRENT_SCHEMA_VERSION is what
 // this code expects on disk; when CURRENT > BASELINE, every open runs
@@ -110,8 +126,24 @@ const { createHash } = require('node:crypto');
 //   every memory that has none (the mtime skip must not hide that, see
 //   src/embed/indexer.ts). The per-memory document vector (entries + vec)
 //   and `getEmbedding` are deliberately unchanged for near-dupes/lint.
+//
+// v4 (2026-10-27): adds the FTS5 keyword index (`chunks_fts`) so the router
+// can find memories by rare exact tokens (task ids, build tags, identifiers)
+// that the dense embedding ranks poorly (see src/embed/keyword.ts):
+//   - `chunks_fts`: an fts5 virtual table with three INDEXED text columns
+//     (the memory's name, its description, and ONE chunk's text) plus two
+//     UNINDEXED key columns (`mid` = memory id, `cidx` = chunk index) so a
+//     matched row maps back to (memory id, chunk index). One row per chunk,
+//     mirroring `chunks`; name/description repeat per chunk row.
+//   Unlike `chunk_vec` this table needs NO deferred creation: it stores no
+//     vectors, only text, so the migration itself creates it (FTS5 ships in
+//     this build's SQLite, verified 3.53).
+//   A freshly migrated index simply has no FTS rows and behaves exactly like
+//   v3 (no keyword hits) until `rebuildIndex` back-fills them for every
+//   memory that has chunk rows but no FTS rows, under the same mtime-skip
+//   rule as the v3 chunk back-fill (see src/embed/indexer.ts).
 const SCHEMA_VERSION_BASELINE = 1;
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 interface Migration {
   from: number;
@@ -184,6 +216,34 @@ const migrations: Migration[] = [
           );
           CREATE INDEX chunks_id_idx ON chunks(id);
           CREATE UNIQUE INDEX chunks_id_chunk_index_idx ON chunks(id, chunk_index);
+        `);
+      }
+    },
+  },
+  {
+    from: 3,
+    to: 4,
+    run: (db) => {
+      // FTS5 keyword index (see the v4 note above). No deferred creation
+      // and no vector width involved, so - unlike the v3 chunk_vec table -
+      // the migration itself owns the DDL.
+      //
+      // Idempotency: same pre-meta-file probe pattern as the 1→2 and 2→3
+      // entries above, so a file that already carries `chunks_fts` never
+      // double-applies.
+      const tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as { name: string }[];
+      if (!tables.some((t) => t.name === 'chunks_fts')) {
+        db.exec(`
+          CREATE VIRTUAL TABLE chunks_fts USING fts5(
+            name,
+            description,
+            text,
+            mid UNINDEXED,
+            cidx UNINDEXED,
+            tokenize = 'unicode61 remove_diacritics 2'
+          );
         `);
       }
     },
@@ -329,6 +389,24 @@ interface ChunkSearchHit {
   charOffset: number;
 }
 
+// One FTS keyword row to (re)write for a memory (schema v4 keyword index):
+// the chunk's index within its memory body plus its raw text. The memory's
+// name/description are passed once per replaceFts call and repeated into
+// every row (they are indexed alongside the chunk text).
+interface FtsChunkInput {
+  index: number;
+  text: string;
+}
+
+// One row matched by ftsMatch(): the matched memory id, the matched chunk
+// index, and the FTS5 bm25 score (lower = better; bm25() rows come back
+// ORDER BY score ASC).
+interface FtsMatchRow {
+  id: string;
+  chunkIndex: number;
+  score: number;
+}
+
 function openIndex(opts: IndexStoreOptions): {
   // Stores the embedding under `model`. Readers that pass an
   // `expectedModel` to getEmbedding/search reject rows whose stored model
@@ -367,6 +445,26 @@ function openIndex(opts: IndexStoreOptions): {
     k: number,
     expectedModel?: string,
   ) => ChunkSearchHit[];
+  // Schema v4 FTS keyword index. `replaceFts` atomically replaces ALL FTS
+  // rows of one memory (an empty `chunks` list just deletes them) and, like
+  // the name suggests, is kept in lockstep with `replaceChunks` by the
+  // indexer (written/replaced/deleted together with the chunk rows).
+  // `listFtsIds` returns the distinct ids with at least one FTS row (the
+  // v4 back-fill detector, mirroring `listChunkIds`). `ftsDocCount` counts
+  // DISTINCT memory ids matching one already-sanitized FTS phrase (the
+  // document frequency the keyword gate thresholds on - over MEMORIES, not
+  // rows). `ftsMatch` runs one already-sanitized FTS phrase and returns its
+  // rows best-bm25-first (lower score = better). The phrase is passed
+  // through to MATCH verbatim: sanitizing prompt text into safe phrases is
+  // the caller's job (src/embed/keyword.ts).
+  replaceFts: (
+    id: string,
+    fts: { name: string; description: string },
+    chunks: FtsChunkInput[],
+  ) => void;
+  listFtsIds: () => string[];
+  ftsDocCount: (phrase: string) => number;
+  ftsMatch: (phrase: string, limit: number) => FtsMatchRow[];
   // Count of `entries` rows whose `model` is NULL or mismatches the
   // argument. Surfaces "you ran with model A, the index has model B" so
   // CLI callers can warn the user without re-running their own probes.
@@ -618,6 +716,21 @@ function openIndex(opts: IndexStoreOptions): {
       )
       .get() !== undefined;
 
+  // Whether the schema v4 FTS table exists on THIS connection: true for
+  // every writable open (applyMigrations created it above) and for a
+  // readonly open of an index some earlier writable open already migrated
+  // to v4; false only for a readonly open of a pre-v4 file (readonly never
+  // migrates). Like chunkTablesReady, every FTS statement below is prepared
+  // lazily and every FTS read path checks this flag first, so a readonly
+  // pre-v4 open neither creates anything nor throws on the table it never
+  // had - the exact "v3 file, readonly open, no keyword hits" contract.
+  const ftsTablesReady =
+    db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts'",
+      )
+      .get() !== undefined;
+
   // Same deferred-creation rule as ensureVecTable: chunk_vec's FLOAT[N]
   // width can only come from a known `dimensions` value.
   function ensureChunkVecTable(dim: number): void {
@@ -772,6 +885,52 @@ function openIndex(opts: IndexStoreOptions): {
     return _chunkSearchStmt;
   }
 
+  // FTS keyword statements (schema v4), lazily prepared like the chunk
+  // ones: a readonly open of a pre-v4 file has no `chunks_fts`, so
+  // preparing any of these eagerly at open would break it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _insertFts: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _deleteFts: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _listFtsIds: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _ftsDocCount: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _ftsMatch: any = null;
+  function insertFtsStmt() {
+    if (!_insertFts) {
+      _insertFts = db.prepare(
+        'INSERT INTO chunks_fts (name, description, text, mid, cidx) VALUES (?, ?, ?, ?, ?)',
+      );
+    }
+    return _insertFts;
+  }
+  function deleteFtsStmt() {
+    if (!_deleteFts) _deleteFts = db.prepare('DELETE FROM chunks_fts WHERE mid = ?');
+    return _deleteFts;
+  }
+  function listFtsIdsStmt() {
+    if (!_listFtsIds) _listFtsIds = db.prepare('SELECT DISTINCT mid FROM chunks_fts');
+    return _listFtsIds;
+  }
+  function ftsDocCountStmt() {
+    if (!_ftsDocCount) {
+      _ftsDocCount = db.prepare(
+        'SELECT COUNT(DISTINCT mid) AS n FROM chunks_fts WHERE chunks_fts MATCH ?',
+      );
+    }
+    return _ftsDocCount;
+  }
+  function ftsMatchStmt() {
+    if (!_ftsMatch) {
+      _ftsMatch = db.prepare(
+        'SELECT mid, cidx, bm25(chunks_fts) AS score FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY score ASC LIMIT ?',
+      );
+    }
+    return _ftsMatch;
+  }
+
   function toBlob(vec: number[]): Buffer {
     const f32 = new Float32Array(vec);
     return Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength);
@@ -854,6 +1013,11 @@ function openIndex(opts: IndexStoreOptions): {
       }
       deleteChunksStmt().run(id);
     }
+    // The schema v4 FTS rows go with the chunk rows (one FTS row per
+    // chunk): a removed memory must never keep matching a keyword query.
+    if (ftsTablesReady) {
+      deleteFtsStmt().run(id);
+    }
     const row = selectRowid.get(id) as { rowid: number } | undefined;
     if (!row) return;
     deleteVecStmt().run(BigInt(row.rowid));
@@ -912,6 +1076,86 @@ function openIndex(opts: IndexStoreOptions): {
   function listChunkIds(): string[] {
     if (!chunkTablesReady) return [];
     return (listChunkIdsStmt().all() as { id: string }[]).map((r) => r.id);
+  }
+
+  // Atomically replace all FTS rows of one memory (schema v4). An empty
+  // `chunks` list is a pure delete, mirroring replaceChunks: a memory whose
+  // new version dropped text must never keep matching a keyword query on
+  // the old body. The indexer calls this in lockstep with replaceChunks
+  // (same plan, same all-embeds-succeeded gate, same stale-drop-up-front),
+  // so the two row sets can only ever diverge on a crash between the two
+  // synchronous transactions - and the next rebuild's FTS back-fill rule
+  // (a memory with chunks but no FTS rows gets them) self-heals that.
+  // A no-op on a store whose FTS table does not exist (readonly pre-v4
+  // open, the only caller shape that hits it never writes anyway).
+  const replaceFtsTx = db.transaction(
+    (
+      id: string,
+      fts: { name: string; description: string },
+      chunks: FtsChunkInput[],
+    ) => {
+      deleteFtsStmt().run(id);
+      for (const c of chunks) {
+        insertFtsStmt().run(fts.name, fts.description, c.text, id, c.index);
+      }
+    },
+  );
+
+  function replaceFts(
+    id: string,
+    fts: { name: string; description: string },
+    chunks: FtsChunkInput[],
+  ): void {
+    if (!ftsTablesReady) return;
+    if (!fts || typeof fts.name !== 'string' || typeof fts.description !== 'string') {
+      throw new Error('replaceFts requires { name, description } strings');
+    }
+    if (!Array.isArray(chunks)) {
+      throw new Error('replaceFts requires an array of chunks');
+    }
+    if (opts.readonly) {
+      throw new Error('replaceFts requires a writable index connection');
+    }
+    replaceFtsTx(id, fts, chunks);
+  }
+
+  function listFtsIds(): string[] {
+    if (!ftsTablesReady) return [];
+    return (listFtsIdsStmt().all() as { mid: string }[]).map((r) => r.mid);
+  }
+
+  function ftsDocCount(phrase: string): number {
+    if (!ftsTablesReady) return 0;
+    try {
+      const { n } = ftsDocCountStmt().get(phrase) as { n: number };
+      return n;
+    } catch (err: unknown) {
+      // Defensive: the sanitizer (src/embed/keyword.ts) guarantees a
+      // syntax-clean phrase, but a malformed query (or a corrupt/dropped
+      // chunks_fts table) must degrade the keyword path to "no match for
+      // this term", never take down the search call. One stderr line per
+      // process, never a silent error.
+      warnFtsFailed(err);
+      return 0;
+    }
+  }
+
+  function ftsMatch(phrase: string, limit: number): FtsMatchRow[] {
+    if (!ftsTablesReady) return [];
+    try {
+      return (
+        ftsMatchStmt().all(phrase, Math.max(1, Math.floor(limit))) as {
+          mid: string;
+          cidx: number;
+          score: number;
+        }[]
+      ).map((r) => ({ id: r.mid, chunkIndex: r.cidx, score: r.score }));
+    } catch (err: unknown) {
+      // Same contract as ftsDocCount: "no keyword matches" with one visible
+      // stderr line per process.
+      warnFtsFailed(err);
+      return [];
+    }
   }
 
   const countStaleModelStmt = db.prepare(
@@ -1178,6 +1422,10 @@ function openIndex(opts: IndexStoreOptions): {
     replaceChunks,
     listChunkIds,
     searchChunks,
+    replaceFts,
+    listFtsIds,
+    ftsDocCount,
+    ftsMatch,
     getCachedQuery,
     putCachedQuery,
     cacheSize,

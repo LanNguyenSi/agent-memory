@@ -365,6 +365,11 @@ test("runGoldenEval: full run against the fixture corpus + golden set matches th
     0,
     "no embedding index exists for the fixture corpus, so the semantic gate cannot have contributed to any prompt",
   );
+  assert.equal(
+    report.keywordContributedCount,
+    0,
+    "no embedding index (and therefore no FTS keyword rows) exists for the fixture corpus, so the keyword path cannot have contributed to any prompt either",
+  );
   // The fixture golden.yml deliberately labels "rotate the leaked token"
   // with a phantom id (feedback_never_fires_phantom) as a negative-control
   // for the recall<1 case — it never matches any fixture corpus memory, so

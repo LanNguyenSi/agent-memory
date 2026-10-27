@@ -3,7 +3,7 @@ type: module
 title: Native-dependency smoke check
 description: Pointer doc. Why the CI matrix runs a dedicated native-addon load before typecheck/build, which matrix leg it exercises, and how its probe relates to the calls index-store.ts makes at runtime.
 tags: [native-deps, ci-smoke, better-sqlite3, sqlite-vec]
-timestamp: 2026-10-26T22:27:05Z
+timestamp: 2026-10-27T08:26:46Z
 sources:
   - .github/workflows/ci.yml
   - packages/memory-router/package.json
@@ -40,11 +40,11 @@ The step's command,
 makes the same kinds of calls
 `packages/memory-router/src/embed/index-store.ts` depends on: it requires
 both modules (index-store.ts does so at module scope,
-`packages/memory-router/src/embed/index-store.ts:85-86`, with the two
+`packages/memory-router/src/embed/index-store.ts:87-88`, with the two
 `require`s in the opposite order), constructs a database, and calls
 `load` on it (index-store.ts does `new Database(...)` then
 `sqliteVec.load(db)` per open,
-`packages/memory-router/src/embed/index-store.ts:383-385`), against an
+`packages/memory-router/src/embed/index-store.ts:481-483`), against an
 in-memory database instead of an index file. A green step shows that the
 addons load and the extension attaches on that runner's Node, not only
 that the packages installed.
@@ -56,4 +56,10 @@ schema-migration or embedding-provenance behavior layered on top inside
 the same file (`packages/memory-router/src/embed/index-store.ts`) once a
 real index is opened; those paths are exercised by
 `packages/memory-router/tests/index-store.test.ts` and the coverage-gated
-test suite, not by this step.
+test suite, not by this step. The schema v4 keyword path adds no new
+native dependency: the `chunks_fts` virtual table uses the FTS5 module
+built into the SQLite that `better-sqlite3` bundles, not a second
+extension, so neither `CREATE VIRTUAL TABLE ... USING fts5` nor its MATCH
+queries are covered by this probe; they are pinned by the v4 migration
+and keyword tests (`packages/memory-router/tests/index-store.test.ts`,
+`packages/memory-router/tests/keyword-index.test.ts`).

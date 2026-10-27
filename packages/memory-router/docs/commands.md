@@ -81,6 +81,19 @@ OpenAI embeddings when `OPENAI_API_KEY` is set and an Ollama endpoint
 - Re-runs are incremental: unchanged files (by mtime) are skipped,
   removed files are purged (their chunk rows go with them), and a changed
   file has its whole chunk set rewritten.
+- Since index schema v4 the same run also maintains an FTS5 keyword index
+  (`chunks_fts`, the FTS5 module bundled with SQLite, no new native
+  dependency): name, description and every chunk body, one row per
+  chunk. It powers the keyword gate (identifier tokens like `4e7729ab`
+  or `b11905`): only tokens passing the id rule (6+ characters, ASCII
+  letters and digits, at least one of each, no separators) are queried,
+  and one that appears in at most 12 memories admits its memory at the
+  floor edge (`minSemanticScore + 0.01`, plus the usual topic, type and
+  recency modifiers) when no embedding scored it above the floor; a
+  below-floor cosine is never lifted or blended
+  ([docs/scoring.md](scoring.md#the-keyword-gate-schema-v4)). Like the v3
+  chunks, the keyword rows are back-filled by the next `index` run after
+  a migration; until then the keyword path simply finds nothing.
 - **After upgrading to index schema v3, run `memory-router index <dir>`
   once** (for example
   `memory-router index ~/.claude/projects/PROJECT/memory`) to build the
@@ -98,7 +111,12 @@ OpenAI embeddings when `OPENAI_API_KEY` is set and an Ollama endpoint
   started earlier) right after upgrading: until they restart, every
   `memory_search` they serve fails. Downgrading to a version before v3
   means deleting `<dir>/.memory-router/index.sqlite` and running
-  `memory-router index <dir>` to rebuild the index from scratch.
+  `memory-router index <dir>` to rebuild the index from scratch. The v4
+  migration (adding `chunks_fts`) follows the same rules: one-way for
+  writable opens (a v4 file reports `on-disk schema_version 4 is newer
+  than this code supports` to pre-v4 code), read-only opens neither
+  create nor migrate it, and downgrading means deleting and rebuilding
+  the index file.
 - Without an index, or with `MEMORY_ROUTER_EMBED_PROVIDER=openai` set but
   no `OPENAI_API_KEY`, the semantic match returns no hits; the Topic and
   Tool Gates still fire. A failed embedding call (provider unreachable,
@@ -351,6 +369,7 @@ reports the negative-control prompts separately.
   "vocabularySource": "built-in default",
   "unknownExpectIds": [],
   "semanticContributedCount": 0,
+  "keywordContributedCount": 0,
   "perPrompt": [
     {
       "prompt": "merge this PR for the billing module",
@@ -377,6 +396,11 @@ least one hit actually won by the semantic/confidence gate (a semantic
 score that cleared the relevance floor and beat out the other candidates
 for a slot), distinct from `semanticPathActive` (which only proves an
 index + provider are configured, not that the signal won anything).
+`keywordContributedCount` (index schema v4) counts how many prompts had
+at least one hit admitted by the keyword gate (a `gate: "keyword"` hit;
+the small boost given to already-semantic id matches is not counted,
+it never wins a slot on its own). The text report prints both as
+`semantic contributed: N/M prompts` and `keyword contributed: N/M prompts`.
 `vocabularySource` states which topic vocabulary the Topic Gate used for
 the run (see [docs/memory-schema.md](memory-schema.md)). Exits 1 only on
 a real setup error (`golden.yml` missing or unparsable, or the corpus dir

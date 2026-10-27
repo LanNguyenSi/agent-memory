@@ -10,6 +10,13 @@ const {
 } = require('./provider');
 const { openIndex } = require('./index-store');
 const { chunkBody } = require('./chunking');
+const {
+  KEYWORD_MAX_DF,
+  loadKeywordConfig,
+  extractKeywordTerms,
+  isIdToken,
+  quotePhrase,
+} = require('./keyword');
 const { debug } = require('../debug');
 
 // Legacy constant, kept only as a backward-compatible export of this
@@ -90,6 +97,17 @@ const QUERY_CACHE_CAPACITY = 1000;
 
 function indexPath(memoryDir: string): string {
   return join(memoryDir, INDEX_SUBDIR, INDEX_FILENAME);
+}
+
+// FTS name/description columns (schema v4) take strings. The loader only
+// requires a truthy frontmatter `name`: `description` is optional (so it can
+// be undefined or null), and an unquoted `name: 2026` parses as a NUMBER, so
+// a raw pass-through makes replaceFts throw and breaks the whole rebuild.
+// Normalize to the tolerance buildEmbedInput's `.filter(Boolean)` already
+// gives them: missing/null become '', any non-string is stringified. The
+// store keeps its own typeof guard as a real-programming-error check.
+function ftsField(value: unknown): string {
+  return value === undefined || value === null ? '' : String(value);
 }
 
 function buildEmbedInput(memory: Memory): string {
@@ -182,6 +200,12 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
     // chunk pass below keys off this set instead (and off a changed
     // document, which makes existing chunks stale too).
     const chunkedIds = new Set<string>(store.listChunkIds());
+    // Same back-fill rule, one version later (schema v4): ids that already
+    // have at least one FTS keyword row. A v3-migrated index has chunk
+    // rows (or will get them) but NO FTS rows despite unchanged mtimes, so
+    // the keyword pass keys off this set too - a memory with chunks and no
+    // FTS rows gets them on this run without re-embedding anything.
+    const ftsedIds = new Set<string>(store.listFtsIds());
     const seen = new Set<string>();
 
     // One flat queue for BOTH document and chunk embeds, so batching is
@@ -204,13 +228,36 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
     const chunkPlan: string[] = [];
     const plannedChunks = new Map<string, { index: number; offset: number; text: string }[]>();
     const chunkVectors = new Map<string, number[][]>();
+    // Name/description fed into each planned memory's FTS rows (schema v4).
+    // Written in lockstep with the chunk rows below: same all-embeds-
+    // succeeded gate, same stale-drop-up-front, so an interrupted run never
+    // leaves FTS rows of an old body - the chunks' guarantee, extended.
+    const plannedFtsMeta = new Map<string, { name: string; description: string }>();
+    // Keyword-only back-fill (no embeds involved): memories whose chunk rows
+    // and document are current but that have no FTS rows yet.
+    const ftsOnlyPlan: {
+      id: string;
+      meta: { name: string; description: string };
+      chunks: { index: number; text: string }[];
+    }[] = [];
 
     for (const memory of memories) {
       seen.add(memory.id);
       const mtime = Math.floor(statSync(memory.path).mtimeMs);
       const prev = existing.get(memory.id);
       const docStale = prev !== mtime;
+      const ftsMeta = {
+        name: ftsField(memory.frontmatter.name),
+        description: ftsField(memory.frontmatter.description),
+      };
       if (docStale) jobs.push({ memory, mtime });
+      // A stale document's body is gone: drop this memory's FTS rows right
+      // now, exactly like its chunk rows are dropped below, so an
+      // interrupted run cannot leave keyword matches on text the memory no
+      // longer contains.
+      if (docStale && ftsedIds.has(memory.id)) {
+        store.replaceFts(memory.id, ftsMeta, []);
+      }
       if (docStale || !chunkedIds.has(memory.id)) {
         const chunks = chunkBody(memory.body);
         // Only schedule work when there is something to write or an old
@@ -220,6 +267,7 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
           chunkPlan.push(memory.id);
           plannedChunks.set(memory.id, chunks);
           chunkVectors.set(memory.id, []);
+          plannedFtsMeta.set(memory.id, ftsMeta);
           // A stale document's new mtime commits as soon as its batch
           // lands, while this memory's new chunk vectors only land after
           // ALL embed requests succeeded. Drop the old chunk rows right
@@ -234,6 +282,21 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
           for (const chunk of chunks) {
             jobs.push({ memory, mtime, chunk });
           }
+        }
+      } else if (!ftsedIds.has(memory.id)) {
+        // Chunks + document current, FTS rows missing (fresh v3→v4
+        // migration): back-fill keyword rows from the same chunkBody
+        // output. Text only - no embed job, the chunk vectors are untouched.
+        const chunks = chunkBody(memory.body);
+        if (chunks.length > 0) {
+          ftsOnlyPlan.push({
+            id: memory.id,
+            meta: ftsMeta,
+            chunks: chunks.map((c: { index: number; text: string }) => ({
+              index: c.index,
+              text: c.text,
+            })),
+          });
         }
       }
     }
@@ -251,6 +314,14 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
     for (const id of store.listChunkIds()) {
       if (!seen.has(id) && !existing.has(id)) {
         store.replaceChunks(id, cfg.model, []);
+      }
+    }
+    // Same purge for the FTS rows (schema v4): the two row sets are written
+    // and deleted together, so a FTS orphan means a chunk orphan - or a
+    // crash between the two writes, which this also self-heals.
+    for (const id of store.listFtsIds()) {
+      if (!seen.has(id) && !existing.has(id)) {
+        store.replaceFts(id, { name: '', description: '' }, []);
       }
     }
 
@@ -298,7 +369,10 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
 
     // Write each planned memory's full chunk set in one transaction: old
     // rows for the id are deleted first, so a shorter new version of a
-    // memory can never keep scoring on orphan chunks of the old one.
+    // memory can never keep scoring on orphan chunks of the old one. The
+    // FTS rows are rewritten in the same step, from the same chunk texts
+    // (schema v4): keyword matches can therefore never survive (or lag
+    // behind) the chunk vectors they shadow.
     for (const id of chunkPlan) {
       const chunks = plannedChunks.get(id) ?? [];
       const vectors = chunkVectors.get(id) ?? [];
@@ -311,6 +385,19 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
           embedding: vectors[n],
         })),
       );
+      const ftsMeta = plannedFtsMeta.get(id);
+      if (ftsMeta) {
+        store.replaceFts(
+          id,
+          ftsMeta,
+          chunks.map((c) => ({ index: c.index, text: c.text })),
+        );
+      }
+    }
+
+    // Keyword-only back-fill (no embeds were needed for these).
+    for (const plan of ftsOnlyPlan) {
+      store.replaceFts(plan.id, plan.meta, plan.chunks);
     }
 
     return {
@@ -325,14 +412,46 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
   }
 }
 
-async function semanticSearch(
+// One keyword match collected by blendedSearch: a memory matched by one or
+// more QUALIFYING (df-capped) id tokens, with the matched tokens and the
+// best bm25. Only id tokens (see isIdToken in src/embed/keyword.ts) are
+// ever queried, so every hit here is an exact-identifier match.
+interface KeywordHit {
+  memory: Memory;
+  idTerms: string[];
+  bm25: number;
+}
+
+interface BlendedSearchResult {
+  semantic: SemanticHit[];
+  keyword: KeywordHit[];
+}
+
+// Warned at most once per process (same shape as missingIndexWarned above):
+// a keyword-path failure must degrade to "no keyword matches", never take
+// the semantic search down with it, and never spam stderr per call.
+let keywordWarned = false;
+
+// FTS rows fetched per qualifying term: terms are df-capped at
+// KEYWORD_MAX_DF MEMORIES, but each memory contributes one row per chunk,
+// so the row cap is a multiple of the memory cap. Rows come back
+// best-bm25-first, so a cap only ever drops the weakest rows.
+const KEYWORD_ROW_CAP = KEYWORD_MAX_DF * 32;
+
+// Shared body of semanticSearch + blendedSearch: exactly one store open,
+// exactly one query embedding (or query-cache hit), document+chunk KNN
+// merge, and - when `keywordEnabled` - the FTS keyword pass over the SAME
+// store session (no second embed, no second open).
+async function runBlendedSearch(
   prompt: string,
   memories: Memory[],
   memoryDir: string,
   k: number,
-): Promise<SemanticHit[]> {
+  keywordEnabled: boolean,
+): Promise<BlendedSearchResult> {
+  const empty: BlendedSearchResult = { semantic: [], keyword: [] };
   const cfg = resolveProviderConfig({ autoDetectOllama: true });
-  if (!cfg) return [];
+  if (!cfg) return empty;
 
   const idx = indexPath(memoryDir);
   if (!existsSync(idx)) {
@@ -342,7 +461,7 @@ async function semanticSearch(
         'memory-router: embedding index missing — run `memory-router index <dir>` to build it.\n',
       );
     }
-    return [];
+    return empty;
   }
 
   const store = openIndex({
@@ -420,7 +539,7 @@ async function semanticSearch(
       .sort((a, b) => b[1].similarity - a[1].similarity)
       .slice(0, k);
     const byId = new Map(memories.map((m) => [m.id, m]));
-    return ranked
+    const semantic: SemanticHit[] = ranked
       .map(([id, best]) => ({
         memory: byId.get(id),
         score: best.similarity,
@@ -439,14 +558,119 @@ async function semanticSearch(
           chunk: { index: number; offset: number } | undefined;
         } => h.memory !== undefined,
       );
+
+    const keyword: KeywordHit[] = [];
+    if (keywordEnabled) {
+      // The keyword pass must never turn a working search into a failed
+      // one: any throw below (a corrupt FTS index, an unexpected store
+      // error) degrades to "no keyword matches" with one stderr warning.
+      try {
+        collectKeywordMatches(store, prompt, byId, keyword);
+      } catch (err: unknown) {
+        keyword.length = 0;
+        if (!keywordWarned) {
+          keywordWarned = true;
+          process.stderr.write(
+            `memory-router: keyword search failed, continuing without keyword matches: ${String(err)}\n`,
+          );
+        }
+      }
+    }
+
+    return { semantic, keyword };
   } finally {
     store.close();
   }
 }
 
+// One FTS pass per id-token prompt term over the FTS index: a term whose
+// ORIGINAL token is not an id token (see isIdToken in src/embed/keyword.ts)
+// is never queried, never counted and never credits anything; an id term
+// qualifies only when at most KEYWORD_MAX_DF distinct MEMORIES (not rows)
+// contain it, and a qualifying term then credits every memory it matches.
+// Per-prompt keyword work is therefore exactly two FTS reads (df count +
+// rows) per id token - no embedding, no cosine batch.
+function collectKeywordMatches(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  store: any,
+  prompt: string,
+  byId: Map<string, Memory>,
+  out: KeywordHit[],
+): void {
+  const terms = extractKeywordTerms(prompt);
+  if (terms.length === 0) return;
+  interface Match {
+    idTerms: string[];
+    bm25: number;
+  }
+  const perId = new Map<string, Match>();
+  for (const t of terms) {
+    if (!isIdToken(t.term)) continue;
+    const query = quotePhrase(t.phrase);
+    const df = store.ftsDocCount(query);
+    if (df === 0 || df > KEYWORD_MAX_DF) continue;
+    for (const row of store.ftsMatch(query, KEYWORD_ROW_CAP) as {
+      id: string;
+      chunkIndex: number;
+      score: number;
+    }[]) {
+      let match = perId.get(row.id);
+      if (!match) {
+        match = { idTerms: [], bm25: row.score };
+        perId.set(row.id, match);
+      }
+      if (!match.idTerms.includes(t.phrase)) match.idTerms.push(t.phrase);
+      if (row.score < match.bm25) match.bm25 = row.score;
+    }
+  }
+  if (perId.size === 0) return;
+  for (const [id, match] of perId) {
+    const memory = byId.get(id);
+    if (!memory) continue; // index row for a memory not in this call's set
+    out.push({ memory, idTerms: match.idTerms, bm25: match.bm25 });
+  }
+  out.sort((a, b) => a.bm25 - b.bm25);
+}
+
+async function semanticSearch(
+  prompt: string,
+  memories: Memory[],
+  memoryDir: string,
+  k: number,
+): Promise<SemanticHit[]> {
+  // Pure semantic caller (MCP memory_search, resolveConfidence): the
+  // keyword pass never runs here, so this path costs exactly what it costed
+  // before the keyword path existed.
+  const { semantic } = await runBlendedSearch(prompt, memories, memoryDir, k, false);
+  return semantic;
+}
+
+// resolveBlended's default search entry point: one store open and one query
+// embedding (or query-cache hit) per prompt, shared by the semantic KNN and
+// the keyword pass. `MEMORY_ROUTER_KEYWORD=off` skips the keyword pass
+// entirely - the search then takes the byte-identical pre-keyword code path
+// (nothing keyword-related even reads the FTS table).
+async function blendedSearch(
+  prompt: string,
+  memories: Memory[],
+  memoryDir: string,
+  k: number,
+): Promise<BlendedSearchResult> {
+  const cfg = loadKeywordConfig();
+  const { semantic, keyword } = await runBlendedSearch(
+    prompt,
+    memories,
+    memoryDir,
+    k,
+    cfg.enabled,
+  );
+  return { semantic, keyword };
+}
+
 module.exports = {
   rebuildIndex,
   semanticSearch,
+  blendedSearch,
   indexPath,
   EMBED_DIMENSIONS,
   // Re-exported so src/lint/conflicts.ts's `--semantic` missing-pair embed

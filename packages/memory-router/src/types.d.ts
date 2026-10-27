@@ -15,7 +15,7 @@ declare global {
    * at match/lint time, not by the type system.
    */
   type Topic = string;
-  type GateName = 'topic' | 'tool' | 'confidence';
+  type GateName = 'topic' | 'tool' | 'confidence' | 'keyword';
 
   interface MemoryTriggers {
     tools?: string[];

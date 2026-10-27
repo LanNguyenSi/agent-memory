@@ -388,4 +388,9 @@ module.exports = {
   resolveDefaultMinSemanticScoreDetail,
   normalizeOllamaModelName,
   OLLAMA_MODEL_FLOOR_DEFAULTS,
+  // Shared env-float parser (present-AND-valid, non-negative, finite, or
+  // fall back to the built-in default): reused by the keyword path's env
+  // knobs in src/embed/keyword.ts so a bad MEMORY_ROUTER_KEYWORD_* override
+  // falls back exactly like a bad MEMORY_ROUTER_BLEND_* one does.
+  envFloat,
 };
