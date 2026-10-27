@@ -23,8 +23,9 @@ health reporting on top of the same memory files.
 - Keyword gate: an FTS5 exact-token path for identifier tokens
   (`4e7729ab`, `b11905`) that embeddings blur - only tokens passing the
   id rule (letters and digits together, no separators) are queried, so
-  ordinary words never enter the path - bounded so it cannot rescue a
-  below-floor match (see
+  ordinary words never enter the path; an admitted memory enters the blend
+  at the floor edge and a below-floor cosine is never lifted or blended
+  (see
   [docs/scoring.md](docs/scoring.md#the-keyword-gate-schema-v4))
 - Tool Gate: deterministic regex match on a pending Bash command or tool
   name, always privileged into the result
@@ -125,9 +126,10 @@ the old topic-only resolver would produce, with one schema v4 exception:
 memories admitted by the keyword gate (an identifier token from the
 prompt, e.g. a task id, matching the FTS5 keyword index) take the first
 slots. The keyword path
-is bounded by design: it enters the blend only at the floor edge, never
-lifts a below-floor semantic score, and `MEMORY_ROUTER_KEYWORD=off`
-removes it entirely.
+is bounded by design: an admitted memory enters the blend at the floor
+edge (`minSemanticScore + 0.01`, plus the usual topic, type and recency
+modifiers), a below-floor cosine is never lifted or blended, and
+`MEMORY_ROUTER_KEYWORD=off` removes it entirely.
 
 See [docs/scoring.md](docs/scoring.md) for the full signal table, the
 degradation behavior, the Tool Gate details, why the resolver is a blend

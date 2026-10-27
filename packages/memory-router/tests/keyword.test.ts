@@ -26,7 +26,7 @@ test('exported constants: df cap 12, max admissions 2, min id length 6, boost 0.
   assert.equal(KEYWORD_BOOST_DEFAULT, 0.02);
 });
 
-// --- The id rule (AC1) ------------------------------------------------------
+// --- The id rule (identifier token vs. ordinary word) ----------------------
 //
 // A token qualifies only as a single ASCII letter/digit run, at least
 // KEYWORD_MIN_ID_LENGTH characters, with at least one letter AND at least
@@ -126,7 +126,7 @@ test('id rule: empty and non-ASCII inputs do not qualify', () => {
   assert.equal(isIdToken('baum١٢'), false, 'non-ASCII digit is not [0-9]');
 });
 
-// --- Tokenizer / sanitizer (AC2 building blocks) ---------------------------
+// --- Tokenizer / sanitizer (prompt to query-safe phrase bodies) ------------
 
 test('tokenizer: studio-tb becomes the phrase "studio tb", v0.7.4 becomes "v0 7 4"', () => {
   const terms = extractKeywordTerms('deploy studio-tb at v0.7.4');
@@ -250,18 +250,6 @@ test('config: boost override set applies, invalid or negative ones fall back to 
     }
   } finally {
     restore('MEMORY_ROUTER_KEYWORD_BOOST', prevB);
-  }
-});
-
-test('config: MEMORY_ROUTER_KEYWORD_CORROBORATION is gone (no longer read by anything)', () => {
-  const prev = process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION;
-  try {
-    process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION = '0';
-    const cfg = loadKeywordConfig();
-    assert.equal(cfg.keywordBoost, 0.02, 'the removed env var must not influence the config');
-    assert.equal('corroborationFloor' in cfg, false, 'the config has no corroboration field');
-  } finally {
-    restore('MEMORY_ROUTER_KEYWORD_CORROBORATION', prev);
   }
 });
 

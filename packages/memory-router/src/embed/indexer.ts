@@ -99,6 +99,17 @@ function indexPath(memoryDir: string): string {
   return join(memoryDir, INDEX_SUBDIR, INDEX_FILENAME);
 }
 
+// FTS name/description columns (schema v4) take strings. The loader only
+// requires a truthy frontmatter `name`: `description` is optional (so it can
+// be undefined or null), and an unquoted `name: 2026` parses as a NUMBER, so
+// a raw pass-through makes replaceFts throw and breaks the whole rebuild.
+// Normalize to the tolerance buildEmbedInput's `.filter(Boolean)` already
+// gives them: missing/null become '', any non-string is stringified. The
+// store keeps its own typeof guard as a real-programming-error check.
+function ftsField(value: unknown): string {
+  return value === undefined || value === null ? '' : String(value);
+}
+
 function buildEmbedInput(memory: Memory): string {
   // Concatenate the signal-dense fields: a memory's `name` and `description`
   // are the human summary; the body has the rule. Trimmed to keep request
@@ -236,8 +247,8 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
       const prev = existing.get(memory.id);
       const docStale = prev !== mtime;
       const ftsMeta = {
-        name: memory.frontmatter.name,
-        description: memory.frontmatter.description,
+        name: ftsField(memory.frontmatter.name),
+        description: ftsField(memory.frontmatter.description),
       };
       if (docStale) jobs.push({ memory, mtime });
       // A stale document's body is gone: drop this memory's FTS rows right

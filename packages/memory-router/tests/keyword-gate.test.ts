@@ -118,7 +118,7 @@ function expectedScore(semanticScore: number, keywordBoost = 0): number {
 
 const NO_TOPIC_PROMPT = 'an unrelated prompt with no topic keywords at all';
 
-// --- Admission combinations (AC2) -------------------------------------------
+// --- Admission combinations -------------------------------------------------
 
 test('keyword gate: id match only (no semantic hit at all) admits the memory at floor+0.01 with the id reason and gate=keyword', async () => {
   const mem = fakeMemory('task-memory');
@@ -208,6 +208,71 @@ test('keyword gate: a keyword candidate that already has an above-floor semantic
     hits[0].score,
     expectedScore(0.9, DEFAULT_KEYWORD_BOOST),
     'it takes the boost, never the floor+0.01 admission score',
+  );
+});
+
+// --- Boost scope (only above-floor semantic hits boost) --------------------
+
+test('keyword gate: an id match on a TOPIC-ONLY candidate beyond the 2-admission cap is never boosted and adds no keyword reason (only above-floor semantic hits boost)', async () => {
+  // 3 id-only candidates (kw-1, kw-2, kw-3) plus one above-floor semantic hit
+  // that also id-matches. kw-3 is the third id candidate: it falls past the
+  // KEYWORD_MAX_HITS=2 cap, so it is NOT admitted; it also matches the topic
+  // gate, so it is a topic-only candidate. Per spec ONLY the above-floor
+  // semantic hit (strong-semantic) is boosted; kw-3 keeps its plain topic
+  // score and a keyword-free reason.
+  const kw1 = fakeMemory('kw-1');
+  const kw2 = fakeMemory('kw-2');
+  const kw3 = fakeMemory('kw-3', { topics: ['workflow'] });
+  const strong = fakeMemory('strong-semantic');
+  const memories = [kw1, kw2, kw3, strong];
+  // Topic-bearing prompt so kw-3 is a topic hit; NO_TOPIC_PROMPT has none.
+  const ctx: RouterContext = {
+    prompt: 'please review and merge this PR',
+    memoryDir: NOVOCAB_DIR,
+  };
+  const idCandidates = [
+    { id: 'strong-semantic', idTerms: ['4e7729ab'] },
+    { id: 'kw-1', idTerms: ['aaa111'], bm25: -9 },
+    { id: 'kw-2', idTerms: ['aaa222'], bm25: -5 },
+    { id: 'kw-3', idTerms: ['aaa333'], bm25: -1 },
+  ];
+  const hits = await resolveBlended(ctx, memories, '/fake/dir', {}, {
+    semanticSearch: fakeSearch({ 'strong-semantic': 0.9 }, idCandidates),
+  });
+  const byId = new Map(hits.map((h: GateHit) => [h.memory.id, h]));
+
+  const boosted = byId.get('strong-semantic') as GateHit;
+  assert.equal(boosted.gate, 'confidence', 'the above-floor semantic hit keeps confidence');
+  assert.equal(
+    boosted.score,
+    expectedScore(0.9, DEFAULT_KEYWORD_BOOST),
+    'the semantic hit that id-matches is boosted exactly by keywordBoost',
+  );
+  assert.match(boosted.reason, /keyword match \(id: 4e7729ab\)/);
+
+  const kw3Hit = byId.get('kw-3') as GateHit;
+  assert.ok(kw3Hit, 'kw-3 is present as a topic-only candidate');
+  assert.equal(kw3Hit.gate, 'topic', 'the capped id candidate is a plain topic hit, not keyword');
+  assert.ok(
+    !kw3Hit.reason.includes('keyword'),
+    `a capped topic-only candidate carries no keyword reason, got: ${kw3Hit.reason}`,
+  );
+
+  // Control: identical run with kw-3 carrying NO id match. Its score is the
+  // unboosted topic-only score; the boost guard must make the two equal.
+  const control = await resolveBlended(ctx, memories, '/fake/dir', {}, {
+    semanticSearch: fakeSearch({ 'strong-semantic': 0.9 }, [
+      { id: 'strong-semantic', idTerms: ['4e7729ab'] },
+      { id: 'kw-1', idTerms: ['aaa111'], bm25: -9 },
+      { id: 'kw-2', idTerms: ['aaa222'], bm25: -5 },
+    ]),
+  });
+  const controlKw3 = control.find((h: GateHit) => h.memory.id === 'kw-3') as GateHit;
+  assert.ok(controlKw3, 'kw-3 still appears via the topic gate in the control run');
+  assert.equal(
+    kw3Hit.score,
+    controlKw3.score,
+    'kw-3 scores exactly the unboosted topic score (the +keywordBoost never reaches a non-semantic candidate)',
   );
 });
 

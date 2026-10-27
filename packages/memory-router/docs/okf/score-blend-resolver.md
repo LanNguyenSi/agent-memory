@@ -104,7 +104,7 @@ gate `keyword` (`packages/memory-router/src/router.ts:390-407`);
 candidates that already have an above-floor semantic hit instead get a
 flat `keywordBoost` (`MEMORY_ROUTER_KEYWORD_BOOST`, default 0.02) added
 to their blended input score and a keyword reason appended, keeping gate
-`confidence` (`packages/memory-router/src/router.ts:409-413`) - the
+`confidence` (`packages/memory-router/src/router.ts:415-418`) - the
 calibrated weights, floors and candidateK are untouched by both.
 
 ## Confidence-floor provenance

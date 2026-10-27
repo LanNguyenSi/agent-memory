@@ -19,7 +19,7 @@ sources:
 
 `packages/memory-router/src/router.ts` exports three resolvers (`resolve`,
 `resolveConfidence`, `resolveBlended`; its `module.exports` at
-`packages/memory-router/src/router.ts:515-521`), and it is easy to assume
+`packages/memory-router/src/router.ts:521-527`), and it is easy to assume
 there is one canonical way memory-router combines gate hits. There is not:
 the call sites in the table below pick different resolvers, for different
 reasons, and the two dedup/ranking functions underneath them
@@ -77,7 +77,7 @@ every input hit, sort the survivors descending by score, and slice to
 path uses it directly to merge the sync gates' hits with the confidence
 gate's hits into one ranked list.
 
-`rankWithToolPrivilege` (`packages/memory-router/src/router.ts:492-513`),
+`rankWithToolPrivilege` (`packages/memory-router/src/router.ts:498-519`),
 called only from `resolveBlended`
 (`rg -n 'rankWithToolPrivilege\(' packages/memory-router/src`), starts
 from the same per-id "highest score wins" merge, but then partitions the
@@ -89,7 +89,7 @@ matched (a deterministic `1.0` hit) can be pushed out of the result by
 enough higher-scoring blend hits; under `rankWithToolPrivilege`, a
 blend-scored hit cannot displace it, because tool-matched hits are placed
 ahead of all other hits before the `maxHits` slice
-(`packages/memory-router/src/router.ts:509-512`).
+(`packages/memory-router/src/router.ts:515-518`).
 Attribution for a memory hit by both paths is unaffected by this
 difference (whichever hit has the higher score still wins the
 `gate`/`score`/`reason` fields, in both functions); what differs is which

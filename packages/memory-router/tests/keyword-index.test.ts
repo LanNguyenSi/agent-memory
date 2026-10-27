@@ -186,7 +186,7 @@ function pinVectors(
 }
 
 // ---------------------------------------------------------------------------
-// AC3: migration lifecycle
+// Migration lifecycle: v3 file, back-fill, replace, purge, readonly
 // ---------------------------------------------------------------------------
 
 test('v4 migration: a v3 file migrates to v4 on the first writable open, keeps its data, and has no keyword hits until a rebuild', async () => {
@@ -431,7 +431,7 @@ test('a failed rebuild never leaves FTS rows of the old body (the chunks guarant
 });
 
 // ---------------------------------------------------------------------------
-// AC1 #5: document frequency over MEMORIES caps id-token qualification
+// Document frequency over MEMORIES caps id-token qualification
 // ---------------------------------------------------------------------------
 
 test('df cap: an id token contained by 13 memories does not qualify (df > KEYWORD_MAX_DF); at 2 memories it does', async () => {
@@ -608,7 +608,7 @@ test('degraded path end-to-end: silent semantic path + id keyword match -> keywo
 });
 
 // ---------------------------------------------------------------------------
-// AC2: FTS syntax safety
+// FTS syntax safety
 // ---------------------------------------------------------------------------
 
 test('FTS safety: operator-laden, quoted, emoji and 5,000-char prompts run without error and match literally', async () => {
@@ -667,7 +667,7 @@ test('FTS safety: NEAR( is carried as literal phrase text, not operator semantic
 });
 
 // ---------------------------------------------------------------------------
-// AC4 (second half): the hyphenated-compound negative controls stay quiet:
+// The hyphenated-compound negative controls stay quiet:
 // `Bonsai-Baum` / `strata-builds` are not id tokens, so neither the whole
 // word NOR any part of it is ever FTS-queried - even in a corpus that spells
 // the compound out adjacently (which a phrase query would have matched).
@@ -713,6 +713,188 @@ test('Bonsai-Baum negative control: not an id token, never queried, silent even 
         [],
         `"${prompt}": hyphenated words are not id tokens - neither the whole word nor its parts are queried, so nothing admits even where the phrase matches`,
       );
+    }
+  } finally {
+    stub.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Ordinary frontmatter shapes must never break the rebuild: the loader only
+// requires a truthy `name`, so `description` is optional and an unquoted
+// `name: 2026` loads as a NUMBER. replaceFts writes name/description as FTS
+// text columns, so a raw pass-through of a number or undefined threw and took
+// down the whole `memory-router index` run (and every later run, because the
+// chunk rows were already written, so the next run took the FTS back-fill
+// path and threw again).
+// ---------------------------------------------------------------------------
+
+test('rebuild survives a numeric frontmatter name and a missing description, indexes both, and a rerun stays clean', async () => {
+  const dir = tmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'numeric-name.md'),
+    '---\nname: 2026\ndescription: a memory whose name is a number\ntype: reference\n---\n\ncarry the numeric-name task kwfind1a across branches\n',
+  );
+  fs.writeFileSync(
+    path.join(dir, 'no-desc.md'),
+    '---\nname: no-desc\ntype: reference\n---\n\nthe no-desc memory mentions kwfind2b once\n',
+  );
+  const stub = stubFetch();
+  try {
+    await rebuildIndex(dir);
+    let store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
+    try {
+      assert.ok(
+        store.listFtsIds().includes('numeric-name'),
+        'the numeric-name memory got FTS rows',
+      );
+      assert.ok(
+        store.listFtsIds().includes('no-desc'),
+        'the description-less memory got FTS rows',
+      );
+      assert.equal(
+        store
+          .ftsMatch('"kwfind1a"', 10)
+          .filter((r: { id: string }) => r.id === 'numeric-name').length,
+        1,
+      );
+      assert.equal(
+        store
+          .ftsMatch('"kwfind2b"', 10)
+          .filter((r: { id: string }) => r.id === 'no-desc').length,
+        1,
+      );
+    } finally {
+      store.close();
+    }
+
+    const memories = loadMemoriesFromDir(dir);
+    let outcome = await blendedSearch('look up kwfind1a', memories, dir, 5);
+    assert.ok(
+      outcome.keyword.some((k: { memory: Memory }) => k.memory.id === 'numeric-name'),
+      'the numeric-name memory is keyword-findable by an id token in its body',
+    );
+    outcome = await blendedSearch('look up kwfind2b', memories, dir, 5);
+    assert.ok(
+      outcome.keyword.some((k: { memory: Memory }) => k.memory.id === 'no-desc'),
+      'the description-less memory is keyword-findable by an id token in its body',
+    );
+
+    // A second rebuild is clean (the original failure kept failing on every
+    // later run once the chunk rows were already on disk).
+    await rebuildIndex(dir);
+    store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
+    try {
+      assert.equal(
+        store
+          .ftsMatch('"kwfind1a"', 10)
+          .filter((r: { id: string }) => r.id === 'numeric-name').length,
+        1,
+        'the rerun left the numeric-name FTS rows intact',
+      );
+      assert.equal(
+        store
+          .ftsMatch('"kwfind2b"', 10)
+          .filter((r: { id: string }) => r.id === 'no-desc').length,
+        1,
+        'the rerun left the description-less FTS rows intact',
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    stub.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The df cap boundary: the cutoff is df > KEYWORD_MAX_DF, so a token in
+// exactly KEYWORD_MAX_DF (12) memories still qualifies and only the 13th
+// memory crosses it. A `df >= KEYWORD_MAX_DF` implementation would drop the
+// 12-memory case, so this test pins the strict inequality.
+// ---------------------------------------------------------------------------
+
+test('df boundary: an id token in exactly KEYWORD_MAX_DF (12) memories still qualifies, at 13 it does not', async () => {
+  const dir = tmpDir();
+  const stub = stubFetch();
+  try {
+    for (let i = 0; i < 12; i++) {
+      writeMemory(dir, `edge-${i}`, `note ${i} about edge12aa handling`);
+    }
+    await rebuildIndex(dir);
+    const outcomeAt12 = await blendedSearch(
+      'the edge12aa thing',
+      loadMemoriesFromDir(dir),
+      dir,
+      5,
+    );
+    assert.equal(
+      outcomeAt12.keyword.length,
+      12,
+      'df == 12 (== KEYWORD_MAX_DF) still qualifies: the cutoff is df > 12, not df >= 12',
+    );
+
+    writeMemory(dir, 'edge-12', 'one more note about edge12aa handling');
+    await rebuildIndex(dir);
+    const outcomeAt13 = await blendedSearch(
+      'the edge12aa thing',
+      loadMemoriesFromDir(dir),
+      dir,
+      5,
+    );
+    assert.deepEqual(
+      outcomeAt13.keyword,
+      [],
+      'df == 13 > KEYWORD_MAX_DF must be filtered out before it can match anything',
+    );
+  } finally {
+    stub.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The FTS orphan purge: chunks_fts rows whose id has neither an entries row
+// nor a memory file (a crash between the chunk and FTS writes, or an older
+// build's remove() left-behind) must be dropped by the next rebuild, exactly
+// like the chunk orphans, so no keyword match ever survives its memory.
+// ---------------------------------------------------------------------------
+
+test('FTS orphan purge: rows for an id with no entries row and no memory file are dropped on the next rebuild', async () => {
+  const dir = tmpDir();
+  writeMemory(dir, 'keep', 'carry task 4e7729ab across branches');
+  const stub = stubFetch();
+  try {
+    await rebuildIndex(dir);
+    let store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
+    try {
+      store.replaceFts('ghost-id', { name: 'ghost', description: 'ghost' }, [
+        { index: 0, text: 'orphaned keyword text gh0stid1' },
+      ]);
+      assert.ok(
+        store.listFtsIds().includes('ghost-id'),
+        'fixture: the orphan FTS row is present before the rebuild',
+      );
+    } finally {
+      store.close();
+    }
+
+    await rebuildIndex(dir);
+
+    store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
+    try {
+      assert.ok(
+        !store.listFtsIds().includes('ghost-id'),
+        'the rebuild must purge FTS rows for an id with no entries row and no memory file',
+      );
+      assert.ok(
+        store.listFtsIds().includes('keep'),
+        'a real memory keeps its FTS rows through the purge',
+      );
+    } finally {
+      store.close();
     }
   } finally {
     stub.restore();

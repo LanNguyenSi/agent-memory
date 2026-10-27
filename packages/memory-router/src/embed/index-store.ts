@@ -88,6 +88,20 @@ const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
 const { createHash } = require('node:crypto');
 
+// Warned at most once per process, the same shape as the keyword/missing-
+// index/stale-model warnings in src/embed/indexer.ts: an FTS read that throws
+// (a corrupt or dropped chunks_fts table) must degrade to "no keyword
+// matches" with ONE visible stderr line, never a silent error and never one
+// line per query. Module-level so it survives every openIndex() call.
+let ftsWarned = false;
+function warnFtsFailed(err: unknown): void {
+  if (ftsWarned) return;
+  ftsWarned = true;
+  process.stderr.write(
+    `memory-router: FTS keyword index query failed, continuing without keyword matches: ${String(err)}\n`,
+  );
+}
+
 // SCHEMA_VERSION_BASELINE is the version every shipped DB has at minimum:
 // fresh DBs and pre-meta DBs both start here. CURRENT_SCHEMA_VERSION is what
 // this code expects on disk; when CURRENT > BASELINE, every open runs
@@ -1115,10 +1129,13 @@ function openIndex(opts: IndexStoreOptions): {
     try {
       const { n } = ftsDocCountStmt().get(phrase) as { n: number };
       return n;
-    } catch {
+    } catch (err: unknown) {
       // Defensive: the sanitizer (src/embed/keyword.ts) guarantees a
-      // syntax-clean phrase, but a malformed query must degrade the keyword
-      // path to "no match for this term", never take down the search call.
+      // syntax-clean phrase, but a malformed query (or a corrupt/dropped
+      // chunks_fts table) must degrade the keyword path to "no match for
+      // this term", never take down the search call. One stderr line per
+      // process, never a silent error.
+      warnFtsFailed(err);
       return 0;
     }
   }
@@ -1133,7 +1150,10 @@ function openIndex(opts: IndexStoreOptions): {
           score: number;
         }[]
       ).map((r) => ({ id: r.mid, chunkIndex: r.cidx, score: r.score }));
-    } catch {
+    } catch (err: unknown) {
+      // Same contract as ftsDocCount: "no keyword matches" with one visible
+      // stderr line per process.
+      warnFtsFailed(err);
       return [];
     }
   }

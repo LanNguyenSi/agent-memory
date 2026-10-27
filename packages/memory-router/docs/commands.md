@@ -87,8 +87,10 @@ OpenAI embeddings when `OPENAI_API_KEY` is set and an Ollama endpoint
   chunk. It powers the keyword gate (identifier tokens like `4e7729ab`
   or `b11905`): only tokens passing the id rule (6+ characters, ASCII
   letters and digits, at least one of each, no separators) are queried,
-  and one that appears in at most 12 memories admits its memory even
-  when embeddings score it below the floor
+  and one that appears in at most 12 memories admits its memory at the
+  floor edge (`minSemanticScore + 0.01`, plus the usual topic, type and
+  recency modifiers) when no embedding scored it above the floor; a
+  below-floor cosine is never lifted or blended
   ([docs/scoring.md](scoring.md#the-keyword-gate-schema-v4)). Like the v3
   chunks, the keyword rows are back-filled by the next `index` run after
   a migration; until then the keyword path simply finds nothing.

@@ -405,7 +405,13 @@ async function resolveBlended(
       // comment above).
       reasonParts.push(keywordReason(keywordOnly));
       gate = 'keyword';
-    } else {
+    } else if (hasSemanticHit) {
+      // Only an above-floor SEMANTIC hit that also matches an id token is
+      // boosted (exact-token evidence breaking the tie between two genuine
+      // semantic matches). A candidate with an id match but NO semantic hit
+      // is never boosted here: it was either admitted above (keywordOnly) or
+      // fell past the admission cap and stays a plain topic-only hit with no
+      // keyword reason and no boost.
       const idMatch = idMatchById.get(id);
       if (idMatch) {
         keywordBoost = keywordConfig.keywordBoost;

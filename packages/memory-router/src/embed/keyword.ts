@@ -40,9 +40,14 @@ const KEYWORD_MIN_ID_LENGTH = 6;
 // breaks ties between two genuine semantic matches.
 const KEYWORD_BOOST_DEFAULT = 0.02;
 
-// A keyword-only admission scores as if it had cleared the relevance floor
-// by this hair: minSemanticScore + KEYWORD_ADMISSION_OFFSET, so it ranks
-// just under any real semantic match and above the degraded topic path.
+// A keyword-only admission enters the blend at the floor edge:
+// minSemanticScore + KEYWORD_ADMISSION_OFFSET. The usual topic, type and
+// recency modifiers then apply on top exactly as for any other candidate, so
+// this offset is where an admission STARTS, not a rank guarantee (a topic- or
+// type-boosted candidate can still land under it). What it never does is
+// touch the embedding signal: an admitted memory has no above-floor semantic
+// score, and its below-floor cosine (if it has one at all) is never lifted or
+// blended.
 const KEYWORD_ADMISSION_OFFSET = 0.01;
 
 // Small fixed German + English stopword list: the grammatical glue that

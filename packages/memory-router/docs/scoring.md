@@ -14,7 +14,7 @@ for the headline defaults this document backs.
 | **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory, not a standalone full-score hit |
 | **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
 | **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker |
-| **Keyword evidence** (schema v4) | SQLite FTS5 match of IDENTIFIER tokens from the prompt (task ids like `4e7729ab`, build tags like `b11905`) against name/description/chunk text; only tokens passing the id rule are queried at all | Two roles, both bounded: it can admit a keyword-only memory at the floor edge (gate `keyword`), and it can lift an above-floor memory by a flat `+0.02`; it never rescues a below-floor semantic score. See [The keyword gate](#the-keyword-gate-schema-v4) |
+| **Keyword evidence** (schema v4) | SQLite FTS5 match of IDENTIFIER tokens from the prompt (task ids like `4e7729ab`, build tags like `b11905`) against name/description/chunk text; only tokens passing the id rule are queried at all | Two roles, both bounded: it can admit a keyword-only memory at the floor edge (gate `keyword`), and it can lift an above-floor memory by a flat `+0.02`; a below-floor cosine is never lifted or blended. See [The keyword gate](#the-keyword-gate-schema-v4) |
 
 The semantic score is one number per memory: the better of the memory's
 document vector (`name` + `description` + body, cut at 8,000 characters)
@@ -46,8 +46,8 @@ tag like `b11905` is one rare token among thousands and often scores below
 the relevance floor. The keyword gate adds an exact-token path over the
 FTS5 index (`chunks_fts`, built by `memory-router index`; see
 [commands.md](commands.md#building-the-embedding-index)) without touching
-the calibrated blend: a keyword hit can never lift a below-floor semantic
-match, and the strongest thing it does to an above-floor memory is a flat
+the calibrated blend: a keyword hit never lifts or blends a below-floor
+cosine, and the strongest thing it does to an above-floor memory is a flat
 `+0.02`.
 
 Plain words are deliberately excluded from the keyword path: rare German
@@ -83,11 +83,12 @@ semantic hit:
   a prompt by accident. This is the only admission route there is.
 - At most **2** keyword-only admissions per prompt, best bm25 first.
 
-Scoring: an admitted memory blends at `minSemanticScore + 0.01` (floor
-edge: enough to enter the ranking, never enough to outrank a real
-semantic hit) with gate `keyword` and reason `keyword match (id: X)`. A
-memory that already has an above-floor semantic hit and also matches an
-id token keeps gate `confidence` and gains `keywordBoost`
+Scoring: an admitted memory enters at the floor edge
+(`minSemanticScore + 0.01`) plus the usual topic, type and recency
+modifiers, with gate `keyword` and reason `keyword match (id: X)`; the
+below-floor cosine that kept it out of the blend is never lifted or
+blended. A memory that already has an above-floor semantic hit and also
+matches an id token keeps gate `confidence` and gains `keywordBoost`
 (`MEMORY_ROUTER_KEYWORD_BOOST`, default `0.02`) plus the keyword reason.
 In the degraded case (no semantic hits at all) admitted keyword memories
 take the first slots ahead of the topic-only output, which is otherwise
@@ -98,8 +99,8 @@ values fall back to defaults): `MEMORY_ROUTER_KEYWORD=off` disables the
 whole path (the hook behaves byte-identically to the pre-keyword
 resolver) and `MEMORY_ROUTER_KEYWORD_BOOST` adjusts the boost above. The
 keyword pass never turns a working search into a failed one: any FTS
-error degrades to "no keyword matches" with one stderr line
-(`docs/okf/semantic-search-silent-noop.md`).
+error degrades to "no keyword matches" and writes one stderr line per
+process (`docs/okf/semantic-search-silent-noop.md`).
 
 ## Degradation and the Tool Gate
 
