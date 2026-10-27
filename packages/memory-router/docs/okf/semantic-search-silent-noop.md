@@ -3,7 +3,7 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-10-27T10:02:19Z
+timestamp: 2026-10-27T14:19:20Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
@@ -187,7 +187,7 @@ from `rg -n 'throw ' packages/memory-router/src/embed/index-store.ts packages/me
 
 `upsert`'s throws (`packages/memory-router/src/embed/index-store.ts:965-984`)
 and `replaceChunks`' throws
-(`packages/memory-router/src/embed/index-store.ts:1053-1078`) are not on
+(`packages/memory-router/src/embed/index-store.ts:1053-1077`) are not on
 this path: `semanticSearch()` does not write.
 
 ### What each caller does with them
