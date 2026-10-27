@@ -1,5 +1,18 @@
 # Bundle log
 
+- 2026-10-27T10:24:42Z, injection budget rule: `renderHitsBudgeted` builds
+  each hit's ladder strictly decreasing in bytes (a shorter form only when its
+  block is smaller than the last rung kept, so a ladder can be just the whole
+  body) and picks, among the outputs that fit, the best one by the top hit's
+  rung, then the number of hits kept, then the rungs of hits 2 to n; lower
+  hits that fit next to a shortened top hit are no longer dropped. No claim in
+  the concept docs describes that rule. The `renderHitsBudgeted` citations in
+  `gate-composition-and-dedup.md` and `score-blend-resolver.md` were
+  re-pointed from `render.ts:326` to `render.ts:327`, and the `resolveBlended`
+  range in `score-blend-resolver.md` from `router.ts:198-455` to
+  `router.ts:198-462`, the line where the function closes; the other
+  `render.ts` citations (`render.ts:122`, `render.ts:225`, `render.ts:231`)
+  were checked to hold the same text as before.
 - 2026-10-27T10:02:19Z, injection budget raise pass: `renderHitsBudgeted` now
   gives each hit a ladder of forms (a hit that starts whole skips the excerpt
   form when it is not smaller than the whole body) and the final raise lifts

@@ -426,14 +426,20 @@ README's "What the `UserPromptSubmit` hook injects" for the per-hit forms.
 |---|---|---|
 | `MEMORY_ROUTER_INJECT_BUDGET` | Largest injection, in UTF-8 bytes of the rendered markdown. A positive integer. Unset: the default. Empty, `0`, negative, fractional or non-numeric: the default, plus one note on stderr. | `16384` |
 
-Over the budget, hits 2 to n are shortened first, lowest-ranked first, then
-dropped from the bottom, and only then is the top hit shortened. A hit that
-starts whole skips the excerpt form when it is not smaller than the whole body.
-Room a drop frees is given back top-down: each kept hit, best first, is lifted
-to the fullest form at which the output still fits, and a hit that cannot be
-lifted is passed over. The top hit is always kept,
-in its shortest form if need be, even when that alone exceeds the budget. The `PreToolUse` hook ignores the variable and
-keeps injecting full bodies.
+Each hit has a ladder of forms: its starting form, then description + chunk +
+path, then description + path, each lower form only when it is smaller in
+bytes than the form above it. When every hit fits in its starting form, nothing
+changes. Otherwise, among the outputs that fit (the hits in rank order up to
+some cut, each in a form of its ladder, and a note on how many were left out),
+the best one wins in this order: the top hit's form (fuller wins), then the
+number of hits kept (more wins), then the form of hit 2, of hit 3 and so on
+(fuller wins). So the top hit keeps its fullest form whenever it fits alone, as
+many lower hits are kept as fit next to it in their shortest forms and are
+dropped only from the bottom, and the kept hits get the fullest forms that
+fit, best-ranked first. The top hit is always kept: when nothing fits, it is
+injected alone in its shortest form, even though that exceeds the budget. No
+hit is ever injected larger than its starting form. The `PreToolUse` hook
+ignores the variable and keeps injecting full bodies.
 
 `memory-router test <prompt>` prints `rendered: N bytes (budget B bytes)`
 after the matches, and `--json` carries `renderedBytes` and `budgetBytes`

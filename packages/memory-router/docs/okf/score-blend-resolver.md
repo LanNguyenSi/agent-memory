@@ -39,7 +39,7 @@ writing (comments and the definition set aside) are the
 `memory_resolve` (`packages/memory-router/src/mcp/server.ts:133`), and
 `memory-router eval` (`packages/memory-router/src/eval/runner.ts:71`);
 each calls `resolveBlended()`
-(`packages/memory-router/src/router.ts:198-455`).
+(`packages/memory-router/src/router.ts:198-462`).
 `resolveBlended()` calls `loadBlendWeights()` on every invocation that
 has a prompt (`packages/memory-router/src/router.ts:205-207`), and the
 comment above `loadBlendWeights()`
@@ -113,7 +113,7 @@ calibrated weights, floors and candidateK are untouched by both.
 `resolveBlended()` also records, per returned hit, which body chunk matched,
 as the optional `GateHit.chunkIndex` and `GateHit.chunkOffset` (`packages/memory-router/src/types.d.ts`),
 so the `UserPromptSubmit` hook can inject that chunk instead of the whole
-body (`renderHitsBudgeted`, `packages/memory-router/src/render.ts:326`, called
+body (`renderHitsBudgeted`, `packages/memory-router/src/render.ts:327`, called
 at `packages/memory-router/src/hooks/user-prompt-submit.ts:64`). The semantic
 winner chunk is collected per memory
 (`packages/memory-router/src/router.ts:367-371`); a keyword-only admission

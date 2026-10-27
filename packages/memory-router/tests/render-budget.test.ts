@@ -17,6 +17,7 @@ const {
   renderHitsAsContext,
   renderHitsBudgeted,
   ladderFor,
+  blockFor,
   resolveInjectBudget,
   injectBytes,
   DEFAULT_INJECT_BUDGET_BYTES,
@@ -461,11 +462,20 @@ test('far over budget: lowest hits are dropped, the top hit is kept, a note says
   assert.ok(injectBytes(out) > 1, 'the minimal top hit is emitted even though it exceeds the budget');
 });
 
-test('budget sweep: the top hit is shortened only once every lower hit is gone, and the output always fits when it can', () => {
+// Bytes of the top hit alone in its start form, with the note for the
+// `omitted` hits left out at this budget.
+function topAloneBytes(top: GateHit, omitted: number, budget: number): number {
+  const alone = renderHitsBudgeted([top], { budgetBytes: 1_000_000 });
+  const note = `\n\n_${omitted} lower-ranked ${omitted === 1 ? 'memory' : 'memories'} left out to stay within the ${budget} byte injection budget._`;
+  return injectBytes(alone) + injectBytes(note);
+}
+
+test('budget sweep: the top hit is shortened only when its start form does not fit even alone, and the output always fits when it can', () => {
   const hits = threeShort();
   const rank: Record<Form, number> = { whole: 0, excerpt: 1, minimal: 2 };
   let sawDrop = false;
   let sawShortTop = false;
+  let sawShortTopWithOthers = false;
   for (let budget = 12000; budget >= 1; budget -= 13) {
     const out = renderHitsBudgeted(hits, { budgetBytes: budget });
     const blocks = [...blocksOf(out).entries()];
@@ -480,7 +490,11 @@ test('budget sweep: the top hit is shortened only once every lower hit is gone, 
     }
     if (forms[0] !== 'whole') {
       sawShortTop = true;
-      assert.equal(blocks.length, 1, `the top hit is shortened only when it is the last one standing (budget ${budget})`);
+      if (blocks.length > 1) sawShortTopWithOthers = true;
+      assert.ok(
+        topAloneBytes(hits[0], hits.length - 1, budget) > budget,
+        `the top hit is shortened only when its whole body does not fit even alone (budget ${budget})`,
+      );
     }
     if (blocks.length > 1 || forms[0] !== 'minimal') {
       assert.ok(injectBytes(out) <= budget, `within budget ${budget} unless only the minimal top hit remains`);
@@ -488,6 +502,7 @@ test('budget sweep: the top hit is shortened only once every lower hit is gone, 
   }
   assert.ok(sawDrop, 'the sweep reached the drop phase');
   assert.ok(sawShortTop, 'the sweep reached the top-hit shortening phase');
+  assert.ok(sawShortTopWithOthers, 'a shortened top hit keeps lower hits that still fit next to it');
 });
 
 test('budget sweep: a budget equal to the size of an output that fits reproduces that output (no off-by-one at the boundary)', () => {
@@ -563,16 +578,21 @@ test('five long memories with 250-char descriptions at 2500 bytes: the top hit k
   assert.match(out, /lower-ranked memor(?:y|ies) left out/);
 });
 
-test('when even the top hit with its excerpt does not fit, the lower hits are dropped first and only then the top hit loses its excerpt', () => {
+test('when even the top hit alone with its excerpt does not fit, it loses its excerpt and keeps every lower hit that fits next to it', () => {
   const hits = ['m1', 'm2', 'm3'].map((id, i) =>
     hit(longWithDescription(id, 250), 0.9 - i * 0.05, { chunkIndex: 1 }),
   );
   const topExcerpt = injectBytes(renderHitsBudgeted([hits[0]], { budgetBytes: 1_000_000 }));
-  const out = renderHitsBudgeted(hits, { budgetBytes: topExcerpt - 1 });
+  const budget = topExcerpt - 1;
+  const out = renderHitsBudgeted(hits, { budgetBytes: budget });
   const blocks = blocksOf(out);
-  assert.deepEqual([...blocks.keys()], ['m1'], 'every lower hit is gone');
-  assert.equal(formOf(blocks.get('m1') as string), 'minimal');
-  assert.match(out, /2 lower-ranked memories left out/);
+  assert.equal(formOf(blocks.get('m1') as string), 'minimal', 'the top hit loses its excerpt');
+  // Dropping the lower hits would not let the top hit keep its excerpt, so
+  // they are not dropped: all three fit as description + path.
+  assert.deepEqual([...blocks.keys()], ['m1', 'm2', 'm3'], 'no hit is dropped');
+  assert.deepEqual([...blocks.values()].map(formOf), ['minimal', 'minimal', 'minimal']);
+  assert.ok(!out.includes('left out'));
+  assert.ok(injectBytes(out) <= budget);
 });
 
 function minimalBytes(h: GateHit): number {
@@ -675,6 +695,46 @@ test('a hit that starts whole is never shortened to an excerpt that is not small
     const forB = blocks.get('b2');
     if (forB !== undefined) assert.notEqual(formOf(forB), 'excerpt', `budget ${budget}`);
   }
+});
+
+// A tiny body with a long description: description + path is larger than the
+// whole body, so the minimal form is no rung of this hit's ladder.
+function tinyWithLongDescription(id: string, descLen: number, score: number): GateHit {
+  return hit(mem(id, 'Never force-push.', { description: 'd'.repeat(descLen) }), score);
+}
+
+test('a hit whose minimal form is larger than its whole body is never shortened to it: all hits that fit whole stay whole', () => {
+  const { a, c } = raiseFixture();
+  const b = tinyWithLongDescription('b2', 300, 0.8);
+  assert.deepEqual(ladderFor(b), ['whole'], 'no shorter form is smaller than the whole body');
+  // a1 and b2 whole plus the one-memory note fit; c3 (5,000-char
+  // description) does not fit in any form.
+  const budget = injectBytes(renderHitsBudgeted([a, b], { budgetBytes: 1_000_000 })) + injectBytes(footerFor(999));
+  assert.equal(String(budget).length, 3, 'fixture: the note prints three digits');
+  const out = renderHitsBudgeted([a, b, c], { budgetBytes: budget });
+  const blocks = blocksOf(out);
+  assert.deepEqual([...blocks.keys()], ['a1', 'b2'], 'b2 is kept, only c3 is left out');
+  assert.deepEqual([...blocks.values()].map(formOf), ['whole', 'whole']);
+  assert.match(out, /1 lower-ranked memory left out/);
+  assert.equal(injectBytes(out), budget, 'the output lands on the budget exactly');
+});
+
+test('a lone top hit whose minimal form is larger than its whole body is emitted whole when nothing fits', () => {
+  const { c } = raiseFixture();
+  const t = hit(mem('t0', 'Short rule.', { description: 'x'.repeat(400) }), 0.9);
+  assert.deepEqual(ladderFor(t), ['whole']);
+  const wholeAlone = renderHitsBudgeted([t], { budgetBytes: 1_000_000 });
+  // The budget holds the top hit's whole body but not the note about c3, so
+  // no output fits: the top hit goes out alone on its smallest rung, which is
+  // its whole body, not the larger description + path.
+  const budget = injectBytes(wholeAlone);
+  const out = renderHitsBudgeted([t, c], { budgetBytes: budget });
+  const blocks = blocksOf(out);
+  assert.deepEqual([...blocks.keys()], ['t0']);
+  assert.equal(formOf(blocks.get('t0') as string), 'whole');
+  assert.equal(injectBytes(out), topAloneBytes(t, 1, budget), 'the whole body plus the note, nothing larger');
+  const withMinimal = out.replace(blockFor(t, 'whole'), blockFor(t, 'minimal'));
+  assert.ok(injectBytes(out) < injectBytes(withMinimal), 'smaller than the same output with description + path');
 });
 
 test('room is given back top-down: a lower hit takes only the room the hits above it could not use', () => {
