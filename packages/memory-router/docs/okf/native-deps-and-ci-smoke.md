@@ -44,7 +44,7 @@ both modules (index-store.ts does so at module scope,
 `require`s in the opposite order), constructs a database, and calls
 `load` on it (index-store.ts does `new Database(...)` then
 `sqliteVec.load(db)` per open,
-`packages/memory-router/src/embed/index-store.ts:481-483`), against an
+`packages/memory-router/src/embed/index-store.ts:484-486`), against an
 in-memory database instead of an index file. A green step shows that the
 addons load and the extension attaches on that runner's Node, not only
 that the packages installed.

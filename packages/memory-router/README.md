@@ -212,17 +212,26 @@ every prompt that touched it. `UserPromptSubmit` therefore injects, per hit:
   and "How to apply" lines is never cut;
 - otherwise the **description**, the **chunk that matched the prompt** (and
   the chunk after it when the matching one is short, under 600 characters),
-  and the memory's absolute path as `_Full memory: <path>_`, which the agent
-  can `Read` for the rest. The matching chunk is the one the semantic search
-  scored highest, or for a keyword hit the chunk that holds the identifier.
-  A hit that comes with no chunk information (a topic-only hit, the degraded
-  path, or a memory whose document vector won) shows the first chunk.
+  and the memory's absolute path as ``_Full memory:_ `<path>` `` (the path in
+  backticks, so a copy takes it alone), which the agent can `Read` for the
+  rest. The matching chunk is the one the semantic search scored highest, or
+  for a keyword hit the chunk that holds the identifier. A hit that comes
+  with no chunk information (a topic-only hit, the degraded path, or a memory
+  whose document vector won) shows the first chunk, and so does a hit whose
+  index is older than the file: the search records where the matching chunk
+  started, and when the current body has a different chunk at that position
+  the renderer does not trust the stored index.
 
 The whole injection is held to **16,384 bytes** (UTF-8 bytes of the rendered
-text). Over that, the lowest-ranked hits are shortened first (whole body, then
-description + chunk + path, then description + path), then dropped from the
-bottom with a one-line note; the top hit is never dropped, and shortening
-works on whole chunks, never inside a code fence or a line. Set
+text). Over that, hits 2 to n are shortened first, lowest-ranked first (whole
+body, then description + chunk + path, then description + path), then dropped
+from the bottom with a one-line note, and only then is the top hit shortened,
+so the best match keeps its excerpt for as long as it alone fits; room a drop
+frees is given back to the kept hits, top-down. The top hit is never dropped.
+Shortening works on whole chunks and blocks, never on character offsets. The
+chunker itself splits a line or a code fence that is longer than its
+3,000-character cap, and a fence split that way is reopened and closed so the
+injected text stays balanced. Set
 `MEMORY_ROUTER_INJECT_BUDGET` to a positive integer to change the budget; an
 empty, zero, negative, fractional or non-numeric value falls back to the
 default with one note on stderr.

@@ -108,6 +108,18 @@ function dedupeAndRank(hits: GateHit[], maxHits: number): GateHit[] {
 // matches") and the blendedSearch result { semantic, keyword } that carries
 // the FTS keyword candidates (each an id-token match with its matched
 // tokens and best bm25) alongside the semantic hits.
+// A hit's best chunk as the index knew it: its index and, when known, the
+// first character of that chunk in the body the index was built from.
+interface ChunkRef {
+  index: number;
+  offset?: number;
+}
+
+function keywordChunkRef(k: KeywordSearchHit): ChunkRef | undefined {
+  if (k.chunkIndex === undefined) return undefined;
+  return { index: k.chunkIndex, offset: k.chunkOffset };
+}
+
 interface SemanticSearchHit {
   memory: Memory;
   score: number;
@@ -123,6 +135,9 @@ interface KeywordSearchHit {
   // Chunk holding the best-bm25 id-token match; absent from seam fakes that
   // predate chunk tracking.
   chunkIndex?: number;
+  // First character of that chunk in the body the index was built from;
+  // absent when the store could not name it.
+  chunkOffset?: number;
 }
 
 type SearchOutcome =
@@ -343,7 +358,7 @@ async function resolveBlended(
         'keyword',
         [keywordReason(a)],
         now,
-        a.chunkIndex,
+        keywordChunkRef(a),
       ),
     );
     const taken = new Set(keywordFirst.map((h) => h.memory.id));
@@ -361,9 +376,11 @@ async function resolveBlended(
   // Best chunk per semantic hit (only those whose winning vector was a
   // chunk). Threaded onto the GateHit so the hook renderer can inject the
   // matching excerpt instead of the whole body.
-  const semanticChunkById = new Map<string, number>();
+  const semanticChunkById = new Map<string, ChunkRef>();
   for (const h of semanticHits) {
-    if (h.chunk !== undefined) semanticChunkById.set(h.memory.id, h.chunk.index);
+    if (h.chunk !== undefined) {
+      semanticChunkById.set(h.memory.id, { index: h.chunk.index, offset: h.chunk.offset });
+    }
   }
 
   // Tool Gate: unrelated to the prompt-semantic blend above, only relevant
@@ -416,14 +433,14 @@ async function resolveBlended(
     // Chunk to excerpt: the semantic winner when there is one, else the
     // chunk the id token matched in (keyword-only admission, or a semantic
     // hit whose document vector won and so names no chunk).
-    let chunkIndex: number | undefined = semanticChunkById.get(id);
+    let chunk: ChunkRef | undefined = semanticChunkById.get(id);
     if (keywordOnly) {
       // Admitted keyword-only memory: distinguishable gate + reason so the
       // eval can count it, floor-edge semantic score (see the admission
       // comment above).
       reasonParts.push(keywordReason(keywordOnly));
       gate = 'keyword';
-      chunkIndex = keywordOnly.chunkIndex;
+      chunk = keywordChunkRef(keywordOnly);
     } else if (hasSemanticHit) {
       // Only an above-floor SEMANTIC hit that also matches an id token is
       // boosted (exact-token evidence breaking the tie between two genuine
@@ -435,7 +452,7 @@ async function resolveBlended(
       if (idMatch) {
         keywordBoost = keywordConfig.keywordBoost;
         reasonParts.push(keywordReason(idMatch));
-        if (chunkIndex === undefined) chunkIndex = idMatch.chunkIndex;
+        if (chunk === undefined) chunk = keywordChunkRef(idMatch);
       }
     }
 
@@ -448,7 +465,7 @@ async function resolveBlended(
         gate,
         reasonParts,
         now,
-        chunkIndex,
+        chunk,
       ),
     );
   }
@@ -479,7 +496,7 @@ function blendCandidateHit(
   gate: GateHit['gate'],
   reasonParts: string[],
   now: number,
-  chunkIndex?: number,
+  chunk?: ChunkRef,
 ): GateHit {
   const topicBoost = topicHit ? weights.topicBoost : 0;
 
@@ -504,8 +521,12 @@ function blendCandidateHit(
 
   const hit: GateHit = { memory, gate, score, reason: parts.join('; ') };
   // Only set when known, so hits without chunk information keep exactly
-  // the four-field shape they always had.
-  if (chunkIndex !== undefined) hit.chunkIndex = chunkIndex;
+  // the four-field shape they always had. The offset is set only together
+  // with the index and only when the search layer knew it.
+  if (chunk !== undefined) {
+    hit.chunkIndex = chunk.index;
+    if (chunk.offset !== undefined) hit.chunkOffset = chunk.offset;
+  }
   return hit;
 }
 

@@ -20,7 +20,7 @@ sources:
 
 `packages/memory-router/src/router.ts` exports three resolvers (`resolve`,
 `resolveConfidence`, `resolveBlended`; its `module.exports` at
-`packages/memory-router/src/router.ts:547-553`), and it is easy to assume
+`packages/memory-router/src/router.ts:568-574`), and it is easy to assume
 there is one canonical way memory-router combines gate hits. There is not:
 the call sites in the table below pick different resolvers, for different
 reasons, and the two dedup/ranking functions underneath them
@@ -39,11 +39,11 @@ allocate result slots differently.
 The two hook callers also differ in how they render their hits, not only in
 which resolver produced them: `UserPromptSubmit` renders through
 `renderHitsBudgeted` (`packages/memory-router/src/hooks/user-prompt-submit.ts:64`,
-`packages/memory-router/src/render.ts:271`), which injects short memories
+`packages/memory-router/src/render.ts:287`), which injects short memories
 whole and long ones as description + matching chunk + path under a byte
 budget, while `PreToolUse` renders through the unbudgeted
 `renderHitsAsContext` (`packages/memory-router/src/hooks/pre-tool-use.ts:31`,
-`packages/memory-router/src/render.ts:119`) and so always injects each hit's
+`packages/memory-router/src/render.ts:122`) and so always injects each hit's
 full body.
 
 Two things worth stating explicitly:
@@ -57,7 +57,7 @@ Two things worth stating explicitly:
   CLI verb's `resolve(ctx, memories, { maxHits })` call
   (`packages/memory-router/src/cli.ts:783`), run whether or not
   `--semantic` is also passed, and `resolveBlended`'s own degraded
-  fallback (`packages/memory-router/src/router.ts:330-331`, `resolve(ctx, memories, { maxHits })`;
+  fallback (`packages/memory-router/src/router.ts:345-346`, `resolve(ctx, memories, { maxHits })`;
   since schema v4 a keyword-admitted memory may take the first slots ahead of that
   output (see score-blend-resolver.md)). That fallback shapes the
   `UserPromptSubmit` hook's injected context, MCP `memory_resolve`'s
@@ -88,7 +88,7 @@ every input hit, sort the survivors descending by score, and slice to
 path uses it directly to merge the sync gates' hits with the confidence
 gate's hits into one ranked list.
 
-`rankWithToolPrivilege` (`packages/memory-router/src/router.ts:524-545`),
+`rankWithToolPrivilege` (`packages/memory-router/src/router.ts:545-566`),
 called only from `resolveBlended`
 (`rg -n 'rankWithToolPrivilege\(' packages/memory-router/src`), starts
 from the same per-id "highest score wins" merge, but then partitions the
@@ -100,7 +100,7 @@ matched (a deterministic `1.0` hit) can be pushed out of the result by
 enough higher-scoring blend hits; under `rankWithToolPrivilege`, a
 blend-scored hit cannot displace it, because tool-matched hits are placed
 ahead of all other hits before the `maxHits` slice
-(`packages/memory-router/src/router.ts:541-544`).
+(`packages/memory-router/src/router.ts:562-565`).
 Attribution for a memory hit by both paths is unaffected by this
 difference (whichever hit has the higher score still wins the
 `gate`/`score`/`reason` fields, in both functions); what differs is which

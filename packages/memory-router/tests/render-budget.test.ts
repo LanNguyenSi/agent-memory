@@ -196,14 +196,14 @@ test('long memory with a known best chunk: description + that chunk + absolute p
   for (const other of [0, 1, 3, 4]) {
     assert.ok(!out.includes(`SECTION${other + 1} `), `chunk ${other} must not be injected`);
   }
-  assert.ok(out.includes('_Full memory: /abs/dir/long.md_'));
+  assert.ok(out.includes('_Full memory:_ `/abs/dir/long.md`'));
   assert.ok(out.length < m.body.length / 2);
 });
 
 test('the path line is absolute even when the loaded path is relative', () => {
   const m = mem('rel', sections(3), {}, 'relative/rel.md');
   const out = renderHitsBudgeted([hit(m, 0.8, { chunkIndex: 0 })]);
-  assert.ok(out.includes(`_Full memory: ${path.resolve('relative/rel.md')}_`));
+  assert.ok(out.includes(`_Full memory:_ \`${path.resolve('relative/rel.md')}\``));
 });
 
 test('short best chunk: the immediately following chunk is injected too', () => {
@@ -234,6 +234,26 @@ test('long best chunk gets no neighbour; a short LAST chunk has none to add', ()
   assert.match(out, new RegExp(`_Excerpt \\(chunk ${lastIdx + 1} of ${chunks.length}\\):_`));
 });
 
+test('neighbour threshold boundary: a best chunk one char under the limit gets its neighbour, one of exactly the limit does not', () => {
+  const build = (len: number): { m: Memory; chunks: MemoryChunk[] } => {
+    const m = mem(`nbb${len}`, [para('BESTA', len), para('NEXTB', 1450), para('LASTC', 1450)].join('\n\n'));
+    return { m, chunks: chunkBody(m.body) };
+  };
+  const under = build(NEIGHBOUR_CHUNK_MAX_CHARS - 1);
+  assert.equal(under.chunks.length, 3, 'fixture: one chunk per paragraph');
+  assert.equal(under.chunks[0].text.length, NEIGHBOUR_CHUNK_MAX_CHARS - 1);
+  const outUnder = renderHitsBudgeted([hit(under.m, 0.8, { chunkIndex: 0 })]);
+  assert.match(outUnder, /_Excerpt \(chunks 1-2 of 3\):_/);
+  assert.ok(outUnder.includes('NEXTB '), 'the neighbour is injected');
+
+  const at = build(NEIGHBOUR_CHUNK_MAX_CHARS);
+  assert.equal(at.chunks.length, 3);
+  assert.equal(at.chunks[0].text.length, NEIGHBOUR_CHUNK_MAX_CHARS);
+  const outAt = renderHitsBudgeted([hit(at.m, 0.8, { chunkIndex: 0 })]);
+  assert.match(outAt, /_Excerpt \(chunk 1 of 3\):_/);
+  assert.ok(!outAt.includes('NEXTB '), 'no neighbour at exactly the limit');
+});
+
 test('hit without chunk info: description + FIRST chunk + path', () => {
   const m = longMemory('nochunk');
   const out = renderHitsBudgeted([hit(m)]);
@@ -241,7 +261,7 @@ test('hit without chunk info: description + FIRST chunk + path', () => {
   assert.ok(out.includes('SECTION1 '));
   assert.ok(!out.includes('SECTION2 ') && !out.includes('SECTION5 '));
   assert.match(out, /_Excerpt \(chunk 1 of 5\):_/);
-  assert.ok(out.includes('_Full memory: /mem/nochunk.md_'));
+  assert.ok(out.includes('_Full memory:_ `/mem/nochunk.md`'));
 });
 
 test('a chunk index the body no longer has falls back to the first chunk', () => {
@@ -250,6 +270,49 @@ test('a chunk index the body no longer has falls back to the first chunk', () =>
     const out = renderHitsBudgeted([hit(m, 0.8, { chunkIndex: idx })]);
     assert.match(out, /_Excerpt \(chunk 1 of 5\):_/, `chunkIndex ${idx}`);
   }
+});
+
+// --- index older than the file: the stored offset guards the stored index ----------
+
+function editedSections(): string {
+  // SECTION2 removed and SECTION1 shortened: chunk index 2 now holds
+  // SECTION4, starting at a different offset than the old chunk 2.
+  return [para('SECTION1', 1000), para('SECTION3', 1100), para('SECTION4', 1100), para('SECTION5', 1100)].join('\n\n');
+}
+
+test('chunk index + offset recorded for an old body, applied to an edited body: first chunk, not the misaligned one', () => {
+  const oldBody = sections(5);
+  const oldChunk: MemoryChunk = chunkBody(oldBody)[2];
+  const edited = mem('edited', editedSections());
+  const editedChunks = chunkBody(edited.body);
+  assert.equal(editedChunks.length, 4);
+  assert.ok(editedChunks[2].text.startsWith('SECTION4 '), 'fixture: index 2 is another region now');
+  assert.notEqual(editedChunks[2].offset, oldChunk.offset, 'fixture: the offsets differ');
+  const out = renderHitsBudgeted([hit(edited, 0.8, { chunkIndex: oldChunk.index, chunkOffset: oldChunk.offset })]);
+  assert.match(out, /_Excerpt \(chunk 1 of 4\):_/);
+  assert.ok(out.includes('SECTION1 ') && !out.includes('SECTION4 '));
+});
+
+test('chunk index + offset recorded for the current body: the matched chunk', () => {
+  const m = mem('unchanged', sections(5));
+  const chunk: MemoryChunk = chunkBody(m.body)[2];
+  const out = renderHitsBudgeted([hit(m, 0.8, { chunkIndex: chunk.index, chunkOffset: chunk.offset })]);
+  assert.match(out, /_Excerpt \(chunk 3 of 5\):_/);
+  assert.ok(out.includes('SECTION3 ') && !out.includes('SECTION1 '));
+});
+
+test('the offset check: index alone is trusted when no offset is known, offset 0 is a known offset', () => {
+  const edited = mem('trust', editedSections());
+  // No offset recorded: the renderer cannot tell, it keeps using the index.
+  const trusting = renderHitsBudgeted([hit(edited, 0.8, { chunkIndex: 2 })]);
+  assert.match(trusting, /_Excerpt \(chunk 3 of 4\):_/);
+  // Offset 0 is a real offset: a recorded (index 2, offset 0) never matches
+  // chunk 2 of this body, so it falls back to the first chunk.
+  const zero = renderHitsBudgeted([hit(edited, 0.8, { chunkIndex: 2, chunkOffset: 0 })]);
+  assert.match(zero, /_Excerpt \(chunk 1 of 4\):_/);
+  // And (index 0, offset 0) on any body is the first chunk either way.
+  const first = renderHitsBudgeted([hit(edited, 0.8, { chunkIndex: 0, chunkOffset: 0 })]);
+  assert.match(first, /_Excerpt \(chunk 1 of 4\):_/);
 });
 
 test('a missing or non-string description is left out, not rendered as "undefined"', () => {
@@ -397,28 +460,167 @@ test('far over budget: lowest hits are dropped, the top hit is kept, a note says
   assert.ok(injectBytes(out) > 1, 'the minimal top hit is emitted even though it exceeds the budget');
 });
 
-test('dropping happens only after every remaining hit is in its minimal form', () => {
+test('budget sweep: the top hit is shortened only once every lower hit is gone, and the output always fits when it can', () => {
   const hits = threeShort();
+  const rank: Record<Form, number> = { whole: 0, excerpt: 1, minimal: 2 };
   let sawDrop = false;
+  let sawShortTop = false;
   for (let budget = 12000; budget >= 1; budget -= 13) {
     const out = renderHitsBudgeted(hits, { budgetBytes: budget });
     const blocks = [...blocksOf(out).entries()];
     const forms = blocks.map(([, b]) => formOf(b));
     assert.equal(blocks[0][0], 'h1', `top hit present at budget ${budget}`);
-    const rank: Record<Form, number> = { whole: 0, excerpt: 1, minimal: 2 };
     for (let i = 1; i < forms.length; i++) {
       assert.ok(rank[forms[i]] >= rank[forms[i - 1]], `lower hit never fuller than a higher one (budget ${budget})`);
     }
     if (blocks.length < hits.length) {
       sawDrop = true;
-      assert.ok(forms.every((f) => f === 'minimal'), `a drop only after all kept hits are minimal (budget ${budget})`);
       assert.deepEqual(blocks.map(([id]) => id), ['h1', 'h2', 'h3'].slice(0, blocks.length), 'dropped hits are the lowest-ranked suffix');
     }
-    if (blocks.length > 1) {
-      assert.ok(injectBytes(out) <= budget, `within budget ${budget} unless only the top hit remains`);
+    if (forms[0] !== 'whole') {
+      sawShortTop = true;
+      assert.equal(blocks.length, 1, `the top hit is shortened only when it is the last one standing (budget ${budget})`);
+    }
+    if (blocks.length > 1 || forms[0] !== 'minimal') {
+      assert.ok(injectBytes(out) <= budget, `within budget ${budget} unless only the minimal top hit remains`);
     }
   }
   assert.ok(sawDrop, 'the sweep reached the drop phase');
+  assert.ok(sawShortTop, 'the sweep reached the top-hit shortening phase');
+});
+
+test('budget sweep: a budget equal to the size of an output that fits reproduces that output (no off-by-one at the boundary)', () => {
+  const hits = threeShort();
+  let checked = 0;
+  for (let budget = 12000; budget >= 300; budget -= 7) {
+    const out = renderHitsBudgeted(hits, { budgetBytes: budget });
+    const size = injectBytes(out);
+    // The footer prints the budget, so only budgets with the same digit
+    // count give the same text; skip the sizes where the number of digits
+    // changes.
+    if (size > budget || String(size).length !== String(budget).length) continue;
+    const again = renderHitsBudgeted(hits, { budgetBytes: size });
+    assert.deepEqual(
+      [...blocksOf(again).entries()].map(([id, b]) => [id, formOf(b)]),
+      [...blocksOf(out).entries()].map(([id, b]) => [id, formOf(b)]),
+      `budget ${size} (the exact size of the output at ${budget}) keeps the same forms`,
+    );
+    checked++;
+  }
+  assert.ok(checked > 50, 'the sweep exercised many boundaries');
+});
+
+test('exactly at the budget: every hit keeps its unbudgeted form, nothing is shortened or dropped', () => {
+  const hits = threeShort();
+  const full = renderHitsBudgeted(hits, { budgetBytes: 1_000_000 });
+  const exact = renderHitsBudgeted(hits, { budgetBytes: injectBytes(full) });
+  assert.equal(exact, full);
+  assert.deepEqual([...blocksOf(exact).values()].map(formOf), ['whole', 'whole', 'whole']);
+  // Same at the excerpt level: long memories, budget equal to their excerpt render.
+  const longHits = ['e1', 'e2'].map((id, i) => hit(longMemory(id), 0.9 - i * 0.1, { chunkIndex: 1 }));
+  const excerptRender = renderHitsBudgeted(longHits, { budgetBytes: 1_000_000 });
+  const excerptExact = renderHitsBudgeted(longHits, { budgetBytes: injectBytes(excerptRender) });
+  assert.equal(excerptExact, excerptRender);
+  assert.deepEqual([...blocksOf(excerptExact).values()].map(formOf), ['excerpt', 'excerpt']);
+});
+
+// --- budget order: the top hit is the last to be shortened -----------------------
+
+function longWithDescription(id: string, descLen: number): Memory {
+  return mem(id, sections(5), { description: `${id} ${'d'.repeat(descLen)}` });
+}
+
+test('five long memories with 250-char descriptions at 2500 bytes: the top hit keeps its excerpt because it alone fits', () => {
+  const hits = ['m1', 'm2', 'm3', 'm4', 'm5'].map((id, i) =>
+    hit(longWithDescription(id, 250), 0.9 - i * 0.05, { chunkIndex: 1 }),
+  );
+  const topAlone = renderHitsBudgeted([hits[0]], { budgetBytes: 1_000_000 });
+  assert.equal(formOf(topAlone), 'excerpt');
+  assert.ok(injectBytes(topAlone) < 2500, 'fixture: the top hit with its excerpt fits the budget alone');
+  const out = renderHitsBudgeted(hits, { budgetBytes: 2500 });
+  const blocks = blocksOf(out);
+  assert.equal(formOf(blocks.get('m1') as string), 'excerpt', 'the top hit keeps its excerpt');
+  assert.ok((blocks.get('m1') as string).includes('SECTION2 '), 'with the matching chunk text');
+  assert.ok(blocks.size < hits.length, 'lower hits were given up for it');
+  for (const [id, b] of blocks) {
+    if (id !== 'm1') assert.equal(formOf(b), 'minimal', `${id} is description + path only`);
+  }
+  assert.ok(injectBytes(out) <= 2500);
+  assert.match(out, /lower-ranked memor(?:y|ies) left out/);
+});
+
+test('when even the top hit with its excerpt does not fit, the lower hits are dropped first and only then the top hit loses its excerpt', () => {
+  const hits = ['m1', 'm2', 'm3'].map((id, i) =>
+    hit(longWithDescription(id, 250), 0.9 - i * 0.05, { chunkIndex: 1 }),
+  );
+  const topExcerpt = injectBytes(renderHitsBudgeted([hits[0]], { budgetBytes: 1_000_000 }));
+  const out = renderHitsBudgeted(hits, { budgetBytes: topExcerpt - 1 });
+  const blocks = blocksOf(out);
+  assert.deepEqual([...blocks.keys()], ['m1'], 'every lower hit is gone');
+  assert.equal(formOf(blocks.get('m1') as string), 'minimal');
+  assert.match(out, /2 lower-ranked memories left out/);
+});
+
+function minimalBytes(h: GateHit): number {
+  return injectBytes(renderHitsBudgeted([h], { budgetBytes: 1 }));
+}
+function excerptBytes(h: GateHit): number {
+  return injectBytes(renderHitsBudgeted([h], { budgetBytes: 1_000_000 }));
+}
+
+// Smallest budget at which `hits` render with exactly the forms `forms`
+// (and no other hit kept).
+function firstBudgetWithForms(hits: GateHit[], forms: Form[]): number {
+  for (let budget = 1; budget < 40_000; budget++) {
+    const out = renderHitsBudgeted(hits, { budgetBytes: budget });
+    const got = [...blocksOf(out).values()].map(formOf);
+    if (got.length === forms.length && got.every((f, i) => f === forms[i])) return budget;
+  }
+  throw new Error('no budget produces the requested forms');
+}
+
+test('room freed by a drop is given back to the kept hits: a lower hit is raised to its excerpt when that still fits', () => {
+  // r3 has a 2,000-char description, so dropping it frees far more than
+  // raising r2 from description + path to its excerpt costs.
+  const [a, b] = ['r1', 'r2'].map((id, i) => hit(longWithDescription(id, 300), 0.9 - i * 0.05, { chunkIndex: 1 }));
+  const c = hit(longWithDescription('r3', 2000), 0.8, { chunkIndex: 1 });
+  // Room for both excerpts and the footer, but not for r3 in any form.
+  const budget = injectBytes(renderHitsBudgeted([a, b], { budgetBytes: 1_000_000 })) + 200;
+  assert.ok(minimalBytes(c) > 200, 'fixture: r3 does not fit even in its minimal form');
+  const out = renderHitsBudgeted([a, b, c], { budgetBytes: budget });
+  const blocks = blocksOf(out);
+  assert.deepEqual([...blocks.keys()], ['r1', 'r2'], 'r3 was dropped');
+  assert.deepEqual([...blocks.values()].map(formOf), ['excerpt', 'excerpt'], 'r2 is raised back to its excerpt');
+  assert.match(out, /1 lower-ranked memory left out/);
+  assert.ok(injectBytes(out) <= budget);
+});
+
+test('raising stops at the first hit that no longer fits: a lower hit never gets room a higher hit still wants', () => {
+  const big = (id: string, score: number): GateHit =>
+    hit(longWithDescription(id, 100), score, { chunkIndex: 1 });
+  // c1 has a 610-char first chunk (no neighbour is added at that size), so
+  // lifting it from description + path to its excerpt is cheap.
+  const smallBody = [para('TINYA', 610), para('BIGB', 1450), para('BIGC', 1450)].join('\n\n');
+  assert.equal(chunkBody(smallBody)[0].text.length, 610);
+  const small = hit(mem('c1', smallBody, { description: `c1 ${'d'.repeat(100)}` }), 0.8, { chunkIndex: 0 });
+  const dropMe = hit(longWithDescription('d1', 2000), 0.7, { chunkIndex: 1 });
+  const a = big('a1', 0.95);
+  const b = big('b1', 0.9);
+  const hits = [a, b, small, dropMe];
+  const gapB = excerptBytes(b) - minimalBytes(b);
+  const gapSmall = excerptBytes(small) - minimalBytes(small);
+  const slack = 800;
+  assert.ok(gapSmall < slack && slack < gapB, `fixture: the cheap lift (${gapSmall}) fits the slack, the dear one (${gapB}) does not`);
+
+  const tight = firstBudgetWithForms([a, b, small], ['excerpt', 'minimal', 'minimal']);
+  const out = renderHitsBudgeted(hits, { budgetBytes: tight + slack });
+  const blocks = blocksOf(out);
+  assert.deepEqual([...blocks.keys()], ['a1', 'b1', 'c1'], 'd1 was dropped');
+  assert.deepEqual(
+    [...blocks.values()].map(formOf),
+    ['excerpt', 'minimal', 'minimal'],
+    'b1 cannot be lifted, so c1 does not get the room either',
+  );
 });
 
 test('the budget is counted in UTF-8 bytes, not characters', () => {
@@ -473,6 +675,33 @@ test('resolveInjectBudget: control characters in a bad value are not echoed to s
   assert.equal(warnings.length, 1);
   assert.ok(!/\u001b/.test(warnings[0]));
   assert.equal(warnings[0].split('\n').length, 2, 'one line plus the trailing newline');
+});
+
+for (const [name, ch] of [
+  ['C1 control U+0080', '\u0080'],
+  ['C1 CSI U+009B', '\u009b'],
+  ['C1 control U+009F', '\u009f'],
+  ['LRM U+200E', '\u200e'],
+  ['RLM U+200F', '\u200f'],
+  ['LRE U+202A', '\u202a'],
+  ['RLO U+202E', '\u202e'],
+  ['LRI U+2066', '\u2066'],
+  ['PDI U+2069', '\u2069'],
+]) {
+  test(`resolveInjectBudget: ${name} in a bad value is not echoed to stderr`, () => {
+    const warnings: string[] = [];
+    resolveInjectBudget({ MEMORY_ROUTER_INJECT_BUDGET: `ab${ch}cd` }, (m: string) => warnings.push(m));
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('abcd'), 'the visible text survives, joined');
+    assert.ok(!warnings[0].includes(ch));
+  });
+}
+
+test('resolveInjectBudget: printable non-ASCII next to the stripped ranges is echoed unchanged', () => {
+  const warnings: string[] = [];
+  // U+00A0 (just above C1), U+00E9, U+2010 and U+202F (outside the bidi ranges).
+  resolveInjectBudget({ MEMORY_ROUTER_INJECT_BUDGET: 'x\u00a0\u00e9\u2010\u202fy' }, (m: string) => warnings.push(m));
+  assert.ok(warnings[0].includes('x\u00a0\u00e9\u2010\u202fy'));
 });
 
 test('renderHitsBudgeted reads MEMORY_ROUTER_INJECT_BUDGET when no budget is passed', () => {

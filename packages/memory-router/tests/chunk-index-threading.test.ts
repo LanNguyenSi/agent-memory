@@ -88,6 +88,7 @@ interface SeamSemantic {
 interface SeamKeyword {
   id: string;
   chunkIndex?: number;
+  chunkOffset?: number;
 }
 
 function seam(semantic: SeamSemantic[], keyword: SeamKeyword[] = []) {
@@ -102,6 +103,7 @@ function seam(semantic: SeamSemantic[], keyword: SeamKeyword[] = []) {
       idTerms: ['zq7k29xd'],
       bm25: -2,
       ...(k.chunkIndex !== undefined ? { chunkIndex: k.chunkIndex } : {}),
+      ...(k.chunkOffset !== undefined ? { chunkOffset: k.chunkOffset } : {}),
     })),
   });
 }
@@ -124,6 +126,16 @@ test('resolveBlended: the winning semantic chunk index lands on the GateHit', as
   );
   assert.equal(hits.length, 1);
   assert.equal(hits[0].chunkIndex, 4);
+  assert.equal(hits[0].chunkOffset, 1234, 'the offset travels with the index');
+});
+
+test('resolveBlended: a semantic chunk at offset 0 keeps offset 0 (zero is a known offset)', async () => {
+  const hits = await resolveWith(
+    [fakeMemory('a')],
+    [{ id: 'a', score: 0.9, chunk: { index: 0, offset: 0 } }],
+  );
+  assert.equal(hits[0].chunkIndex, 0);
+  assert.equal(hits[0].chunkOffset, 0);
 });
 
 test('resolveBlended: a semantic hit whose document vector won (no chunk) carries no chunk index', async () => {
@@ -138,6 +150,50 @@ test('resolveBlended: a keyword-only admission carries the chunk the id token ma
   assert.equal(hits.length, 1);
   assert.equal(hits[0].gate, 'keyword');
   assert.equal(hits[0].chunkIndex, 3);
+  assert.ok(!('chunkOffset' in hits[0]), 'no offset from the store, no offset on the hit');
+});
+
+test('resolveBlended: a keyword admission carries the stored offset of its chunk', async () => {
+  const hits = await resolveWith([fakeMemory('kw')], [], [{ id: 'kw', chunkIndex: 3, chunkOffset: 4321 }]);
+  assert.equal(hits[0].chunkIndex, 3);
+  assert.equal(hits[0].chunkOffset, 4321);
+});
+
+test('resolveBlended: keyword offset also lands on the active-blend and degraded-branch admissions', async () => {
+  const live = await resolveWith(
+    [fakeMemory('sem'), fakeMemory('kw')],
+    [{ id: 'sem', score: 0.9, chunk: { index: 2, offset: 40 } }],
+    [{ id: 'kw', chunkIndex: 4, chunkOffset: 777 }],
+  );
+  const liveById = new Map<string, GateHit>(live.map((h) => [h.memory.id, h]));
+  assert.equal(liveById.get('kw')?.chunkOffset, 777);
+  assert.equal(liveById.get('sem')?.chunkOffset, 40);
+  const degraded = await resolveWith(
+    [fakeMemory('kw'), fakeMemory('weak')],
+    [{ id: 'weak', score: 0.1, chunk: { index: 9, offset: 1 } }],
+    [{ id: 'kw', chunkIndex: 5, chunkOffset: 888 }],
+  );
+  assert.equal(degraded.find((h) => h.memory.id === 'kw')?.chunkOffset, 888);
+});
+
+test('resolveBlended: an id match on a semantic hit without a chunk takes the keyword index AND offset as a pair', async () => {
+  const hits = await resolveWith(
+    [fakeMemory('both')],
+    [{ id: 'both', score: 0.9 }],
+    [{ id: 'both', chunkIndex: 6, chunkOffset: 999 }],
+  );
+  assert.equal(hits[0].chunkIndex, 6);
+  assert.equal(hits[0].chunkOffset, 999);
+});
+
+test('resolveBlended: the semantic chunk offset is not mixed with the keyword chunk offset', async () => {
+  const hits = await resolveWith(
+    [fakeMemory('both')],
+    [{ id: 'both', score: 0.9, chunk: { index: 1, offset: 10 } }],
+    [{ id: 'both', chunkIndex: 6, chunkOffset: 999 }],
+  );
+  assert.equal(hits[0].chunkIndex, 1);
+  assert.equal(hits[0].chunkOffset, 10);
 });
 
 test('resolveBlended: with a live semantic path, a keyword-only admission still carries its own chunk', async () => {
@@ -324,6 +380,11 @@ test('blendedSearch: a keyword hit carries the index of the chunk that holds the
       const outcome = await blendedSearch('what about zq7k29xd', memories, dir, 5);
       assert.equal(outcome.keyword.length, 1);
       assert.equal(outcome.keyword[0].chunkIndex, idChunk);
+      assert.equal(
+        outcome.keyword[0].chunkOffset,
+        chunks[idChunk].offset,
+        'the keyword row carries the stored offset of its chunk',
+      );
     });
   } finally {
     stub.restore();
@@ -380,6 +441,7 @@ test('blendedSearch: with several id tokens the keyword hit carries the chunk of
       assert.equal(outcome.keyword.length, 1);
       assert.deepEqual(outcome.keyword[0].idTerms.sort(), [strong, weak].sort());
       assert.equal(outcome.keyword[0].chunkIndex, strongChunk);
+      assert.equal(outcome.keyword[0].chunkOffset, chunks[strongChunk].offset);
     });
   } finally {
     stub.restore();
@@ -415,7 +477,7 @@ test('hook, semantic path: the injected text is the matching chunk + description
         assert.ok(!ctx.includes(`SECTION${other} `), `section ${other} must not be injected`);
       }
       assert.ok(ctx.includes('a long one about zebras'), 'the description');
-      assert.ok(ctx.includes(`_Full memory: ${file}_`), 'the absolute path');
+      assert.ok(ctx.includes(`_Full memory:_ \`${file}\``), 'the absolute path');
       assert.match(ctx, /_Excerpt \(chunk 3 of 5\):_/);
       assert.match(ctx, /confidence · /);
       assert.ok(Buffer.byteLength(ctx, 'utf8') < 3000);
@@ -450,7 +512,7 @@ test('hook, keyword path: a keyword-only admission injects the chunk holding the
       assert.ok(ctx.includes('BRAVO '), 'the chunk with the identifier');
       assert.ok(ctx.includes('zq7k29xd'));
       assert.ok(!ctx.includes('ALPHA ') && !ctx.includes('CHARLIE '), 'no other chunk');
-      assert.ok(ctx.includes(`_Full memory: ${file}_`));
+      assert.ok(ctx.includes(`_Full memory:_ \`${file}\``));
     });
   } finally {
     stub.restore();
@@ -505,6 +567,48 @@ test('chunk alignment: the text injected for chunk i is exactly the text the ind
           `chunk ${chunk.index}: the indexer embedded exactly name + description + this chunk text`,
         );
       }
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- index older than the file -------------------------------------------------
+
+test('hook, semantic path on an index older than the file: the offset guard falls back to the first chunk', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-chunkthread-stale-'));
+  const stub = stubFetch((input) =>
+    input.includes('SECTION3 ') && !input.includes('SECTION1 ') ? ON : OFF,
+  );
+  try {
+    await withProviderEnv(async () => {
+      const file = writeMemory(
+        dir,
+        'edited_memory.md',
+        { name: 'Edited memory', description: 'edited after indexing', type: 'project' },
+        sections(5),
+      );
+      await rebuildIndex(dir);
+      seedQuery(dir, 'tell me about the zebra', ON);
+
+      // Edit the file WITHOUT re-indexing: the second section is gone and the
+      // first one is shorter, so the stored chunk 3 (offset 2204) now names
+      // the fourth section's text, which starts at offset 2104.
+      writeMemory(
+        dir,
+        'edited_memory.md',
+        { name: 'Edited memory', description: 'edited after indexing', type: 'project' },
+        [para('SECTION1', 1000), para('SECTION3', 1100), para('SECTION4', 1100), para('SECTION5', 1100)].join('\n\n'),
+      );
+
+      const res = runHook(dir, 'tell me about the zebra');
+      assert.equal(res.code, 0, res.stderr);
+      const ctx = injected(res.stdout);
+      assert.match(ctx, /_Excerpt \(chunk 1 of 4\):_/, 'the first chunk, not a misaligned one');
+      assert.ok(ctx.includes('SECTION1 '));
+      assert.ok(!ctx.includes('SECTION4 '), 'not the region the stale index pointed at');
+      assert.ok(ctx.includes(`_Full memory:_ \`${file}\``));
     });
   } finally {
     stub.restore();

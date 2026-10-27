@@ -1,5 +1,18 @@
 # Bundle log
 
+- 2026-10-27T11:20:00Z, injection budget review fixes: `renderHitsBudgeted`
+  now shortens hits 2 to n before dropping and shortens the top hit last,
+  then raises kept hits again top-down; `GateHit` gains `chunkOffset`
+  (semantic winner offset, or the FTS row's `char_offset` now returned by
+  `ftsMatch`) and `excerptFor` falls back to the first chunk when the stored
+  offset differs from the current body's chunk offset. `score-blend-resolver.md`
+  claim "chunk `i` at render time is the text that was embedded as chunk `i`"
+  now says it holds while the index is current, with the offset check as the
+  guard; its router.ts and render.ts citations for the chunk path were
+  re-read and re-pointed. Every `router.ts`, `indexer.ts`, `index-store.ts`
+  and `render.ts` citation in the four concept docs was shifted by the
+  diff's line mapping and spot-checked against the new lines (claims
+  unchanged).
 - 2026-10-27T09:06:50Z, UserPromptSubmit injection budget: `renderHitsBudgeted`
   (new, `src/render.ts`) injects description + matching chunk + path under a
   byte budget; `GateHit` gains `chunkIndex`, threaded by `resolveBlended`

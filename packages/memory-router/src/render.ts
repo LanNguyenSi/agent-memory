@@ -56,10 +56,13 @@ const LEVEL_WHOLE = 0; // heading, stale prefix, whole body
 const LEVEL_EXCERPT = 1; // heading, stale prefix, description, chunk(s), path
 const LEVEL_MINIMAL = 2; // heading, stale prefix, description, path
 
-// Control characters stripped from an env value before it is echoed to
-// stderr, so a stray byte cannot corrupt the log line.
+// Characters stripped from an env value before it is echoed to stderr, so a
+// stray byte cannot corrupt the log line or the terminal showing it: C0
+// controls and DEL, C1 controls (U+0080-U+009F, which include the 8-bit CSI
+// introducer U+009B), and the bidi / format marks that reorder or hide text
+// (U+200E, U+200F, U+202A-U+202E, U+2066-U+2069).
 // eslint-disable-next-line no-control-regex
-const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/g;
+const CONTROL_CHARS_RE = /[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 // Resolves the injection budget: MEMORY_ROUTER_INJECT_BUDGET when it is a
 // positive integer (bytes), else the default. An unset variable is the normal
@@ -178,6 +181,7 @@ interface PreparedHit {
   // Level a hit starts at before any budget pressure.
   startLevel: number;
   chunkIndex: number | undefined;
+  chunkOffset: number | undefined;
   blocks: Map<number, string>;
   hit: GateHit;
 }
@@ -195,25 +199,32 @@ function prepareHit(h: GateHit): PreparedHit {
     body,
     startLevel: body.length <= limit ? LEVEL_WHOLE : LEVEL_EXCERPT,
     chunkIndex: h.chunkIndex,
+    chunkOffset: h.chunkOffset,
     blocks: new Map(),
     hit: h,
   };
 }
 
 // The excerpt of a hit: its best chunk, the following chunk too when the best
-// one is short, always whole chunks. A chunk index the body no longer has
-// (index built before the file changed) and an absent index both fall back
-// to the first chunk. The text comes from the same chunkBody(memory.body)
-// call the indexer embeds, so chunk i here is the text that was embedded as
-// chunk i.
+// one is short, always whole chunks. The chunks come from the same
+// chunkBody(memory.body) call the indexer embeds, so while the index is
+// current chunk i here is the text that was embedded as chunk i. An index
+// older than the file breaks that: after an edit chunk i can be another
+// region. The offset the search recorded for the chunk is the guard: when it
+// is known and differs from the offset of chunk i in the current body, the
+// index is stale for this memory and the excerpt falls back to the first
+// chunk. An absent index, one the body no longer has, and a stale one all
+// land on the first chunk. A hit whose offset is unknown (a keyword row the
+// store could not name an offset for) is trusted by index alone.
 function excerptFor(p: PreparedHit): string {
   const raw = p.hit.memory.body;
   const chunks: MemoryChunk[] = chunkBody(raw);
   if (chunks.length === 0) return '';
-  const idx =
+  let idx =
     p.chunkIndex !== undefined && p.chunkIndex >= 0 && p.chunkIndex < chunks.length
       ? p.chunkIndex
       : 0;
+  if (p.chunkOffset !== undefined && chunks[idx].offset !== p.chunkOffset) idx = 0;
   const picked = [chunks[idx]];
   if (chunks[idx].text.length < NEIGHBOUR_CHUNK_MAX_CHARS && idx + 1 < chunks.length) {
     picked.push(chunks[idx + 1]);
@@ -238,7 +249,9 @@ function blockAt(p: PreparedHit, level: number): string {
       const excerpt = excerptFor(p);
       if (excerpt !== '') parts.push(excerpt);
     }
-    parts.push(`_Full memory: ${p.path}_`);
+    // The path sits in backticks so a copy of the line takes the path alone,
+    // not an emphasis underscore glued to the `.md` extension.
+    parts.push(`_Full memory:_ \`${p.path}\``);
     block = `${p.heading}\n${p.stalePrefix}${parts.join('\n\n')}`;
   }
   p.blocks.set(level, block);
@@ -263,9 +276,12 @@ function assemble(prepared: PreparedHit[], levels: number[], kept: number, budge
 //
 // Per hit: whole body when it is short (SHORT_BODY_MAX_CHARS, or
 // FEEDBACK_BODY_MAX_CHARS for feedback), else description + best chunk + path.
-// Over budget: shorten the lowest-ranked hits first (whole, then excerpt,
-// then description + path only), one level at a time, then drop the
-// lowest-ranked hits. The top hit is never dropped: when even its minimal
+// Over budget, in this order: shorten hits 2..n, lowest-ranked first (whole,
+// then excerpt, then description + path only, one level at a time); drop from
+// the bottom; only then shorten the top hit, so the best match keeps its
+// excerpt for as long as it alone fits; finally raise the kept hits top-down
+// again while the output still fits, since a drop frees more than the
+// overshoot it fixed. The top hit is never dropped: when even its minimal
 // form is over the budget it is emitted in that form anyway. Shortening works
 // on whole blocks and whole chunks, never on character offsets.
 function renderHitsBudgeted(hits: GateHit[], opts: { budgetBytes?: number } = {}): string {
@@ -280,17 +296,39 @@ function renderHitsBudgeted(hits: GateHit[], opts: { budgetBytes?: number } = {}
   const prepared = hits.map(prepareHit);
   const levels = prepared.map((p) => p.startLevel);
   let kept = prepared.length;
-  let size = injectBytes(assemble(prepared, levels, kept, budget));
+  const sizeNow = (): number => injectBytes(assemble(prepared, levels, kept, budget));
+  let size = sizeNow();
 
-  for (let i = prepared.length - 1; i >= 0 && size > budget; i--) {
+  // 1. Shorten the lower-ranked hits (2..n), lowest first, one level at a
+  //    time. The top hit is not touched yet.
+  for (let i = prepared.length - 1; i >= 1 && size > budget; i--) {
     while (levels[i] < LEVEL_MINIMAL && size > budget) {
       levels[i]++;
-      size = injectBytes(assemble(prepared, levels, kept, budget));
+      size = sizeNow();
     }
   }
+  // 2. Drop from the bottom, never the top hit.
   while (size > budget && kept > 1) {
     kept--;
-    size = injectBytes(assemble(prepared, levels, kept, budget));
+    size = sizeNow();
+  }
+  // 3. Only now shorten the top hit.
+  while (size > budget && levels[0] < LEVEL_MINIMAL) {
+    levels[0]++;
+    size = sizeNow();
+  }
+  // 4. A drop frees more room than the overshoot it fixed. Give that room
+  //    back to the kept hits, top-down, one level at a time, as long as the
+  //    output still fits; the first hit that no longer fits ends the pass, so
+  //    a lower-ranked hit never gets room a higher-ranked one still wants.
+  raise: for (let i = 0; i < kept; i++) {
+    while (levels[i] > prepared[i].startLevel) {
+      levels[i]--;
+      if (sizeNow() > budget) {
+        levels[i]++;
+        break raise;
+      }
+    }
   }
 
   return assemble(prepared, levels, kept, budget);

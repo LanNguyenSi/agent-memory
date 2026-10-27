@@ -404,6 +404,9 @@ interface FtsChunkInput {
 interface FtsMatchRow {
   id: string;
   chunkIndex: number;
+  // The chunk's stored char_offset (first character in the indexed body),
+  // looked up from the chunks table; absent when that row is missing.
+  charOffset?: number;
   score: number;
 }
 
@@ -925,7 +928,7 @@ function openIndex(opts: IndexStoreOptions): {
   function ftsMatchStmt() {
     if (!_ftsMatch) {
       _ftsMatch = db.prepare(
-        'SELECT mid, cidx, bm25(chunks_fts) AS score FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY score ASC LIMIT ?',
+        'SELECT mid, cidx, bm25(chunks_fts) AS score, (SELECT chunks.char_offset FROM chunks WHERE chunks.id = chunks_fts.mid AND chunks.chunk_index = chunks_fts.cidx) AS off FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY score ASC LIMIT ?',
       );
     }
     return _ftsMatch;
@@ -1148,8 +1151,14 @@ function openIndex(opts: IndexStoreOptions): {
           mid: string;
           cidx: number;
           score: number;
+          off: number | null;
         }[]
-      ).map((r) => ({ id: r.mid, chunkIndex: r.cidx, score: r.score }));
+      ).map((r) => ({
+        id: r.mid,
+        chunkIndex: r.cidx,
+        ...(r.off !== null ? { charOffset: r.off } : {}),
+        score: r.score,
+      }));
     } catch (err: unknown) {
       // Same contract as ftsDocCount: "no keyword matches" with one visible
       // stderr line per process.
