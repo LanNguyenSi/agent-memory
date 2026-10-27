@@ -1,6 +1,6 @@
 # Bundle log
 
-- 2026-10-27T09:00:00Z, review round 2 on the keyword path (no design
+- 2026-10-27T08:26:46Z, review round 2 on the keyword path (no design
   change): `ftsField` in `indexer.ts` normalizes a non-string frontmatter
   `name` (e.g. `name: 2026`) and a missing `description` before `replaceFts`
   so a rebuild no longer throws on ordinary memories; `resolveBlended` now
