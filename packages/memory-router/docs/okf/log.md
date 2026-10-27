@@ -1,5 +1,9 @@
 # Bundle log
 
+- 2026-10-27T10:46:38Z, `src/render.ts`: one comment line above `renderHitsBudgeted`
+  reworded (drops are relative to the top hit's form); no line moved, no
+  claim affected. Re-verified and re-stamped `gate-composition-and-dedup.md`
+  and `score-blend-resolver.md`.
 - 2026-10-27T10:26:36Z, injection budget rule: `renderHitsBudgeted` builds
   each hit's ladder strictly decreasing in bytes (a shorter form only when its
   block is smaller than the last rung kept, so a ladder can be just the whole
