@@ -39,13 +39,13 @@ allocate result slots differently.
 The two hook callers also differ in how they render their hits, not only in
 which resolver produced them: `UserPromptSubmit` renders through
 `renderHitsBudgeted` (`packages/memory-router/src/hooks/user-prompt-submit.ts:64`,
-`packages/memory-router/src/render.ts:386`), which injects short memories
+`packages/memory-router/src/render.ts:399`), which injects short memories
 whole and long ones as description + matching chunk + path (a long
 `type: feedback` memory's excerpt also carries its `How to apply` paragraph
 when the matched chunk misses it) under a byte
 budget, while `PreToolUse` renders through the unbudgeted
 `renderHitsAsContext` (`packages/memory-router/src/hooks/pre-tool-use.ts:31`,
-`packages/memory-router/src/render.ts:135`) and so always injects each hit's
+`packages/memory-router/src/render.ts:134`) and so always injects each hit's
 full body.
 
 Two things worth stating explicitly:

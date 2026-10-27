@@ -232,9 +232,11 @@ const HEADING_LINE_RE = /^#{1,6}(\s|$)/;
 // and the lines continuing it, up to the next blank line, `**Why:**` line or
 // heading line, or the end of the body. Empty string when there is no
 // marker line. The `**Why:**` paragraph is out of scope: the marker only
-// ends the paragraph, it is never appended.
+// ends the paragraph, it is never appended. Lines come back in the
+// normalised form of normaliseLines, so CRLF bodies and trailing spaces do
+// not defeat the containment check in excerptFor.
 function howToApplyParagraph(body: string): string {
-  const lines = body.split('\n');
+  const lines = normaliseLines(body).split('\n');
   const start = lines.findIndex((l) => HOW_TO_APPLY_RE.test(l));
   if (start === -1) return '';
   const paragraph = [lines[start]];
@@ -244,6 +246,17 @@ function howToApplyParagraph(body: string): string {
     paragraph.push(line);
   }
   return paragraph.join('\n');
+}
+
+// Text with LF line endings and no trailing whitespace on any line. Chunk
+// text is trimmed and a body may use CRLF, so both sides of the containment
+// check are compared in this form.
+function normaliseLines(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .join('\n');
 }
 
 // Cut a paragraph at HOW_TO_APPLY_MAX_CHARS characters, keeping the total
@@ -290,7 +303,7 @@ function excerptFor(p: PreparedHit): string {
   const text = picked.map((c) => balanceFences(raw, c)).join('\n\n');
   if (p.hit.memory.frontmatter.type === 'feedback') {
     const paragraph = howToApplyParagraph(raw);
-    if (paragraph !== '' && !text.includes(paragraph)) {
+    if (paragraph !== '' && !normaliseLines(text).includes(paragraph)) {
       return `_Excerpt (${label}):_\n${text}\n\n${capHowToApply(paragraph)}`;
     }
   }

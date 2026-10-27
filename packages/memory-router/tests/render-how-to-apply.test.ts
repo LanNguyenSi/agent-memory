@@ -96,6 +96,28 @@ test('long feedback, How to apply inside the picked chunk: it appears exactly on
   assert.equal(countOccurrences(out, '**How to apply:'), 1);
 });
 
+test('CRLF body, How to apply inside the picked chunk: it appears exactly once', () => {
+  const body = `${sections(3)}\n\n${HTA}\nand again after every rebase.`.replace(/\n/g, '\r\n');
+  const m = mem('htaCrlf', body, { type: 'feedback' });
+  const chunks = chunkBody(m.body);
+  const at = chunks.findIndex((c: { text: string }) => c.text.includes('**How to apply:'));
+  assert.ok(at >= 0, 'fixture: one chunk holds the paragraph');
+  const out = renderHitsBudgeted([hit(m, 0.8, { chunkIndex: at })]);
+  assert.match(out, /_Excerpt \(/, 'fixture: excerpt form');
+  assert.equal(countOccurrences(out, '**How to apply:'), 1);
+});
+
+test('trailing spaces after the paragraph, inside the picked chunk: it appears exactly once', () => {
+  const body = `${sections(3)}\n\n${HTA}   `;
+  const m = mem('htaTrail', body, { type: 'feedback' });
+  const chunks = chunkBody(m.body);
+  const at = chunks.findIndex((c: { text: string }) => c.text.includes('**How to apply:'));
+  assert.ok(at >= 0, 'fixture: one chunk holds the paragraph');
+  const out = renderHitsBudgeted([hit(m, 0.8, { chunkIndex: at })]);
+  assert.match(out, /_Excerpt \(/, 'fixture: excerpt form');
+  assert.equal(countOccurrences(out, '**How to apply:'), 1);
+});
+
 test('a short best chunk pulls in the neighbour holding the paragraph: still exactly once', () => {
   // SHORT (300) + SEC2 (1,250) exceeds the chunk target, so SHORT is its own
   // chunk and pulls SEC2 (which carries the paragraph) in as its neighbour.
