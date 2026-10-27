@@ -119,6 +119,15 @@ interface KeywordTerm {
 // src/embed/indexer.ts); tokenizing stays general so the FTS-safety
 // properties of the phrase body hold for every token shape a prompt can
 // contain.
+//
+// Besides the whole-token term, each whitespace token is ALSO split at the
+// id separators (ID_SEPARATORS below) and every part that passes isIdToken
+// is emitted as its own term whose term AND phrase are that part - this is
+// what lets `task:4e7729ab`, `4e7729ab's`, `https://x/t/4e7729ab` and
+// `src/a1b2c3.ts` reach the keyword path without any non-id part (or a
+// snake_case name, whose underscore is not a separator) becoming queryable.
+// Whole-token emission is unchanged, and both passes dedupe through `seen`,
+// so a token that is already an id yields exactly one term (never a dup).
 function extractKeywordTerms(prompt: string): KeywordTerm[] {
   if (!prompt) return [];
   const seen = new Set<string>();
@@ -134,16 +143,39 @@ function extractKeywordTerms(prompt: string): KeywordTerm[] {
     }
     if (kept.length === 0) continue;
     const phrase = kept.join(' ');
-    if (seen.has(phrase)) continue;
-    seen.add(phrase);
-    // The id rule's token: the original word with edge punctuation stripped
-    // (`"4e7729ab"` and `(4e7729ab)` still read as the token they are),
-    // never lowercased.
-    const original = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
-    terms.push({ term: original, phrase });
+    if (!seen.has(phrase)) {
+      seen.add(phrase);
+      // The id rule's token for the whole word: the original word with edge
+      // punctuation stripped (`"4e7729ab"` and `(4e7729ab)` still read as
+      // the token they are), never lowercased.
+      const original = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+      terms.push({ term: original, phrase });
+    }
+    // An id hidden inside a larger token: split at the id separators and let
+    // every qualifying part become its own term (part as both term and
+    // phrase). A qualifying part is a single ASCII alnum run, so its phrase
+    // stays letters/digits only and FTS-safe. Empty parts (`::a1b2c3::`) and
+    // non-id parts never pass isIdToken, so no empty or bogus term is emitted.
+    for (const part of word.split(ID_SEPARATORS)) {
+      if (!isIdToken(part)) continue;
+      const partPhrase = part.toLowerCase();
+      if (seen.has(partPhrase)) continue;
+      seen.add(partPhrase);
+      terms.push({ term: part, phrase: partPhrase });
+    }
   }
   return terms;
 }
+
+// Id separators: the characters an id can hide between when it is wrapped in
+// a larger prompt token (a `task:4e7729ab` or `x=a1b2c3` reference, a URL
+// path segment, a dotted path `src/a1b2c3.ts`, a possessive `4e7729ab's`).
+// A whitespace token is checked part by part at these boundaries (consecutive
+// separators collapse, so empty edge parts vanish). The underscore is
+// deliberately absent: snake_case names (`b11905_x`, `finish_reason`) stay
+// whole and stay non-ids. Each part is re-checked with the UNCHANGED
+// isIdToken, so only real id parts become queryable.
+const ID_SEPARATORS = /[:\/.#?='\-]+/;
 
 // The id rule (checked on the ORIGINAL token, before lowercasing): a single
 // run of ASCII letters and digits only, at least KEYWORD_MIN_ID_LENGTH
@@ -153,8 +185,9 @@ function extractKeywordTerms(prompt: string): KeywordTerm[] {
 // every SHORT alnum word (`IPv6`, `arm64`), and anything carrying a
 // separator (`UTF-8`, `v0.7.4`, `studio-tb`, `finish_reason`) or a non-ASCII
 // character - including hyphenated compounds like `Bonsai-Baum` or
-// `strata-builds`, whose PARTS are checked nowhere: the id rule is asked
-// only about the whole original token.
+// `strata-builds`. `extractKeywordTerms` also asks this rule about each
+// part of a token split at the id separators, but none of these examples
+// has an id part, so they stay non-ids either way.
 function isIdToken(token: string): boolean {
   if (!token) return false;
   if (token.length < KEYWORD_MIN_ID_LENGTH) return false;

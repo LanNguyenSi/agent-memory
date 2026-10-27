@@ -92,11 +92,14 @@ implemented in `packages/memory-router/src/embed/keyword.ts`);
 (`packages/memory-router/src/router.ts:303`) so all keyword logic below
 is inert. Only ID tokens reach the search layer at all: `isIdToken` in
 `packages/memory-router/src/embed/keyword.ts` admits a prompt token to
-the FTS query only as a single ASCII letter/digit run of at least
-`KEYWORD_MIN_ID_LENGTH` (6) characters carrying at least one letter and
-one digit, and the store then skips a term contained by more than
-`KEYWORD_MAX_DF` (12) memories, so every candidate the router receives is
-an id-token match (plain words are never queried, corroborated or
+the FTS query only when the whole token (edge punctuation trimmed) - or,
+after splitting the token at the id separators `:` `/` `.` `#` `?` `=` `'`
+`-` (the underscore is not one), one of its parts - is a single ASCII
+letter/digit run of at least `KEYWORD_MIN_ID_LENGTH` (6) characters
+carrying at least one letter and one digit, and the store then skips a
+term contained by more than `KEYWORD_MAX_DF` (12) memories, so every
+candidate the router receives is an id-token match (plain words and
+non-id parts are never queried, corroborated or
 admitted). Admission loop
 (`packages/memory-router/src/router.ts:311-317`): only memories with NO
 above-floor semantic hit, at most `KEYWORD_MAX_HITS` (2) per prompt, best

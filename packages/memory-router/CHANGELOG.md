@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The keyword path now finds an id token wrapped inside a larger prompt token.** A prompt like `task:4e7729ab`, `4e7729ab's`, a URL `https://x/t/4e7729ab` or a path `src/a1b2c3.ts` was inert, because only the whole whitespace token was tested against the id rule and none of these whole tokens pass it. A whitespace token is now ALSO split at the id separators `:` `/` `.` `#` `?` `=` `'` `-` (the underscore is not one, so `snake_case` names stay whole) and every part that passes the unchanged id rule becomes a queryable id of its own, deduped so a bare id still yields exactly one term. Non-id parts, hyphenated compounds like `Bonsai-Baum`, `v0.7.4` and snake_case names stay inert, so no new false positive is introduced; `isIdToken`, the df cap and the admission cap are untouched. Pinned by `tests/keyword.test.ts` and `tests/keyword-index.test.ts`.
+
 ## [0.8.0] - 2026-10-27
 
 ### Added
