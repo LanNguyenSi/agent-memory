@@ -3,7 +3,7 @@ type: invariant
 title: Score-blend resolver, degraded mode, and confidence-floor provenance
 description: Pointer doc plus code anchors. Which function the blend callers run through, the router.ts lines behind each degraded-mode branch, and which confidence.ts branch sets each minSemanticScoreSource tag value that gates the floor-drop hint.
 tags: [score-blend, degraded-mode, relevance-floor, confidence-floor-provenance, resolveBlended]
-timestamp: 2026-10-27T11:06:16Z
+timestamp: 2026-10-27T13:44:19Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/render.ts
@@ -113,7 +113,7 @@ calibrated weights, floors and candidateK are untouched by both.
 `resolveBlended()` also records, per returned hit, which body chunk matched,
 as the optional `GateHit.chunkIndex` and `GateHit.chunkOffset` (`packages/memory-router/src/types.d.ts`),
 so the `UserPromptSubmit` hook can inject that chunk instead of the whole
-body (`renderHitsBudgeted`, `packages/memory-router/src/render.ts:327`, called
+body (`renderHitsBudgeted`, `packages/memory-router/src/render.ts:399`, called
 at `packages/memory-router/src/hooks/user-prompt-submit.ts:64`). The semantic
 winner chunk is collected per memory
 (`packages/memory-router/src/router.ts:367-371`); a keyword-only admission
@@ -125,7 +125,7 @@ vector won (no chunk) that also id-matches falls back to the keyword chunk
 field only when a chunk is known (`packages/memory-router/src/router.ts:526-529`),
 so a topic-only, tool or degraded `resolve()` hit keeps its four-field shape
 and renders its first chunk. The index is a position in
-`chunkBody(memory.body)` (`packages/memory-router/src/render.ts:225`), the
+`chunkBody(memory.body)` (`packages/memory-router/src/render.ts:288`), the
 same call the indexer embeds from, so while the index is current chunk `i`
 at render time is the text that was embedded as chunk `i`. An index older
 than the file breaks that (after an edit without a re-index chunk `i` can be
@@ -133,7 +133,7 @@ another region), so the hit also carries `chunkOffset`, the stored
 `char_offset` of that chunk (the semantic winner's offset, or the FTS row's
 offset looked up from the `chunks` table), and the renderer falls back to the
 first chunk when the offset is known and differs from the offset of chunk `i`
-in the current body (`packages/memory-router/src/render.ts:231`); a hit
+in the current body (`packages/memory-router/src/render.ts:294`); a hit
 without an offset is trusted by index alone. The chunk index and offset
 change nothing about which memories are selected or how they are scored.
 

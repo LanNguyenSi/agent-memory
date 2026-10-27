@@ -1,5 +1,15 @@
 # Bundle log
 
+- 2026-10-27T13:44:19Z, `src/render.ts`: a long `type: feedback` hit's excerpt appends its
+  `**How to apply:**` paragraph (capped) when the picked chunks miss it;
+  containment is compared on LF text without trailing whitespace. Lines
+  moved: `renderHitsAsContext` 122 -> 134, `renderHitsBudgeted` 327 -> 399,
+  the `chunkBody(raw)` call 225 -> 288, the offset guard 231 -> 294;
+  citations in `gate-composition-and-dedup.md` and `score-blend-resolver.md`
+  re-pointed and the renderer claim in `gate-composition-and-dedup.md`
+  extended. `README.md` gained one bullet in the hook section; the README
+  sections `native-deps-and-ci-smoke.md` and `score-blend-resolver.md` link
+  to are unchanged. Re-verified and re-stamped all three.
 - 2026-10-27T11:06:16Z, release cut 0.8.0 bumped `package.json` and the `PACKAGE_VERSION`
   constant in the `UserPromptSubmit` hook source (one-line change, no line
   shift). Re-verified `gate-composition-and-dedup.md` and

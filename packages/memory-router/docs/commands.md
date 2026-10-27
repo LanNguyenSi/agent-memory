@@ -428,7 +428,11 @@ README's "What the `UserPromptSubmit` hook injects" for the per-hit forms.
 
 Each hit has a ladder of forms: its starting form, then description + chunk +
 path, then description + path, each lower form only when it is smaller in
-bytes than the form above it. When every hit fits in its starting form, nothing
+bytes than the form above it. The description + chunk + path form of a
+`type: feedback` memory also ends with its `**How to apply:**` paragraph (at
+most 1,000 characters, the overflow replaced by a ` [...]` marker) unless the
+shown chunks already contain it, see the README. When every hit fits in its
+starting form, nothing
 changes. Otherwise, among the outputs that fit (the hits in rank order up to
 some cut, each in a form of its ladder, and a note on how many were left out),
 the best one wins in this order: the top hit's form (fuller wins), then the
