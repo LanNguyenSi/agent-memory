@@ -317,7 +317,7 @@ function assemble(prepared: PreparedHit[], levels: number[], kept: number, budge
 // So the top hit keeps the fullest form at which any output fits (its start
 // form whenever it fits alone); as many lower hits are kept as fit next to
 // that top form with each of them on its smallest rung, so hits are dropped
-// only from the bottom and only when no output keeping them fits; and the
+// only from the bottom, only when they do not fit next to that top form; the
 // kept hits below the top get the fullest rungs that fit, best-ranked first,
 // so a lower hit only gets room the hits above it could not use. When no
 // candidate fits, the top hit is emitted alone on its smallest rung, over the
