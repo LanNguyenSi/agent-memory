@@ -1,6 +1,6 @@
 # Bundle log
 
-- 2026-10-27T06:18:06Z, FTS5 keyword path (index schema v4):
+- 2026-10-27T06:27:22Z, FTS5 keyword path (index schema v4):
   `semanticSearch` is now a wrapper over the shared `runBlendedSearch`
   engine, `blendedSearch` adds the keyword pass, `resolveBlended` admits
   at most 2 keyword-only memories (gate `keyword`, floor-edge score) and
