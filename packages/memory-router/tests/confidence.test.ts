@@ -5,6 +5,7 @@ const {
   confidenceThreshold,
   resolveDefaultMinSemanticScore,
   loadBlendWeights,
+  isRetiredProject,
   normalizeOllamaModelName,
   OLLAMA_MODEL_FLOOR_DEFAULTS,
 } = require('../src/gates/confidence');
@@ -396,4 +397,78 @@ test('resolveDefaultMinSemanticScore: model name "constructor" does not resolve 
       assert.equal(score, 0.78);
     },
   );
+});
+
+// --- retired project memories ----------------------------------------------
+
+function memoryWith(fm: Record<string, unknown>): Memory {
+  return {
+    id: 'm',
+    path: '/nonexistent/m.md',
+    frontmatter: { name: 'm', description: 'd', type: 'project', ...fm } as MemoryFrontmatter,
+    body: '',
+  };
+}
+
+test('isRetiredProject: only `status: retired` on a project memory counts', () => {
+  assert.equal(isRetiredProject(memoryWith({ status: 'retired' })), true);
+  assert.equal(isRetiredProject(memoryWith({})), false, 'no status');
+  assert.equal(isRetiredProject(memoryWith({ status: 'active' })), false, 'other value');
+  assert.equal(isRetiredProject(memoryWith({ status: '' })), false, 'empty value');
+});
+
+test('isRetiredProject: the status is ignored for feedback, user and reference memories', () => {
+  for (const type of ['feedback', 'user', 'reference']) {
+    assert.equal(
+      isRetiredProject(memoryWith({ type, status: 'retired' })),
+      false,
+      `${type} + retired must not count`,
+    );
+  }
+});
+
+test('isRetiredProject: value is compared trimmed and case-insensitively; non-strings never match', () => {
+  assert.equal(isRetiredProject(memoryWith({ status: ' Retired ' })), true);
+  assert.equal(isRetiredProject(memoryWith({ status: 'RETIRED' })), true);
+  assert.equal(isRetiredProject(memoryWith({ status: 'retired-ish' })), false);
+  for (const odd of [true, 1, ['retired'], { v: 'retired' }, null]) {
+    assert.equal(isRetiredProject(memoryWith({ status: odd })), false, JSON.stringify(odd));
+  }
+});
+
+function withRetiredPenaltyEnv(value: string | undefined, fn: () => void): void {
+  const prev = process.env.MEMORY_ROUTER_BLEND_RETIRED_PENALTY;
+  if (value === undefined) delete process.env.MEMORY_ROUTER_BLEND_RETIRED_PENALTY;
+  else process.env.MEMORY_ROUTER_BLEND_RETIRED_PENALTY = value;
+  try {
+    fn();
+  } finally {
+    if (prev === undefined) delete process.env.MEMORY_ROUTER_BLEND_RETIRED_PENALTY;
+    else process.env.MEMORY_ROUTER_BLEND_RETIRED_PENALTY = prev;
+  }
+}
+
+test('loadBlendWeights: MEMORY_ROUTER_BLEND_RETIRED_PENALTY unset resolves to the built-in default 0.05', () => {
+  withRetiredPenaltyEnv(undefined, () => {
+    assert.equal(loadBlendWeights().retiredPenalty, 0.05);
+  });
+});
+
+test('loadBlendWeights: a valid MEMORY_ROUTER_BLEND_RETIRED_PENALTY wins over the default, including 0 (demotion off) and values above 1', () => {
+  withRetiredPenaltyEnv('0.2', () => assert.equal(loadBlendWeights().retiredPenalty, 0.2));
+  withRetiredPenaltyEnv('0', () => assert.equal(loadBlendWeights().retiredPenalty, 0));
+  withRetiredPenaltyEnv('2', () => assert.equal(loadBlendWeights().retiredPenalty, 2));
+});
+
+test('loadBlendWeights: an invalid MEMORY_ROUTER_BLEND_RETIRED_PENALTY (non-numeric, negative, NaN, Infinity) falls back to the default', () => {
+  for (const bad of ['abc', '-0.1', 'NaN', 'Infinity', '0.1x']) {
+    withRetiredPenaltyEnv(bad, () => {
+      assert.equal(loadBlendWeights().retiredPenalty, 0.05, `value ${bad}`);
+    });
+  }
+});
+
+test('loadBlendWeights: an empty or whitespace-only MEMORY_ROUTER_BLEND_RETIRED_PENALTY counts as unset (default), not as 0', () => {
+  withRetiredPenaltyEnv('', () => assert.equal(loadBlendWeights().retiredPenalty, 0.05));
+  withRetiredPenaltyEnv('   ', () => assert.equal(loadBlendWeights().retiredPenalty, 0.05));
 });

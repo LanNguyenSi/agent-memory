@@ -5,6 +5,7 @@ const {
   computeAmbiguity,
   confidenceThreshold,
   loadBlendWeights,
+  isRetiredProject,
   typeModifier,
   recencyModifier,
 } = require('./gates/confidence');
@@ -217,6 +218,19 @@ async function resolveBlended(
   // free-form text and the value below flows straight into a search "how
   // many rows" argument.
   const semanticK = Math.max(maxHits, Math.round(weights.candidateK));
+  // Retired project memories (frontmatter `status: retired`, see
+  // isRetiredProject) are demoted below. A demotion can only vacate a slot
+  // when a replacement exists, and at the calibrated defaults the candidate
+  // pool equals the cap, so the search is widened by the number of retired
+  // memories in the corpus and the pool is cut back to semanticK after the
+  // demotion. With no retired memory (or the penalty set to 0) nothing here
+  // changes: same search width, same hits, same order.
+  const retiredIds = new Set<string>(
+    weights.retiredPenalty > 0
+      ? memories.filter(isRetiredProject).map((m: Memory) => m.id)
+      : [],
+  );
+  const searchK = semanticK + retiredIds.size;
   let semanticHits: SemanticSearchHit[] = [];
   // Keyword candidates from the SAME search session as the semantic hits
   // (id-token FTS5 matches with their best bm25, see src/embed/indexer.ts
@@ -225,7 +239,7 @@ async function resolveBlended(
   // branch below is then inert.
   let keywordMatches: KeywordSearchHit[] = [];
   try {
-    const outcome = await deps.semanticSearch(ctx.prompt, memories, memoryDir, semanticK);
+    const outcome = await deps.semanticSearch(ctx.prompt, memories, memoryDir, searchK);
     if (Array.isArray(outcome)) {
       // Pre-keyword seam shape: bare array of semantic hits.
       semanticHits = outcome;
@@ -252,7 +266,20 @@ async function resolveBlended(
   // filter only removes the SEMANTIC contribution, topic candidacy is
   // evaluated separately below.
   const semanticCandidateCount = semanticHits.length;
+  if (retiredIds.size > 0) {
+    // Demote retired project memories BEFORE the floor: the penalty comes
+    // off the raw semantic score, so a retired memory must clear the floor
+    // by the penalty's margin to stay a semantic hit, and ranks that much
+    // lower when it does. The pool is then cut back to semanticK by the
+    // demoted score (stable sort: equal scores keep their search order).
+    semanticHits = semanticHits.map((h) =>
+      retiredIds.has(h.memory.id) ? { ...h, score: h.score - weights.retiredPenalty } : h,
+    );
+  }
   semanticHits = semanticHits.filter((h) => h.score >= weights.minSemanticScore);
+  if (retiredIds.size > 0) {
+    semanticHits = semanticHits.sort((a, b) => b.score - a.score).slice(0, semanticK);
+  }
 
   // Uncalibrated-floor drop hint (a review residual of PR #97): the
   // model/provider-conditional floor above

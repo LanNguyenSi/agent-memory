@@ -3,11 +3,13 @@
 // --json schema (stable, documented in docs/commands.md's eval section):
 //   {
 //     goldenPath, dir, corpusSize, semanticPathActive, vocabularySource,
-//     unknownExpectIds, semanticContributedCount, keywordContributedCount,
+//     unknownExpectIds, unknownForbidIds, semanticContributedCount, keywordContributedCount,
 //     injection: { budgetBytes, meanBytes, maxBytes },
-//     perPrompt: [{ prompt, expect, got, isNegativeControl, precision, recall, reciprocalRank, injectBytes }],
+//     perPrompt: [{ prompt, expect, forbid, forbidViolations, got, isNegativeControl,
+//                   precision, recall, reciprocalRank, injectBytes }],
 //     aggregate: { precision, recall, mrr, positiveCount,
-//                  negativeControls: { total, passed, failed, rate } }
+//                  negativeControls: { total, passed, failed, rate },
+//                  forbid: { total, violated } }
 //   }
 
 function formatEvalReportText(report: EvalReportLike): string {
@@ -35,6 +37,11 @@ function formatEvalReportText(report: EvalReportLike): string {
       `WARNING: golden file references ${report.unknownExpectIds.length} expect id(s) not found in the corpus (scoring is unaffected — this is a warning only): ${report.unknownExpectIds.join(", ")}`,
     );
   }
+  if (report.unknownForbidIds && report.unknownForbidIds.length > 0) {
+    lines.push(
+      `WARNING: golden file references ${report.unknownForbidIds.length} forbid id(s) not found in the corpus (those checks pass vacuously): ${report.unknownForbidIds.join(", ")}`,
+    );
+  }
   lines.push("");
 
   for (const p of report.perPrompt) {
@@ -45,6 +52,14 @@ function formatEvalReportText(report: EvalReportLike): string {
       `  expect: ${p.expect.length > 0 ? p.expect.join(", ") : "(none)"}`,
     );
     lines.push(`  got:    ${p.got.length > 0 ? p.got.join(", ") : "(none)"}`);
+    if (p.forbid && p.forbid.length > 0) {
+      const violations = p.forbidViolations ?? [];
+      lines.push(
+        violations.length > 0
+          ? `  forbid: ${p.forbid.join(", ")}  FAIL (present: ${violations.join(", ")})`
+          : `  forbid: ${p.forbid.join(", ")}  ok`,
+      );
+    }
     if (p.isNegativeControl) {
       lines.push(
         `  ${p.precision === 1 ? "pass" : "FAIL (expected an empty result)"}`,
@@ -69,6 +84,11 @@ function formatEvalReportText(report: EvalReportLike): string {
     `negative controls: ${nc.passed}/${nc.total} passed` +
       (nc.rate === null ? "" : ` (${(nc.rate * 100).toFixed(1)}%)`),
   );
+  if (a.forbid && a.forbid.total > 0) {
+    lines.push(
+      `forbid checks: ${a.forbid.total - a.forbid.violated}/${a.forbid.total} prompts clean`,
+    );
+  }
   if (report.injection) {
     const inj = report.injection;
     lines.push(
@@ -94,6 +114,8 @@ interface EvalReportLike {
   semanticPathActive: boolean;
   vocabularySource: string;
   unknownExpectIds: string[];
+  /** Absent in reports built before `forbid` existed. */
+  unknownForbidIds?: string[];
   semanticContributedCount: number;
   keywordContributedCount: number;
   /** Absent in reports built before the injection budget existed. */
@@ -106,6 +128,9 @@ interface EvalReportLike {
     precision: number;
     recall: number;
     reciprocalRank: number | null;
+    /** Absent in reports built before `forbid` existed. */
+    forbid?: string[];
+    forbidViolations?: string[];
     injectBytes?: number;
   }[];
   aggregate: {
@@ -119,6 +144,8 @@ interface EvalReportLike {
       failed: number;
       rate: number | null;
     };
+    /** Absent in reports built before `forbid` existed. */
+    forbid?: { total: number; violated: number };
   };
 }
 

@@ -339,6 +339,32 @@ memory id) are reported, not silenced: the text report prints a
 `WARNING:` line listing them, and `--json` carries the same list as the
 top-level `unknownExpectIds` array (empty when every id resolves).
 
+Stale-memory check: a golden entry may carry an optional `forbid:` list of
+memory ids that must NOT appear among the returned hits (the top 5, the
+hook's cap) for that prompt, for example the ids of memories marked
+`status: retired` (see [scoring.md](scoring.md#retired-project-memories)):
+
+```yaml
+prompts:
+  - prompt: "Starte Ollama auf dem mini neu"
+    expect: ["reference_memory_router_live_wiring_mini"]
+    forbid: ["project_mac_mini_hermes_2026-06-13"]
+```
+
+`forbid` is optional and defaults to `[]`; an empty list means nothing is
+forbidden, a negative control (`expect: []`) may carry one, duplicates
+collapse, and a value that is not a list of strings, or an id listed in both
+`expect` and `forbid`, is a setup error (exit 1, message prefixed with the
+entry's index). The check is reported next to the metrics and never changes
+precision, recall or MRR: the text report prints `forbid: ... ok` or
+`forbid: ... FAIL (present: ...)` under the prompt and one
+`forbid checks: N/M prompts clean` line in the aggregate; `--json` adds
+`perPrompt[].forbid` and `perPrompt[].forbidViolations`, `aggregate.forbid`
+(`{ total, violated }`: prompts with a non-empty list, and how many of them
+had a forbidden id in the result) and the top-level `unknownForbidIds`
+(forbid ids that match no memory, which would pass vacuously; the text
+report prints a `WARNING:` line for them).
+
 `eval` always scores against `--dir`'s (or `$MEMORY_ROUTER_DIR`'s) own
 `topics.yml`, never a stray `MEMORY_ROUTER_DIR` left over in the
 environment, so a run pointed at the wrong corpus, or hitting a broken
@@ -375,6 +401,7 @@ reports the negative-control prompts separately.
   "semanticPathActive": false,
   "vocabularySource": "built-in default",
   "unknownExpectIds": [],
+  "unknownForbidIds": [],
   "semanticContributedCount": 0,
   "keywordContributedCount": 0,
   "injection": { "budgetBytes": 16384, "meanBytes": 1523.5, "maxBytes": 3012 },
@@ -387,6 +414,8 @@ reports the negative-control prompts separately.
       "precision": 1,
       "recall": 1,
       "reciprocalRank": 1,
+      "forbid": [],
+      "forbidViolations": [],
       "injectBytes": 1024
     }
   ],
@@ -395,7 +424,8 @@ reports the negative-control prompts separately.
     "recall": 0.625,
     "mrr": 0.75,
     "positiveCount": 4,
-    "negativeControls": { "total": 2, "passed": 1, "failed": 1, "rate": 0.5 }
+    "negativeControls": { "total": 2, "passed": 1, "failed": 1, "rate": 0.5 },
+    "forbid": { "total": 0, "violated": 0 }
   }
 }
 ```

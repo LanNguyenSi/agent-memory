@@ -24,6 +24,7 @@ interface EvalReportLike {
   semanticPathActive: boolean;
   vocabularySource: string;
   unknownExpectIds: string[];
+  unknownForbidIds?: string[];
   semanticContributedCount: number;
   keywordContributedCount: number;
   perPrompt: {
@@ -34,6 +35,8 @@ interface EvalReportLike {
     precision: number;
     recall: number;
     reciprocalRank: number | null;
+    forbid?: string[];
+    forbidViolations?: string[];
   }[];
   aggregate: {
     precision: number;
@@ -46,6 +49,7 @@ interface EvalReportLike {
       failed: number;
       rate: number | null;
     };
+    forbid?: { total: number; violated: number };
   };
 }
 
@@ -202,4 +206,47 @@ test("formatEvalReportJson: round-trips the report unchanged, newline-terminated
   const json = formatEvalReportJson(report);
   assert.ok(json.endsWith("\n"), "JSON output is newline-terminated");
   assert.deepEqual(JSON.parse(json), report);
+});
+
+// --- forbid (stale-memory guard) ------------------------------------------
+
+test("formatEvalReportText: a forbid list renders ok when clean and FAIL naming the present ids when violated; prompts without forbid print no forbid line", () => {
+  const report = buildReport();
+  report.perPrompt[0].forbid = ["old_a"];
+  report.perPrompt[0].forbidViolations = [];
+  report.perPrompt[1].forbid = ["old_b", "old_c"];
+  report.perPrompt[1].forbidViolations = ["old_c"];
+  const text = formatEvalReportText(report);
+  assert.match(text, /prompt: positive prompt\n {2}expect: mem_a\n {2}got: {4}mem_a\n {2}forbid: old_a {2}ok\n/);
+  assert.match(text, /forbid: old_b, old_c {2}FAIL \(present: old_c\)/);
+  assert.equal(
+    (text.match(/ {2}forbid: /g) ?? []).length,
+    2,
+    "the third prompt carries no forbid list and prints no forbid line",
+  );
+});
+
+test("formatEvalReportText: the aggregate shows how many forbid checks are clean; no forbid anywhere prints no such line", () => {
+  assert.doesNotMatch(formatEvalReportText(buildReport()), /forbid checks/);
+
+  const report = buildReport();
+  report.aggregate.forbid = { total: 3, violated: 1 };
+  assert.match(formatEvalReportText(report), /forbid checks: 2\/3 prompts clean/);
+
+  report.aggregate.forbid = { total: 0, violated: 0 };
+  assert.doesNotMatch(formatEvalReportText(report), /forbid checks/);
+});
+
+test("formatEvalReportText: unknown forbid ids render a WARNING line; none means no warning", () => {
+  assert.doesNotMatch(formatEvalReportText(buildReport()), /forbid id\(s\)/);
+
+  const report = buildReport();
+  report.unknownForbidIds = ["ghost_a", "ghost_b"];
+  assert.match(
+    formatEvalReportText(report),
+    /WARNING: golden file references 2 forbid id\(s\) not found in the corpus.*ghost_a, ghost_b/,
+  );
+
+  report.unknownForbidIds = [];
+  assert.doesNotMatch(formatEvalReportText(report), /forbid id\(s\)/);
 });

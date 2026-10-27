@@ -305,6 +305,59 @@ test('flat-score ties preserve corpus load order through resolve() (hook injecti
   }
 });
 
+// --- optional `status` frontmatter field ----------------------------------
+//
+// The loader resolves `status` from the top level or `metadata.status` (top
+// level wins, an empty top-level value falls back), writes the key only when
+// a value was found, and never validates it: the router decides what a value
+// means (src/gates/confidence.ts isRetiredProject).
+
+function loadSingle(frontmatter: string): Memory {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
+  fs.writeFileSync(path.join(tmp, 'm.md'), `---\n${frontmatter}---\nbody\n`);
+  try {
+    const memories = loadMemoriesFromDir(tmp);
+    assert.equal(memories.length, 1);
+    return memories[0];
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+test('status: absent leaves no status key on the frontmatter (shape unchanged)', () => {
+  const m = loadSingle('name: x\ndescription: x\ntype: project\n');
+  assert.equal('status' in m.frontmatter, false);
+  const legacy = loadMemoriesFromDir(fixturesDir).find((x: Memory) => x.id === 'feedback_legacy');
+  assert.ok(legacy);
+  assert.equal('status' in legacy.frontmatter, false);
+});
+
+test('status: top-level status is carried through', () => {
+  const m = loadSingle('name: x\ndescription: x\ntype: project\nstatus: retired\n');
+  assert.equal(m.frontmatter.status, 'retired');
+});
+
+test('status: metadata.status is accepted (Claude Code auto-memory nesting)', () => {
+  const m = loadSingle('name: x\ndescription: x\nmetadata:\n  type: project\n  status: retired\n');
+  assert.equal(m.frontmatter.status, 'retired');
+});
+
+test('status: top-level wins over metadata.status; an empty top-level value falls back to metadata', () => {
+  const both = loadSingle(
+    'name: x\ndescription: x\ntype: project\nstatus: active\nmetadata:\n  status: retired\n',
+  );
+  assert.equal(both.frontmatter.status, 'active');
+  const empty = loadSingle(
+    'name: x\ndescription: x\ntype: project\nstatus: ""\nmetadata:\n  status: retired\n',
+  );
+  assert.equal(empty.frontmatter.status, 'retired');
+});
+
+test('status: a non-string value is carried through untouched (validation is the router\'s job)', () => {
+  const m = loadSingle('name: x\ndescription: x\ntype: project\nstatus: true\n');
+  assert.equal(m.frontmatter.status, true);
+});
+
 test('file without frontmatter is rejected', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-loader-'));
   fs.writeFileSync(path.join(tmp, 'plain.md'), '# just a heading\n');

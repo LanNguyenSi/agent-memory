@@ -8,7 +8,8 @@ feed into.
 ## Fields
 
 Existing Claude Code memory files already use YAML frontmatter.
-memory-router adds four optional fields:
+memory-router adds four optional fields (plus the optional `status`
+marker described below):
 
 ```yaml
 ---
@@ -42,9 +43,29 @@ same corpus order on every machine and filesystem. This holds for
 byte-identical filenames; a memory file whose name differs in Unicode
 normalization between machines (NFD vs NFC) can still sort differently.
 
+## Optional `status: retired` (project memories)
+
+```yaml
+type: project
+status: retired
+```
+
+Marks a project memory whose subject is gone (a removed install, a switched
+off service) so it stops outranking current memories. Only `status: retired`
+on a `type: project` memory has an effect: the router subtracts
+`MEMORY_ROUTER_BLEND_RETIRED_PENALTY` (default `0.05`) from its semantic
+score before the relevance floor, see
+[Retired project memories](scoring.md#retired-project-memories). The value
+is compared trimmed and case-insensitively; any other value, a non-string,
+or the field on a `feedback`, `user` or `reference` memory is ignored, and
+the file is never skipped or rewritten because of it. Like `type` and
+`topics`, it is read from the top level or from `metadata.status`
+(top-level wins; an empty top-level value falls back). The marker is set by
+hand: no command writes it.
+
 ## Accepted frontmatter locations
 
-Canonically, `type` and `topics` live top-level (as in the example above).
+Canonically, `type` and `topics` (and the optional `status`) live top-level (as in the example above).
 Most real Claude Code auto-memories instead nest them under `metadata.`
 (in the reference corpus as of 2026-08, roughly 230 of 285 files carry
 only `metadata.type`). The loader accepts both locations; on conflict the
