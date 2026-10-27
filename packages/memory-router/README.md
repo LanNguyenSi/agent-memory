@@ -20,6 +20,10 @@ health reporting on top of the same memory files.
 - Score-blend resolver: semantic similarity, a deterministic topic
   keyword match, and recency/type tie-breakers combined into one ranked
   result (see [How it works](#how-it-works))
+- Keyword gate: an FTS5 exact-token path for rare task ids, tags, and
+  identifiers (`4e7729ab`, `MTPLX`) that embeddings blur, bounded so it
+  cannot rescue a below-floor match (see
+  [docs/scoring.md](docs/scoring.md#the-keyword-gate-schema-v4))
 - Tool Gate: deterministic regex match on a pending Bash command or tool
   name, always privileged into the result
 - Two Claude Code hook binaries (`UserPromptSubmit`, `PreToolUse`) and an
@@ -115,7 +119,12 @@ wins), and capped at N (default 5), with a deterministic Tool Gate hit
 (`PreToolUse`, against `triggers.command_pattern`/`triggers.tools`)
 always privileged into that cap ahead of blend-scored memories. Without
 a usable embedding index/provider, the blend degrades to the same output
-the old topic-only resolver would produce.
+the old topic-only resolver would produce, with one schema v4 exception:
+memories admitted by the keyword gate (a rare exact token from the prompt
+matching the FTS5 keyword index) take the first slots. The keyword path
+is bounded by design: it enters the blend only at the floor edge, never
+lifts a below-floor semantic score, and `MEMORY_ROUTER_KEYWORD=off`
+removes it entirely.
 
 See [docs/scoring.md](docs/scoring.md) for the full signal table, the
 degradation behavior, the Tool Gate details, why the resolver is a blend

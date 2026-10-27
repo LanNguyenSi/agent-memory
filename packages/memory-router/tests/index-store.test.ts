@@ -81,9 +81,10 @@ test('fresh DB is tagged at CURRENT_SCHEMA_VERSION on first open', () => {
     const row = raw
       .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
       .get() as { value: string } | undefined;
-    // BASELINE is v1; the v2 + v3 migrations run immediately on a fresh
-    // open, so the on-disk version reflects the current code's CURRENT.
-    assert.equal(row?.value, '3');
+    // BASELINE is v1; the v2 + v3 + v4 migrations run immediately on a
+    // fresh open, so the on-disk version reflects the current code's
+    // CURRENT.
+    assert.equal(row?.value, '4');
   } finally {
     raw.close();
     fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
@@ -118,8 +119,8 @@ test('pre-meta DB (entries already exist, no meta table) migrates to CURRENT wit
       const row = check
         .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
         .get() as { value: string } | undefined;
-      // Pre-meta files are tagged BASELINE=1 then migrated up to CURRENT=3.
-      assert.equal(row?.value, '3');
+      // Pre-meta files are tagged BASELINE=1 then migrated up to CURRENT=4.
+      assert.equal(row?.value, '4');
     } finally {
       check.close();
     }
@@ -151,9 +152,9 @@ test('explicit schema_version=0 runs full migration chain with no data loss', ()
       const row = check
         .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
         .get() as { value: string } | undefined;
-      // 0 → 1 (no-op) → 2 (ALTER TABLE adds model) → 3 (chunk tables).
-      // Final version = 3.
-      assert.equal(row?.value, '3');
+      // 0 → 1 (no-op) → 2 (ALTER TABLE adds model) → 3 (chunk tables) →
+      // 4 (FTS keyword table). Final version = 4.
+      assert.equal(row?.value, '4');
     } finally {
       check.close();
     }

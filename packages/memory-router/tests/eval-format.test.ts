@@ -25,6 +25,7 @@ interface EvalReportLike {
   vocabularySource: string;
   unknownExpectIds: string[];
   semanticContributedCount: number;
+  keywordContributedCount: number;
   perPrompt: {
     prompt: string;
     expect: string[];
@@ -57,6 +58,7 @@ function buildReport(): EvalReportLike {
     vocabularySource: "built-in default",
     unknownExpectIds: [],
     semanticContributedCount: 1,
+    keywordContributedCount: 1,
     perPrompt: [
       {
         prompt: "positive prompt",
@@ -116,6 +118,15 @@ test("formatEvalReportText: semantic-contributed count of 0 out of N still rende
   report.semanticContributedCount = 0;
   const text = formatEvalReportText(report);
   assert.match(text, /semantic contributed: 0\/3 prompts/);
+});
+
+test("formatEvalReportText: keyword contributed renders next to the semantic line (gate: 'keyword' admissions, not boosts)", () => {
+  const report = buildReport();
+  report.semanticContributedCount = 2;
+  report.keywordContributedCount = 1;
+  const text = formatEvalReportText(report);
+  assert.match(text, /semantic contributed: 2\/3 prompts/);
+  assert.match(text, /keyword contributed: 1\/3 prompts/);
 });
 
 test("formatEvalReportText: vocabulary line reflects a custom source verbatim", () => {

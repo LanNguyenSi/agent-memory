@@ -16,7 +16,7 @@ const {
   dedupeAndRank,
   DEFAULT_GATES,
 } = require('./router');
-const { rebuildIndex, semanticSearch } = require('./embed/indexer');
+const { rebuildIndex, semanticSearch, blendedSearch } = require('./embed/indexer');
 const { renderHitsAsContext } = require('./render');
 
 module.exports = {
@@ -33,5 +33,6 @@ module.exports = {
   DEFAULT_GATES,
   rebuildIndex,
   semanticSearch,
+  blendedSearch,
   renderHitsAsContext,
 };

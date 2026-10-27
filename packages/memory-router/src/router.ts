@@ -8,7 +8,18 @@ const {
   typeModifier,
   recencyModifier,
 } = require('./gates/confidence');
-const { semanticSearch } = require('./embed/indexer');
+// semanticSearch: the pure-semantic entry point, still used by
+// resolveConfidence below. blendedSearch: resolveBlended's default entry
+// point (one store open + one query embedding shared by the semantic KNN
+// and the schema v4 keyword pass, see src/embed/indexer.ts).
+const { semanticSearch, blendedSearch } = require('./embed/indexer');
+const {
+  loadKeywordConfig,
+  admitsKeywordCandidate,
+  keywordReason,
+  KEYWORD_MAX_HITS,
+  KEYWORD_ADMISSION_OFFSET,
+} = require('./embed/keyword');
 
 // Only sync gates live in the default set. The Confidence Gate is an async
 // resolver (semantic search hits the OpenAI API) so it's exposed separately
@@ -89,16 +100,39 @@ function dedupeAndRank(hits: GateHit[], maxHits: number): GateHit[] {
 
 // Test seam for resolveBlended: lets tests substitute the semantic-search
 // entry point and pin its exact call shape / a controlled score set without
-// touching the real embedding stack. Default is the real semanticSearch
+// touching the real embedding stack. Default is the real blendedSearch
 // required above; every production caller (hook, MCP server, eval runner)
 // never passes this.
+//
+// The seam accepts BOTH result shapes: a bare array of semantic hits (the
+// pre-keyword shape every existing fake returns, treated as "no keyword
+// matches") and the blendedSearch result { semantic, keyword } that carries
+// the FTS keyword candidates (each with its shape split, best bm25 and
+// corroboration cosine) alongside the semantic hits.
+interface SemanticSearchHit {
+  memory: Memory;
+  score: number;
+}
+
+interface KeywordSearchHit {
+  memory: Memory;
+  strongTerms: string[];
+  matchedTerms: string[];
+  bm25: number;
+  cosine: number | null;
+}
+
+type SearchOutcome =
+  | SemanticSearchHit[]
+  | { semantic: SemanticSearchHit[]; keyword: KeywordSearchHit[] };
+
 interface ResolveBlendedDeps {
   semanticSearch: (
     prompt: string,
     memories: Memory[],
     memoryDir: string,
     k: number,
-  ) => Promise<{ memory: Memory; score: number }[]>;
+  ) => Promise<SearchOutcome>;
 }
 
 // Replaces the old "shadowed gates" resolver (sync topic/tool
@@ -160,7 +194,7 @@ async function resolveBlended(
   memories: Memory[],
   memoryDir: string,
   opts: ResolveOptions = {},
-  deps: ResolveBlendedDeps = { semanticSearch },
+  deps: ResolveBlendedDeps = { semanticSearch: blendedSearch },
 ): Promise<GateHit[]> {
   if (!ctx.prompt) return [];
   const maxHits = opts.maxHits ?? 5;
@@ -178,8 +212,21 @@ async function resolveBlended(
   // many rows" argument.
   const semanticK = Math.max(maxHits, Math.round(weights.candidateK));
   let semanticHits: { memory: Memory; score: number }[] = [];
+  // Keyword candidates from the SAME search session as the semantic hits
+  // (FTS5 matches with their shape split, best bm25 and corroboration
+  // cosine, see src/embed/indexer.ts blendedSearch). Stays empty when the
+  // keyword path is off, the index predates the FTS table / has no FTS
+  // rows, or nothing matched - every branch below is then inert.
+  let keywordMatches: KeywordSearchHit[] = [];
   try {
-    semanticHits = await deps.semanticSearch(ctx.prompt, memories, memoryDir, semanticK);
+    const outcome = await deps.semanticSearch(ctx.prompt, memories, memoryDir, semanticK);
+    if (Array.isArray(outcome)) {
+      // Pre-keyword seam shape: bare array of semantic hits.
+      semanticHits = outcome;
+    } else {
+      semanticHits = outcome.semantic;
+      keywordMatches = outcome.keyword;
+    }
   } catch (err: unknown) {
     process.stderr.write(
       `memory-router: semantic search failed, degrading to topic/recency/type only: ${String(err)}\n`,
@@ -240,12 +287,69 @@ async function resolveBlended(
     );
   }
 
+  // --- Keyword gate (index schema v4) -----------------------------------
+  // The MEMORY_ROUTER_KEYWORD=off switch is honored HERE, not only in the
+  // search layer: with the path off, any keyword candidates that somehow
+  // arrived are dropped on the floor and the rest of this function is
+  // byte-identical to the pre-keyword resolver (no admissions, no boost,
+  // the original degraded short-circuit).
+  const keywordConfig = loadKeywordConfig();
+  if (!keywordConfig.enabled) keywordMatches = [];
+  // Admissions: memories with NO semantic hit above the floor, at most
+  // KEYWORD_MAX_HITS per prompt, best bm25 first (keywordMatches arrives
+  // sorted that way from the search layer). A memory that DOES have an
+  // above-floor semantic hit is not keyword-only; it takes the boost path
+  // below instead. The admission predicate itself (strong match admits;
+  // plain word needs corroboration: cosine >= the corroboration floor OR
+  // >= 2 qualifying matched terms) lives in src/embed/keyword.ts.
+  const semanticHitIds = new Set(semanticHits.map((h) => h.memory.id));
+  const admitted: KeywordSearchHit[] = [];
+  for (const candidate of keywordMatches) {
+    if (admitted.length >= KEYWORD_MAX_HITS) break;
+    if (semanticHitIds.has(candidate.memory.id)) continue;
+    if (admitsKeywordCandidate(candidate, keywordConfig.corroborationFloor)) {
+      admitted.push(candidate);
+    }
+  }
+  const admittedById = new Map<string, KeywordSearchHit>(
+    admitted.map((a) => [a.memory.id, a]),
+  );
+
   // Semantic path contributed nothing (no index/provider, the caught error
   // above, or every candidate falling below the relevance floor):
   // degrade to EXACTLY the pre-blend sync-only resolver rather than running
   // any topic-boost/recency/type scoring, see the module comment above this
-  // function for why.
-  if (semanticHits.length === 0) return resolve(ctx, memories, { maxHits });
+  // function for why. The one schema v4 exception: when the keyword gate
+  // admitted memories despite the silent semantic path, those take the
+  // FIRST slots (scored like floor-edge semantic hits with the usual topic
+  // boost and modifiers, best bm25 first) and the remaining slots get
+  // exactly the resolve() output today's degradation returns, deduplicated.
+  // With no admissions this branch is untouched pre-keyword behavior.
+  if (semanticHits.length === 0) {
+    const degraded = resolve(ctx, memories, { maxHits });
+    if (admitted.length === 0) return degraded;
+    const degradedTopicHits: GateHit[] = topicGate.evaluate(ctx, memories);
+    const degradedTopicById = new Map<string, GateHit>(
+      degradedTopicHits.map((h) => [h.memory.id, h]),
+    );
+    const now = Date.now();
+    const keywordFirst: GateHit[] = admitted.map((a) =>
+      blendCandidateHit(
+        a.memory,
+        weights,
+        weights.minSemanticScore + KEYWORD_ADMISSION_OFFSET,
+        degradedTopicById.get(a.memory.id),
+        'keyword',
+        [keywordReason(a)],
+        now,
+      ),
+    );
+    const taken = new Set(keywordFirst.map((h) => h.memory.id));
+    return [...keywordFirst, ...degraded.filter((h) => !taken.has(h.memory.id))].slice(
+      0,
+      maxHits,
+    );
+  }
 
   const topicHits: GateHit[] = topicGate.evaluate(ctx, memories);
   const topicById = new Map<string, GateHit>(topicHits.map((h) => [h.memory.id, h]));
@@ -259,7 +363,21 @@ async function resolveBlended(
   // keeps working exactly as it did before this change.
   const toolHits: GateHit[] = ctx.tool ? toolGate.evaluate(ctx, memories) : [];
 
-  const candidateIds = new Set<string>([...semanticById.keys(), ...topicById.keys()]);
+  // Semantic hits ABOVE the floor that also match a strong qualifying term
+  // get + keywordBoost (exact-token evidence breaking the tie between two
+  // genuine semantic matches); plain-word matches never boost an
+  // above-floor hit (the semantic score already carries them).
+  const strongMatchById = new Map<string, KeywordSearchHit>(
+    keywordMatches
+      .filter((m) => m.strongTerms.length > 0)
+      .map((m) => [m.memory.id, m]),
+  );
+
+  const candidateIds = new Set<string>([
+    ...semanticById.keys(),
+    ...topicById.keys(),
+    ...admittedById.keys(),
+  ]);
   const byId = new Map(memories.map((m) => [m.id, m]));
   const now = Date.now();
 
@@ -277,39 +395,94 @@ async function resolveBlended(
     // though it has no topic match at all — it's semantic-originated (a
     // real semanticById entry), just weighted zero.
     const hasSemanticHit = semanticById.has(id);
-    const semanticScore = semanticById.get(id) ?? 0;
+    const keywordOnly = admittedById.get(id);
+    const semanticScore = hasSemanticHit
+      ? (semanticById.get(id) as number)
+      : keywordOnly
+        ? weights.minSemanticScore + KEYWORD_ADMISSION_OFFSET
+        : 0;
     const topicHit = topicById.get(id);
-    const topicBoost = topicHit ? weights.topicBoost : 0;
-
-    // A stat failure (missing/unreadable file) must never cost a memory
-    // its topic/semantic hit — treat it as "no recency signal" (age 0,
-    // the modifier's max value) rather than throwing.
-    let mtimeMs = now;
-    try {
-      mtimeMs = statSync(memory.path).mtimeMs;
-    } catch {
-      // fall through with mtimeMs = now
-    }
-
-    const score =
-      semanticScore +
-      topicBoost +
-      typeModifier(memory.frontmatter.type, weights) +
-      recencyModifier(mtimeMs, weights, now);
 
     const reasonParts: string[] = [];
     if (hasSemanticHit) reasonParts.push(`semantic match (score=${semanticScore.toFixed(2)})`);
-    if (topicHit) reasonParts.push(topicHit.reason);
+    let gate: GateHit['gate'] = hasSemanticHit ? 'confidence' : 'topic';
+    let keywordBoost = 0;
+    if (keywordOnly) {
+      // Admitted keyword-only memory: distinguishable gate + reason so the
+      // eval can count it, floor-edge semantic score (see the admission
+      // comment above).
+      reasonParts.push(keywordReason(keywordOnly));
+      gate = 'keyword';
+    } else {
+      const strongMatch = strongMatchById.get(id);
+      if (strongMatch) {
+        keywordBoost = keywordConfig.keywordBoost;
+        reasonParts.push(keywordReason(strongMatch));
+      }
+    }
 
-    blended.push({
-      memory,
-      gate: hasSemanticHit ? 'confidence' : 'topic',
-      score,
-      reason: reasonParts.join('; '),
-    });
+    blended.push(
+      blendCandidateHit(
+        memory,
+        weights,
+        semanticScore + keywordBoost,
+        topicHit,
+        gate,
+        reasonParts,
+        now,
+      ),
+    );
   }
 
   return rankWithToolPrivilege(blended, toolHits, maxHits);
+}
+
+// Structural shape of loadBlendWeights()'s return (the function itself is
+// require()d, so its interface isn't name-importable from src/router.ts).
+interface BlendWeightsLike {
+  topicBoost: number;
+  recencyWeight: number;
+  recencyHalfLifeDays: number;
+  typeWeight: number;
+  minSemanticScore: number;
+}
+
+// One blended hit: semanticScore (already including any keyword boost) +
+// topicBoost (when the Topic Gate matches) + type + recency modifiers, the
+// Topic Gate reason appended last. Shared by the active-blend loop and the
+// degraded-with-keyword-admissions branch so a keyword hit is blended
+// EXACTLY like a semantic one, only with a substituted semantic score.
+function blendCandidateHit(
+  memory: Memory,
+  weights: BlendWeightsLike,
+  semanticScore: number,
+  topicHit: GateHit | undefined,
+  gate: GateHit['gate'],
+  reasonParts: string[],
+  now: number,
+): GateHit {
+  const topicBoost = topicHit ? weights.topicBoost : 0;
+
+  // A stat failure (missing/unreadable file) must never cost a memory
+  // its topic/semantic hit — treat it as "no recency signal" (age 0,
+  // the modifier's max value) rather than throwing.
+  let mtimeMs = now;
+  try {
+    mtimeMs = statSync(memory.path).mtimeMs;
+  } catch {
+    // fall through with mtimeMs = now
+  }
+
+  const score =
+    semanticScore +
+    topicBoost +
+    typeModifier(memory.frontmatter.type, weights) +
+    recencyModifier(mtimeMs, weights, now);
+
+  const parts = [...reasonParts];
+  if (topicHit) parts.push(topicHit.reason);
+
+  return { memory, gate, score, reason: parts.join('; ') };
 }
 
 // Privileges deterministic Tool-Gate hits ahead of the maxHits cap: a

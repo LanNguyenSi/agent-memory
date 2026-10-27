@@ -253,6 +253,18 @@ export interface EvalReport {
    * signal actually won a slot for any given prompt.
    */
   semanticContributedCount: number;
+  /**
+   * How many of the golden set's prompts had at least one hit attributed
+   * to the KEYWORD path (resolveBlended's `gate: 'keyword'` — a memory
+   * admitted by the FTS5 keyword gate WITHOUT a semantic score clearing
+   * the relevance floor, see src/router.ts and src/embed/keyword.ts).
+   * Out of `perPrompt.length` total prompts, same accounting shape as
+   * `semanticContributedCount` above and printed next to it. A keyword
+   * BOOST on a memory that already had an above-floor semantic hit does
+   * NOT count here (that hit keeps `gate: 'confidence'`); only
+   * keyword-only admissions do.
+   */
+  keywordContributedCount: number;
 }
 
 /**
@@ -295,6 +307,7 @@ async function runGoldenEval(
 
   const perPrompt: PromptMetric[] = [];
   let semanticContributedCount = 0;
+  let keywordContributedCount = 0;
   for (const entry of golden.prompts) {
     // cwd is deliberately omitted: no gate consulted by promptToHits (topic,
     // tool, confidence) reads ctx.cwd today, so there is nothing here to
@@ -313,6 +326,7 @@ async function runGoldenEval(
     // cleared the relevance floor) — not merely that the semantic path was
     // configured/reachable (that's semanticPathActive above).
     if (hits.some((h) => h.gate === "confidence")) semanticContributedCount++;
+    if (hits.some((h) => h.gate === "keyword")) keywordContributedCount++;
     const scored = scorePrompt(entry.expect, got);
     perPrompt.push({
       prompt: entry.prompt,
@@ -332,6 +346,7 @@ async function runGoldenEval(
     perPrompt,
     aggregate: aggregateMetrics(perPrompt),
     semanticContributedCount,
+    keywordContributedCount,
   };
 }
 

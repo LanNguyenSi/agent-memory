@@ -42,6 +42,7 @@ test("eval: exits 0 on an error-free run and prints the aggregate summary", () =
   // No index is built for the fixture corpus, so the semantic gate cannot
   // have won a slot for any of the 6 prompts.
   assert.match(stdout, /semantic contributed: 0\/6 prompts/);
+  assert.match(stdout, /keyword contributed: 0\/6 prompts/);
   assert.match(stdout, /precision=0\.750 recall=0\.625 mrr=0\.750\s+\(n=4\)/);
   assert.match(stdout, /negative controls: 1\/2 passed/);
   // Fixture golden.yml deliberately labels one prompt with a phantom id
@@ -70,6 +71,7 @@ test("eval --json emits valid, parseable JSON matching the documented schema", (
     vocabularySource: string;
     unknownExpectIds: string[];
     semanticContributedCount: number;
+    keywordContributedCount: number;
     perPrompt: Array<{ prompt: string; expect: string[]; got: string[] }>;
     aggregate: {
       precision: number;
@@ -90,6 +92,7 @@ test("eval --json emits valid, parseable JSON matching the documented schema", (
   assert.deepEqual(parsed.unknownExpectIds, ["feedback_never_fires_phantom"]);
   assert.equal(parsed.perPrompt.length, 6);
   assert.equal(parsed.semanticContributedCount, 0);
+  assert.equal(parsed.keywordContributedCount, 0);
   assert.equal(parsed.aggregate.precision, 0.75);
   assert.equal(parsed.aggregate.recall, 0.625);
   assert.equal(parsed.aggregate.mrr, 0.75);

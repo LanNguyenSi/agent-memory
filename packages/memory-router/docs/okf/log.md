@@ -1,5 +1,18 @@
 # Bundle log
 
+- 2026-10-27T06:18:06Z, FTS5 keyword path (index schema v4):
+  `semanticSearch` is now a wrapper over the shared `runBlendedSearch`
+  engine, `blendedSearch` adds the keyword pass, `resolveBlended` admits
+  at most 2 keyword-only memories (gate `keyword`, floor-edge score) and
+  boosts above-floor strong matches, and the degraded branch puts keyword
+  admissions first. Rewrote and re-pointed `semantic-search-silent-noop.md`
+  (new keyword silent-no-op paragraph, `indexer.ts`/`index-store.ts`/
+  `router.ts` citations), `score-blend-resolver.md` (new admissions/boost
+  section, degraded-branch and router citations),
+  `gate-composition-and-dedup.md` and `native-deps-and-ci-smoke.md`
+  (router/index-store citations re-pointed, FTS5-is-bundled note added);
+  claims updated where behavior changed, anchors re-verified against the
+  checked-out source.
 - 2026-10-26T22:27:05Z, `remove()` lost its dead `chunks`-table probe (every writable open
   runs the migrations) and the table probe is prepared on first use; every
   `index-store.ts` line from `remove()` on moved down by three. Re-pointed
