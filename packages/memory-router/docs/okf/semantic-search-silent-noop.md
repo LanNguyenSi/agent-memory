@@ -41,13 +41,13 @@ The call sites below are the ones among the hits of
 `rg -n 'semanticSearch\b' packages/memory-router/src` at the time of
 writing (comments, imports, and the definition set aside):
 
-- `resolveBlended()` (`packages/memory-router/src/router.ts:228`), used by
+- `resolveBlended()` (`packages/memory-router/src/router.ts:199`), used by
   the `UserPromptSubmit` hook, MCP `memory_resolve`, and
   `memory-router eval`. Since schema v4 its default search entry point is
   `blendedSearch()` (`packages/memory-router/src/embed/indexer.ts:687-702`),
   which returns `{ semantic, keyword }` and shares one store open and one
   query embedding with the keyword pass.
-- `resolveConfidence()` (`packages/memory-router/src/router.ts:79`), used
+- `resolveConfidence()` (`packages/memory-router/src/router.ts:80`), used
   by `memory-router test --semantic`.
 - MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:84-89`),
   which calls it directly.
@@ -192,15 +192,15 @@ this path: `semanticSearch()` does not write.
 
 ### What each caller does with them
 
-- `resolveBlended()` (`packages/memory-router/src/router.ts:227-240`)
+- `resolveBlended()` (`packages/memory-router/src/router.ts:241-254`)
   catches any throw from the search and degrades to `resolve()`
-  (`packages/memory-router/src/router.ts:333`). The returned hits equal
+  (`packages/memory-router/src/router.ts:360`). The returned hits equal
   the unconfigured case: see [docs/scoring.md "Degradation and the Tool
   Gate"](../scoring.md#degradation-and-the-tool-gate), pinned by the
   tests at `packages/memory-router/tests/blend.test.ts:449` (a thrown
   search) and `packages/memory-router/tests/blend.test.ts:473` (no
   index/provider). stderr does not equal it: the catch interpolates
-  `String(err)` (`packages/memory-router/src/router.ts:238`), so the full
+  `String(err)` (`packages/memory-router/src/router.ts:252`), so the full
   error message, including the rebuild command a provenance error carries
   (`packages/memory-router/src/embed/index-store.ts:653`, `:679`), is
   written on every call that throws.
