@@ -81,6 +81,13 @@ OpenAI embeddings when `OPENAI_API_KEY` is set and an Ollama endpoint
 - Re-runs are incremental: unchanged files (by mtime) are skipped,
   removed files are purged (their chunk rows go with them), and a changed
   file has its whole chunk set rewritten.
+- The index records the chunker version (`CHUNKER_VERSION`, meta key
+  `chunker_version`, no schema bump). When it is missing (an index built
+  before the stamp) or differs from the running version, the next `index`
+  run re-chunks every memory even though no file changed: chunk vectors and
+  keyword rows are rewritten, document vectors are not re-embedded. The
+  stamp is written only after the whole run succeeded, so an interrupted
+  run redoes the pass.
 - Since index schema v4 the same run also maintains an FTS5 keyword index
   (`chunks_fts`, the FTS5 module bundled with SQLite, no new native
   dependency): name, description and every chunk body, one row per

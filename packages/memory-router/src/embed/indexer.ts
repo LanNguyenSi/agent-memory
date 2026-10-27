@@ -9,7 +9,7 @@ const {
   INDEX_DEFAULT_TIMEOUT_MS,
 } = require('./provider');
 const { openIndex } = require('./index-store');
-const { chunkBody } = require('./chunking');
+const { chunkBody, CHUNKER_VERSION } = require('./chunking');
 const {
   KEYWORD_MAX_DF,
   loadKeywordConfig,
@@ -207,6 +207,13 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
     // FTS rows gets them on this run without re-embedding anything.
     const ftsedIds = new Set<string>(store.listFtsIds());
     const seen = new Set<string>();
+    // Chunker version stamp: chunk rows written by a different (or unknown)
+    // chunker version are stale even when mtimes are unchanged, so every
+    // memory is re-chunked (chunk vectors + FTS rows rewritten; document
+    // vectors are NOT re-embedded). The stamp is written only after the whole
+    // pass succeeded (end of this function), so an interrupted pass leaves
+    // the old stamp and the next run redoes it.
+    const chunkerStale = store.getChunkerVersion() !== CHUNKER_VERSION;
 
     // One flat queue for BOTH document and chunk embeds, so batching is
     // per INPUT (see the BATCH comment below): chunks make the input count
@@ -258,7 +265,7 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
       if (docStale && ftsedIds.has(memory.id)) {
         store.replaceFts(memory.id, ftsMeta, []);
       }
-      if (docStale || !chunkedIds.has(memory.id)) {
+      if (docStale || chunkerStale || !chunkedIds.has(memory.id)) {
         const chunks = chunkBody(memory.body);
         // Only schedule work when there is something to write or an old
         // chunk set to delete (a memory whose body became empty must have
@@ -399,6 +406,9 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
     for (const plan of ftsOnlyPlan) {
       store.replaceFts(plan.id, plan.meta, plan.chunks);
     }
+
+    // Whole pass succeeded: record which chunker produced the chunk rows.
+    if (chunkerStale) store.setChunkerVersion(CHUNKER_VERSION);
 
     return {
       total: memories.length,
