@@ -221,6 +221,13 @@ every prompt that touched it. `UserPromptSubmit` therefore injects, per hit:
   index is older than the file: the search records where the matching chunk
   started, and when the current body has a different chunk at that position
   the renderer does not trust the stored index.
+- a `type: feedback` hit shown in that excerpt form additionally ends with the
+  memory's `**How to apply:**` paragraph (from the marker to the next blank
+  line, `**Why:**` line or heading, or the end of the body; at most 1,000
+  characters, the rest replaced by a ` [...]` marker), and only when the shown
+  chunks do not already contain it: that paragraph is the actionable rule and
+  the matched chunk typically misses it. The `**Why:**` paragraph is not
+  appended, and non-feedback hits are untouched.
 
 The whole injection is held to **16,384 bytes** (UTF-8 bytes of the rendered
 text). Each hit has a ladder of forms: the form it starts in (whole body, or

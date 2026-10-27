@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **An excerpted `type: feedback` memory keeps its `**How to apply:**` paragraph.** A feedback memory longer than `FEEDBACK_BODY_MAX_CHARS` (3,000 characters) renders as description + matching chunk + path, and the matched chunk usually misses the `**How to apply:**` line that carries the actionable rule. `excerptFor` now appends that paragraph (from the marker to the next blank line, `**Why:**` line or heading, or the end of the body) after the picked chunks, capped at `HOW_TO_APPLY_MAX_CHARS` (1,000 characters, the overflow replaced by a ` [...]` marker), and only when the picked chunk text does not already contain the paragraph (decided by containment, never by line offsets). Non-feedback hits, whole-body and minimal forms, and feedback memories without such a paragraph render byte-identically to before; when the append makes the excerpt form larger than the whole-body form, the ladder drops that rung as it already did. Pinned by `tests/render-how-to-apply.test.ts`.
+
 ## [0.8.0] - 2026-10-27
 
 ### Added

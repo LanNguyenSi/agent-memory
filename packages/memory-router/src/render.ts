@@ -21,7 +21,9 @@
 //   following neighbour when that chunk is short), and the memory's absolute
 //   path. Short memories, and feedback memories up to a higher limit, are
 //   still injected whole so a rule with its "Why" and "How to apply" lines is
-//   never cut. The whole injection is held to a byte budget.
+//   never cut, and a feedback memory that is excerpted keeps its
+//   "How to apply" paragraph even when the matched chunk misses it. The whole
+//   injection is held to a byte budget.
 
 const { resolve: resolvePath } = require('node:path');
 const { checkMemoryReferences } = require('./verify-refs');
@@ -50,6 +52,16 @@ const FEEDBACK_BODY_MAX_CHARS = 3000;
 // explanation continues in the next chunk. Chunks are 1,235 chars at the
 // median; the 600 cut sits at the 11th percentile.
 const NEIGHBOUR_CHUNK_MAX_CHARS = 600;
+
+// Cap, in characters, on the `**How to apply:**` paragraph appended to the
+// excerpt of a long feedback memory: the actionable rule lives on that line
+// and the best chunk usually misses it. About two thirds of a median chunk
+// (1,235 chars): a rule paragraph longer than that belongs to the file
+// behind the path line, not to every prompt.
+const HOW_TO_APPLY_MAX_CHARS = 1000;
+
+// Stands in for the part of a `**How to apply:**` paragraph past the cap.
+const HOW_TO_APPLY_TRUNCATED = ' [...]';
 
 // How much of a hit is rendered. Higher levels are shorter.
 const LEVEL_WHOLE = 0; // heading, stale prefix, whole body
@@ -209,8 +221,46 @@ function prepareHit(h: GateHit): PreparedHit {
   };
 }
 
+// Line-start markers of the two rule paragraphs of a feedback memory.
+const HOW_TO_APPLY_RE = /^\s*\*\*How to apply:\*\*/;
+const WHY_RE = /^\s*\*\*Why:\*\*/;
+// A markdown heading line, same shape the chunker treats as a boundary
+// (HEADING_RE in src/embed/chunking.ts).
+const HEADING_LINE_RE = /^#{1,6}(\s|$)/;
+
+// The `**How to apply:**` paragraph of a body: the line carrying the marker
+// and the lines continuing it, up to the next blank line, `**Why:**` line or
+// heading line, or the end of the body. Empty string when there is no
+// marker line. The `**Why:**` paragraph is out of scope: the marker only
+// ends the paragraph, it is never appended.
+function howToApplyParagraph(body: string): string {
+  const lines = body.split('\n');
+  const start = lines.findIndex((l) => HOW_TO_APPLY_RE.test(l));
+  if (start === -1) return '';
+  const paragraph = [lines[start]];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '' || WHY_RE.test(line) || HEADING_LINE_RE.test(line)) break;
+    paragraph.push(line);
+  }
+  return paragraph.join('\n');
+}
+
+// Cut a paragraph at HOW_TO_APPLY_MAX_CHARS characters, keeping the total
+// (marker included) within the cap.
+function capHowToApply(paragraph: string): string {
+  if (paragraph.length <= HOW_TO_APPLY_MAX_CHARS) return paragraph;
+  const kept = HOW_TO_APPLY_MAX_CHARS - HOW_TO_APPLY_TRUNCATED.length;
+  return `${paragraph.slice(0, kept).trimEnd()}${HOW_TO_APPLY_TRUNCATED}`;
+}
+
 // The excerpt of a hit: its best chunk, the following chunk too when the best
-// one is short, always whole chunks. The chunks come from the same
+// one is short, always whole chunks. A `type: feedback` hit additionally
+// keeps its `**How to apply:**` paragraph (capped) when that paragraph is
+// not already part of the picked chunks: it is the actionable rule, and an
+// excerpt cut to the chunk the prompt matched typically drops it. Whether it
+// is already there is decided by containment in the picked chunk text, never
+// by offsets inferred from line numbers. The chunks come from the same
 // chunkBody(memory.body) call the indexer embeds, so while the index is
 // current chunk i here is the text that was embedded as chunk i. An index
 // older than the file breaks that: after an edit chunk i can be another
@@ -237,7 +287,14 @@ function excerptFor(p: PreparedHit): string {
     picked.length === 1
       ? `chunk ${idx + 1} of ${chunks.length}`
       : `chunks ${idx + 1}-${idx + 2} of ${chunks.length}`;
-  return `_Excerpt (${label}):_\n${picked.map((c) => balanceFences(raw, c)).join('\n\n')}`;
+  const text = picked.map((c) => balanceFences(raw, c)).join('\n\n');
+  if (p.hit.memory.frontmatter.type === 'feedback') {
+    const paragraph = howToApplyParagraph(raw);
+    if (paragraph !== '' && !text.includes(paragraph)) {
+      return `_Excerpt (${label}):_\n${text}\n\n${capHowToApply(paragraph)}`;
+    }
+  }
+  return `_Excerpt (${label}):_\n${text}`;
 }
 
 function blockAt(p: PreparedHit, level: number): string {
@@ -301,7 +358,9 @@ function assemble(prepared: PreparedHit[], levels: number[], kept: number, budge
 // that show what it would inject). `hits` arrive ranked, best first.
 //
 // Per hit: whole body when it is short (SHORT_BODY_MAX_CHARS, or
-// FEEDBACK_BODY_MAX_CHARS for feedback), else description + best chunk + path.
+// FEEDBACK_BODY_MAX_CHARS for feedback), else description + best chunk +
+// path, with a feedback hit's "How to apply" paragraph appended (capped)
+// when the picked chunks do not already hold it.
 // That start form is the top rung of the hit's ladder; below it come the
 // excerpt and the minimal form (description + path), each only when it is
 // smaller in bytes than the rung above it (see ladderOf). A candidate output
@@ -399,4 +458,6 @@ module.exports = {
   SHORT_BODY_MAX_CHARS,
   FEEDBACK_BODY_MAX_CHARS,
   NEIGHBOUR_CHUNK_MAX_CHARS,
+  HOW_TO_APPLY_MAX_CHARS,
+  HOW_TO_APPLY_TRUNCATED,
 };
