@@ -50,11 +50,17 @@ share one restore mtime), so the operator marks such a memory explicitly:
 
 ```yaml
 ---
-name: project_comfyui_on_mini
+name: project_old_embedding_setup
 type: project
 status: retired
 ---
 ```
+
+Only `resolveBlended` honours the marker: the UserPromptSubmit hook, the MCP
+`memory_resolve` tool and `eval` apply the demotion, while `memory-router test
+--semantic` and the MCP `memory_search` tool still rank a retired memory at
+its full score. Verify a marking with `eval` (a `forbid:` list) or through
+the hook, not with `test`.
 
 Only `status: retired` on a `type: project` memory has an effect (compared
 trimmed and case-insensitively; the field may also sit under `metadata.`,
@@ -121,8 +127,7 @@ the golden set cannot tell apart anything between 0.035 and 1. The default
 is the low end of that plateau with a margin (0.05, about 1.5 times the
 smallest value that cleans every stale prompt) because the smaller the
 penalty, the more a deliberate question about a retired setup still finds
-it: on three explicit history questions (raw cosines: bonsai setup 0.838,
-hermes gateway 0.820, minimax attempt 0.836) the floor rule leaves two of
+it: on three explicit history questions (raw cosines 0.820 to 0.838) the floor rule leaves two of
 them above 0.78 at a 0.05 penalty and none at 0.10 (arithmetic on the
 measured cosines, not an eval run). The measurement is bge-m3 cosine; another model has
 another band, so recalibrate with `MEMORY_ROUTER_BLEND_RETIRED_PENALTY` and a

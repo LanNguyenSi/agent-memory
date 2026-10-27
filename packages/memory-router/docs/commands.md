@@ -346,9 +346,9 @@ hook's cap) for that prompt, for example the ids of memories marked
 
 ```yaml
 prompts:
-  - prompt: "Starte Ollama auf dem mini neu"
-    expect: ["reference_memory_router_live_wiring_mini"]
-    forbid: ["project_mac_mini_hermes_2026-06-13"]
+  - prompt: "Restart the embedding server, search is empty"
+    expect: ["reference_current_embedding_setup"]
+    forbid: ["project_old_embedding_setup"]
 ```
 
 `forbid` is optional and defaults to `[]`; an empty list means nothing is

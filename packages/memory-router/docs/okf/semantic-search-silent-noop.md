@@ -41,7 +41,7 @@ The call sites below are the ones among the hits of
 `rg -n 'semanticSearch\b' packages/memory-router/src` at the time of
 writing (comments, imports, and the definition set aside):
 
-- `resolveBlended()` (`packages/memory-router/src/router.ts:199`), used by
+- `resolveBlended()` (`packages/memory-router/src/router.ts:242`), used by
   the `UserPromptSubmit` hook, MCP `memory_resolve`, and
   `memory-router eval`. Since schema v4 its default search entry point is
   `blendedSearch()` (`packages/memory-router/src/embed/indexer.ts:687-702`),

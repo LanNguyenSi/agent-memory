@@ -134,6 +134,8 @@ pool back to `semanticK` (`packages/memory-router/src/router.ts:280-282`).
 Nothing else in `resolveBlended` reads the marker, so keyword admissions, the
 topic gate and the degraded `resolve()` branches above are unaffected.
 
+Only `resolveBlended` applies the demotion (hook, MCP `memory_resolve`, `eval`); `memory-router test --semantic` and MCP `memory_search` still rank a retired memory at full score.
+
 ## Which chunk a hit carries to the renderer
 
 `resolveBlended()` also records, per returned hit, which body chunk matched,
