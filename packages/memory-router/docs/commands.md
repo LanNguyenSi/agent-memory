@@ -84,9 +84,11 @@ OpenAI embeddings when `OPENAI_API_KEY` is set and an Ollama endpoint
 - Since index schema v4 the same run also maintains an FTS5 keyword index
   (`chunks_fts`, the FTS5 module bundled with SQLite, no new native
   dependency): name, description and every chunk body, one row per
-  chunk. It powers the keyword gate (task ids, tags, identifiers):
-  a rare exact token (at most 12 memories contain it) admits its memory
-  even when embeddings score it below the floor
+  chunk. It powers the keyword gate (identifier tokens like `4e7729ab`
+  or `b11905`): only tokens passing the id rule (6+ characters, ASCII
+  letters and digits, at least one of each, no separators) are queried,
+  and one that appears in at most 12 memories admits its memory even
+  when embeddings score it below the floor
   ([docs/scoring.md](scoring.md#the-keyword-gate-schema-v4)). Like the v3
   chunks, the keyword rows are back-filled by the next `index` run after
   a migration; until then the keyword path simply finds nothing.
@@ -394,7 +396,7 @@ for a slot), distinct from `semanticPathActive` (which only proves an
 index + provider are configured, not that the signal won anything).
 `keywordContributedCount` (index schema v4) counts how many prompts had
 at least one hit admitted by the keyword gate (a `gate: "keyword"` hit;
-the small boost given to already-semantic strong matches is not counted,
+the small boost given to already-semantic id matches is not counted,
 it never wins a slot on its own). The text report prints both as
 `semantic contributed: N/M prompts` and `keyword contributed: N/M prompts`.
 `vocabularySource` states which topic vocabulary the Topic Gate used for

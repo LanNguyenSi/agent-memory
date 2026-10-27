@@ -167,7 +167,7 @@ test('keyword path is off-switch byte-identical at the hook boundary (on/no-matc
       'exactly one memory block: the untouched degraded topic output',
     );
 
-    // (c) sanity that the path is actually live when on: the strong token
+    // (c) sanity that the path is actually live when on: the id token
     // in the prompt admits the task memory (degraded path: keyword first,
     // then the topic hit).
     const onMatch = runHook(dir, MATCH_PROMPT, { MEMORY_ROUTER_KEYWORD: 'on' });

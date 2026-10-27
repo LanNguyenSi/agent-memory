@@ -1,43 +1,43 @@
 // Keyword path for memory-router (index schema v4, src/embed/index-store.ts).
 //
-// Why: the dense embedding ranks rare EXACT tokens poorly - task ids like
-// `4e7729ab`, build tags like `b11905`, identifiers like `MTPLX` or
-// `studio-tb` carry almost no mass in a 1024-dim cosine space, so a prompt
-// that literally names the memory's id misses it. An FTS5 keyword index over
-// the same chunks recovers exactly those hits, but a raw keyword match is
-// far too weak a signal on its own (the reference corpus measured negative
-// controls like "Erkläre geologische Strata" carrying tokens as rare as the
-// positives' ids), so admission is gated on token SHAPE plus either
-// rarity-plus-corroboration, never on a bare match.
+// Why: the dense embedding ranks rare EXACT identifiers poorly - task ids
+// like `4e7729ab` or build tags like `b11905` carry almost no mass in a
+// 1024-dim cosine space, so a prompt that literally names the memory's id
+// misses it. An FTS5 keyword index over the same chunks recovers exactly
+// those hits, but a raw keyword match is far too weak a signal on its own
+// (the reference corpus measured negative controls like IPv6, UTF-8,
+// JavaScript or WLAN carrying tokens as rare as the positives' ids, and
+// unrelated memories scoring 0.69 to 0.78 cosine on bge-m3, so neither
+// rarity nor cosine can separate an ordinary rare word from an id), so
+// ONLY identifier-shaped tokens enter the keyword path at all: a prompt
+// token is queried, counted and allowed to admit or boost only when it
+// reads as an id (`isIdToken` below), never as a bare word match.
 //
-// This module is pure (no I/O): tokenizing/sanitizing, the shape rule, the
-// env-backed config, and the admission predicate. The FTS queries themselves
-// live in the store (src/embed/index-store.ts) and are wired into retrieval
-// by src/embed/indexer.ts (blendedSearch) + src/router.ts (resolveBlended).
+// This module is pure (no I/O): tokenizing/sanitizing, the id rule, the
+// env-backed config, and the reason text. The FTS queries themselves live
+// in the store (src/embed/index-store.ts) and are wired into retrieval by
+// src/embed/indexer.ts (blendedSearch) + src/router.ts (resolveBlended).
 
 const { envFloat } = require('../gates/confidence');
 
-// A term qualifies only when at most this many MEMORIES (distinct ids, not
-// chunk rows) contain it. Rarity alone never ADMITS anything (see the
-// header comment); it only bounds which terms the shape/corroboration
-// questions are even asked about, and keeps a corpus-common word like
-// "memory" from turning the keyword path into a second topic gate.
+// An id term qualifies only when at most this many MEMORIES (distinct ids,
+// not chunk rows) contain it. Rarity alone never ADMITS anything (see the
+// header comment); it only bounds which id tokens are even asked about,
+// and keeps an id that got copy-pasted through a dozen memories (an RFC,
+// a tutorial corpus) from acting like a locator.
 const KEYWORD_MAX_DF = 12;
 
 // At most this many keyword-only admissions per prompt (best bm25 first),
 // so the keyword path can nudge recall but never reshape the whole result.
 const KEYWORD_MAX_HITS = 2;
 
-// A plain-word admission requires the memory's actual query cosine to reach
-// this (env MEMORY_ROUTER_KEYWORD_CORROBORATION). Deliberately BELOW the
-// calibrated semantic floor (0.78 for bge-m3): it corroborates "this memory
-// is at least in the right neighborhood" for memories the floor dropped or
-// that never entered the semantic top-k at all.
-const KEYWORD_CORROBORATION_DEFAULT = 0.7;
+// An id token is at least this many characters (see `isIdToken`): short
+// alphanumerics (`IPv6`, `arm64`, `S12`) are vocabulary, not identifiers.
+const KEYWORD_MIN_ID_LENGTH = 6;
 
-// Additive boost for a semantic hit ABOVE the floor that also matches a
-// strong qualifying term (env MEMORY_ROUTER_KEYWORD_BOOST): the exact-token
-// evidence breaks ties between two genuine semantic matches.
+// Additive boost for a semantic hit ABOVE the floor that also matches an
+// id token (env MEMORY_ROUTER_KEYWORD_BOOST): the exact-token evidence
+// breaks ties between two genuine semantic matches.
 const KEYWORD_BOOST_DEFAULT = 0.02;
 
 // A keyword-only admission scores as if it had cleared the relevance floor
@@ -46,9 +46,11 @@ const KEYWORD_BOOST_DEFAULT = 0.02;
 const KEYWORD_ADMISSION_OFFSET = 0.01;
 
 // Small fixed German + English stopword list: the grammatical glue that
-// would otherwise qualify with df 0 (nothing matches it) or, worse, match a
-// dozen memories as a "rare" plain word. Deliberately small and closed -
-// the gate's precision does not depend on this list being complete.
+// would otherwise form phrases of no locating value (FTS operator words
+// like AND/OR/NOT vanish through it too). With the id-only gate no stopword
+// can ever become a queryable term anyway (`isIdToken` rejects every
+// letters-only token), so this list is tokenizer hygiene, not a gate.
+// Deliberately small and closed.
 const STOPWORDS = new Set<string>([
   // German
   'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer', 'einem',
@@ -73,7 +75,6 @@ const STOPWORDS = new Set<string>([
 interface KeywordConfig {
   /** MEMORY_ROUTER_KEYWORD=off disables the whole path. */
   enabled: boolean;
-  corroborationFloor: number;
   keywordBoost: number;
 }
 
@@ -87,32 +88,32 @@ function loadKeywordConfig(): KeywordConfig {
   const off = raw !== undefined && raw.trim().toLowerCase() === 'off';
   return {
     enabled: !off,
-    corroborationFloor: envFloat(
-      'MEMORY_ROUTER_KEYWORD_CORROBORATION',
-      KEYWORD_CORROBORATION_DEFAULT,
-    ),
     keywordBoost: envFloat('MEMORY_ROUTER_KEYWORD_BOOST', KEYWORD_BOOST_DEFAULT),
   };
 }
 
 // One prompt term: `term` is the ORIGINAL prompt token (edge punctuation
-// trimmed, never lowercased - the shape rule inspects it as typed), `phrase`
-// is its sanitized FTS phrase body (lowercased alphanumeric pieces joined by
-// single spaces, stopwords dropped).
+// trimmed, never lowercased - the id rule inspects it as typed), `phrase`
+// is its sanitized FTS phrase body (lowercased alphanumeric pieces joined
+// by single spaces, stopwords dropped).
 interface KeywordTerm {
   term: string;
   phrase: string;
 }
 
-// Tokenizes a prompt into gated terms, dropping stopwords and terms with no
-// alphanumeric content (pure punctuation, emoji). Splitting each word into
-// unicode alphanumeric pieces and rejoining with spaces is what makes
-// `studio-tb` become the phrase `studio tb` and `v0.7.4` become `v0 7 4`:
-// the same boundaries the FTS5 unicode61 tokenizer applies to the indexed
-// text, so phrases match whole tokens and nothing else. No FTS operator can
-// survive: the only characters a phrase may contain are letters, digits and
-// spaces; quotePhrase() wraps it in FTS5 double quotes, where even `AND`
-// and `NEAR(` are ordinary string content.
+// Tokenizes a prompt into candidate terms, dropping stopwords and terms
+// with no alphanumeric content (pure punctuation, emoji). Splitting each
+// word into unicode alphanumeric pieces and rejoining with spaces is what
+// makes `studio-tb` become the phrase `studio tb` and `v0.7.4` become
+// `v0 7 4`: the same boundaries the FTS5 unicode61 tokenizer applies to the
+// indexed text, so phrases match whole tokens and nothing else. No FTS
+// operator can survive: the only characters a phrase may contain are
+// letters, digits and spaces; quotePhrase() wraps it in FTS5 double quotes,
+// where even `AND` and `NEAR(` are ordinary string content. Only terms that
+// pass isIdToken() are ever QUERIED (see collectKeywordMatches in
+// src/embed/indexer.ts); tokenizing stays general so the FTS-safety
+// properties of the phrase body hold for every token shape a prompt can
+// contain.
 function extractKeywordTerms(prompt: string): KeywordTerm[] {
   if (!prompt) return [];
   const seen = new Set<string>();
@@ -130,28 +131,32 @@ function extractKeywordTerms(prompt: string): KeywordTerm[] {
     const phrase = kept.join(' ');
     if (seen.has(phrase)) continue;
     seen.add(phrase);
-    // The shape rule's token: the original word with edge punctuation
-    // stripped (`"MTPLX"` and `(4e7729ab)` still read as the tokens they
-    // are), never lowercased.
+    // The id rule's token: the original word with edge punctuation stripped
+    // (`"4e7729ab"` and `(4e7729ab)` still read as the token they are),
+    // never lowercased.
     const original = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
     terms.push({ term: original, phrase });
   }
   return terms;
 }
 
-// The shape rule (checked on the ORIGINAL token, before lowercasing):
-// an identifier, not a word of any language. `Bonsai-Baum` HAS an inner
-// `-` and is therefore strong by this rule - documented and pinned by test;
-// what keeps the "Bonsai-Baum" negative control quiet is that the phrase
-// query `"bonsai baum"` only matches ADJACENT words, so on a corpus where
-// no memory spells the compound out it matches nothing at all.
-function isStrongTerm(term: string): boolean {
-  if (!term) return false;
-  if (/[\p{N}]/u.test(term)) return true; // contains a digit
-  if (/[a-z][A-Z]/.test(term)) return true; // lower→upper inside the word
-  if (/(?<=[\p{L}\p{N}])[-_.](?=[\p{L}\p{N}])/u.test(term)) return true; // inner - _ .
-  if (/^[A-Z]{3,}$/.test(term)) return true; // ALL CAPS, 3+ letters
-  return false;
+// The id rule (checked on the ORIGINAL token, before lowercasing): a single
+// run of ASCII letters and digits only, at least KEYWORD_MIN_ID_LENGTH
+// characters, containing at least one letter AND at least one digit. This
+// qualifies `4e7729ab`, `b11905`, `a1b2c3`, `base64`; it rejects every
+// ordinary word of any language (no digit), every pure number (no letter),
+// every SHORT alnum word (`IPv6`, `arm64`), and anything carrying a
+// separator (`UTF-8`, `v0.7.4`, `studio-tb`, `finish_reason`) or a non-ASCII
+// character - including hyphenated compounds like `Bonsai-Baum` or
+// `strata-builds`, whose PARTS are checked nowhere: the id rule is asked
+// only about the whole original token.
+function isIdToken(token: string): boolean {
+  if (!token) return false;
+  if (token.length < KEYWORD_MIN_ID_LENGTH) return false;
+  if (!/^[A-Za-z0-9]+$/.test(token)) return false; // single ASCII alnum run
+  if (!/[A-Za-z]/.test(token)) return false; // at least one letter
+  if (!/[0-9]/.test(token)) return false; // at least one digit
+  return true;
 }
 
 // One gated term phrase as an FTS5 MATCH string: a double-quoted string
@@ -162,56 +167,24 @@ function quotePhrase(phrase: string): string {
   return `"${phrase}"`;
 }
 
-// One keyword candidate for a prompt: everything a matched memory collected
-// across ALL qualifying terms, plus its best query cosine (null when the
-// memory has no comparable vector at all, e.g. a stale-model index - treat
-// it as "fails corroboration").
-interface KeywordCandidate {
-  id: string;
-  strongTerms: string[];
-  matchedTerms: string[]; // strong + plain qualifying terms, deduped
-  bm25: number; // best (lowest) bm25 across the matched rows
-  cosine: number | null;
-}
-
-// The admission predicate for a memory with NO semantic hit above the
-// floor: a strong qualifying match admits it outright; a plain-word match
-// needs corroboration - a query cosine at/above the floor, or at least TWO
-// qualifying terms of this prompt matching the same memory.
-function admitsKeywordCandidate(
-  candidate: KeywordCandidate,
-  corroborationFloor: number,
-): boolean {
-  if (candidate.strongTerms.length > 0) return true;
-  if (candidate.matchedTerms.length >= 2) return true;
-  return (
-    candidate.cosine !== null && candidate.cosine >= corroborationFloor
-  );
-}
-
 // The distinguishable reason an admitted/boosted hit carries, e.g.
-// `keyword match (strong: 4e7729ab)` - what makes keyword-attributed hits
-// countable in the eval report (gate 'keyword' + this reason prefix).
-function keywordReason(candidate: {
-  strongTerms: string[];
-  matchedTerms: string[];
-}): string {
-  return candidate.strongTerms.length > 0
-    ? `keyword match (strong: ${candidate.strongTerms.join(', ')})`
-    : `keyword match (corroborated: ${candidate.matchedTerms.join(', ')})`;
+// `keyword match (id: 4e7729ab)` - what makes keyword-attributed hits
+// countable in the eval report (gate 'keyword' + this reason prefix). Since
+// id tokens are the only kind of match, there is only one reason form.
+function keywordReason(candidate: { idTerms: string[] }): string {
+  return `keyword match (id: ${candidate.idTerms.join(', ')})`;
 }
 
 module.exports = {
   KEYWORD_MAX_DF,
   KEYWORD_MAX_HITS,
-  KEYWORD_CORROBORATION_DEFAULT,
+  KEYWORD_MIN_ID_LENGTH,
   KEYWORD_BOOST_DEFAULT,
   KEYWORD_ADMISSION_OFFSET,
   STOPWORDS,
   loadKeywordConfig,
   extractKeywordTerms,
-  isStrongTerm,
+  isIdToken,
   quotePhrase,
-  admitsKeywordCandidate,
   keywordReason,
 };

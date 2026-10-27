@@ -1,10 +1,11 @@
 // End-to-end tests for the schema v4 FTS keyword index: the migration and
 // rebuild lifecycle (against a real better-sqlite3/sqlite-vec store, with
 // the embedding HTTP layer stubbed like tests/blend.test.ts does), the
-// document-frequency cap over DISTINCT memories, the corroboration cosine
-// for candidates OUTSIDE the semantic top-k, prompt sanitizing against FTS
-// syntax, and the "Bonsai-Baum" negative control kept quiet by phrase
-// adjacency.
+// document-frequency cap over DISTINCT memories, the id-only gate (non-id
+// terms are never FTS-queried at all, proven by an empty candidate list
+// even where the phrase would match), prompt sanitizing against FTS syntax,
+// and the "Bonsai-Baum" / "strata-builds" negative controls staying quiet
+// because their tokens are not ids.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -34,7 +35,6 @@ const ENV_NAMES = [
   'MEMORY_ROUTER_OLLAMA_EMBED_MODEL',
   'MEMORY_ROUTER_BLEND_MIN_SEMANTIC',
   'MEMORY_ROUTER_KEYWORD',
-  'MEMORY_ROUTER_KEYWORD_CORROBORATION',
   'MEMORY_ROUTER_KEYWORD_BOOST',
 ];
 const savedEnv: Record<string, string | undefined> = {};
@@ -46,7 +46,6 @@ test.before(() => {
   delete process.env.MEMORY_ROUTER_OLLAMA_EMBED_MODEL;
   process.env.MEMORY_ROUTER_BLEND_MIN_SEMANTIC = '0.78';
   delete process.env.MEMORY_ROUTER_KEYWORD;
-  delete process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION;
   delete process.env.MEMORY_ROUTER_KEYWORD_BOOST;
 });
 test.after(() => {
@@ -144,14 +143,9 @@ function dir2(c: number): number[] {
   return v;
 }
 
-// The sqlite-vec KNN similarity scale this store reports: 1 - (1-c)/2.
-function reportedCosine(rawCosine: number): number {
-  return (1 + rawCosine) / 2;
-}
-
 // Pin the query vector(s) and (optionally) every memory's document/chunk
 // vectors so the semantic AND keyword halves of blendedSearch see fully
-// controlled, equal-scale cosines. putCachedQuery makes those prompts
+// controlled cosines. putCachedQuery makes those prompts
 // query-cache hits: blendedSearch runs with ZERO embedding HTTP calls.
 function pinVectors(
   dir: string,
@@ -282,7 +276,11 @@ test('rebuild back-fill: unchanged mtimes + existing chunks still get FTS rows w
 
     const outcome = await blendedSearch('4e7729ab', loadMemoriesFromDir(dir), dir, 5);
     assert.equal(outcome.keyword.length, 1);
-    assert.deepEqual(outcome.keyword[0].strongTerms, ['4e7729ab']);
+    assert.deepEqual(outcome.keyword[0].idTerms, ['4e7729ab']);
+    assert.ok(
+      !('cosine' in outcome.keyword[0]),
+      'keyword candidates carry no corroboration cosine any more',
+    );
   } finally {
     stub.restore();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -433,32 +431,34 @@ test('a failed rebuild never leaves FTS rows of the old body (the chunks guarant
 });
 
 // ---------------------------------------------------------------------------
-// AC1 #5: document frequency over MEMORIES caps term qualification
+// AC1 #5: document frequency over MEMORIES caps id-token qualification
 // ---------------------------------------------------------------------------
 
-test('df cap: a term contained by 13 memories does not qualify (df > KEYWORD_MAX_DF); at 2 memories it does', async () => {
+test('df cap: an id token contained by 13 memories does not qualify (df > KEYWORD_MAX_DF); at 2 memories it does', async () => {
   const dir = tmpDir();
   const stub = stubFetch();
   try {
-    // 13 memories containing commonx -> df 13 > 12.
+    // 13 memories containing c0mmon1 (an id token: 7-char ASCII alnum run
+    // with letter and digit) -> df 13 > 12. The token qualifies for the id
+    // rule; ONLY the df cap may stop it.
     for (let i = 0; i < 13; i++) {
-      writeMemory(dir, `cmn-${i}`, `note ${i} about commonx handling`);
+      writeMemory(dir, `cmn-${i}`, `note ${i} about c0mmon1 handling`);
     }
     await rebuildIndex(dir);
-    let outcome = await blendedSearch('the commonx thing', loadMemoriesFromDir(dir), dir, 5);
+    let outcome = await blendedSearch('the c0mmon1 thing', loadMemoriesFromDir(dir), dir, 5);
     assert.deepEqual(
       outcome.keyword,
       [],
-      'a corpus-common token must be filtered by the df cap before it can admit anything',
+      'an id token in 13+ memories must be filtered by the df cap before it can admit anything',
     );
 
     const dir2 = tmpDir();
-    writeMemory(dir2, 'rare-1', 'note about rarex handling');
-    writeMemory(dir2, 'rare-2', 'another rarex note');
+    writeMemory(dir2, 'rare-1', 'note about r4r3x9 handling');
+    writeMemory(dir2, 'rare-2', 'another r4r3x9 note');
     await rebuildIndex(dir2);
-    outcome = await blendedSearch('the rarex thing', loadMemoriesFromDir(dir2), dir2, 5);
+    outcome = await blendedSearch('the r4r3x9 thing', loadMemoriesFromDir(dir2), dir2, 5);
     assert.equal(outcome.keyword.length, 2, 'df 2 qualifies');
-    assert.deepEqual(outcome.keyword[0].matchedTerms, ['rarex']);
+    assert.deepEqual(outcome.keyword[0].idTerms, ['r4r3x9']);
     fs.rmSync(dir2, { recursive: true, force: true });
   } finally {
     stub.restore();
@@ -467,88 +467,93 @@ test('df cap: a term contained by 13 memories does not qualify (df > KEYWORD_MAX
 });
 
 // ---------------------------------------------------------------------------
-// The TRAP: corroboration cosine for a candidate OUTSIDE the semantic top-k
+// The id-only gate: non-id terms are never FTS-queried at all
 // ---------------------------------------------------------------------------
 
-test('corroboration: a plain-word candidate outside the semantic top-k carries its real query cosine from the store (no second embed)', async () => {
+test('non-id rare word with a high-cosine memory: never FTS-queried, empty candidate list, no keyword admission', async () => {
   const dir = tmpDir();
   const stub = stubFetch();
   try {
+    // `strata` is a rare NON-id word (letters only) and the target memory
+    // sits at a cosine far above the old 0.70 corroboration floor - under
+    // the removed plain-word route this exact combination admitted it.
     writeMemory(dir, 'target', 'the strata layer of the rock cycle');
-    for (let i = 0; i < 6; i++) writeMemory(dir, `near-${i}`, `quartz vein formation note ${i}`);
+    for (let i = 0; i < 3; i++) writeMemory(dir, `near-${i}`, `quartz vein formation note ${i}`);
 
     await rebuildIndex(dir);
-    // Query = e1. The six near memories sit at raw cosine 0.6 (reported
-    // 0.8, inside the top-5 and above the 0.78 floor); the target sits at
-    // raw cosine 0.5 (reported 0.75) -> ranked 7th, OUTSIDE the top-5, and
-    // below the floor even if it were not.
+    // Query = e1, target at raw cosine 0.98 (reported 0.99) - nothing about
+    // the store-side evidence makes the word queryable; only its shape does.
     pinVectors(
       dir,
       { 'describe the strata': dir2(1) },
       {
-        target: dir2(0.5),
-        'near-0': dir2(0.6),
-        'near-1': dir2(0.6),
-        'near-2': dir2(0.6),
-        'near-3': dir2(0.6),
-        'near-4': dir2(0.61),
-        'near-5': dir2(0.62),
+        target: dir2(0.98),
+        'near-0': dir2(0.1),
+        'near-1': dir2(0.1),
+        'near-2': dir2(0.1),
       },
     );
 
+    // The phrase itself WOULD match (proving the empty candidate list below
+    // is "never queried", not "queried and missed").
+    const store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
+    try {
+      assert.equal(store.ftsDocCount('"strata"'), 1, 'the rare word exists in one memory');
+      assert.equal(store.ftsMatch('"strata"', 10).length, 1);
+    } finally {
+      store.close();
+    }
+
     const callsBefore = stub.callCount();
     const outcome = await blendedSearch('describe the strata', loadMemoriesFromDir(dir), dir, 5);
-    assert.equal(stub.callCount(), callsBefore, 'the query vector came from the cache: zero embeds');
-
-    assert.equal(outcome.semantic.length, 5, 'k=5: the target is NOT in the semantic result');
-    assert.ok(!outcome.semantic.some((h: { memory: Memory }) => h.memory.id === 'target'));
-    assert.equal(outcome.keyword.length, 1);
-    assert.equal(outcome.keyword[0].memory.id, 'target');
-    assert.deepEqual(outcome.keyword[0].matchedTerms, ['strata'], 'one plain qualifying term');
-    assert.deepEqual(outcome.keyword[0].strongTerms, []);
-    assert.ok(
-      outcome.keyword[0].cosine !== null &&
-        Math.abs(outcome.keyword[0].cosine - reportedCosine(0.5)) < 1e-6,
-      `expected the corroboration cosine ${reportedCosine(0.5)} (raw 0.5) computed by the store, got ${outcome.keyword[0].cosine}`,
+    assert.equal(stub.callCount(), callsBefore, 'no embedding call in the keyword pass');
+    assert.deepEqual(
+      outcome.keyword,
+      [],
+      'no FTS query is issued for a non-id term: the candidate list is empty',
     );
+
+    const ctx: RouterContext = { prompt: 'describe the strata', memoryDir: dir };
+    const hits = await resolveBlended(ctx, loadMemoriesFromDir(dir), dir, { maxHits: 8 });
+    const target = hits.find((h: GateHit) => h.memory.id === 'target');
+    assert.ok(!target || target.gate !== 'keyword', 'the word alone never admits');
   } finally {
     stub.restore();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('corroboration end-to-end: the outside-top-k plain-word memory is admitted by resolveBlended (default search, no deps seam)', async () => {
+test('two non-id rare words in one prompt: never queried, no admission (the removed 2-term route stays gone)', async () => {
   const dir = tmpDir();
   const stub = stubFetch();
   try {
-    writeMemory(dir, 'target', 'the strata layer of the rock cycle');
-    for (let i = 0; i < 6; i++) writeMemory(dir, `near-${i}`, `quartz vein formation note ${i}`);
+    // One memory carrying BOTH rare words - under the removed route ">= 2
+    // qualifying terms matching the same memory" admitted on its own.
+    writeMemory(dir, 'rock-memory', 'die Schicht und die Strata der Gesteine');
     await rebuildIndex(dir);
-    pinVectors(
-      dir,
-      { 'describe the strata': dir2(1) },
-      {
-        target: dir2(0.5),
-        'near-0': dir2(0.6),
-        'near-1': dir2(0.6),
-        'near-2': dir2(0.61),
-        'near-3': dir2(0.62),
-        'near-4': dir2(0.63),
-        'near-5': dir2(0.64),
-      },
-    );
+    // Query vector orthogonal to the memory: the semantic path is silent,
+    // so any admission could only come from the keyword path.
+    pinVectors(dir, { 'die Schicht und die Strata': dir2(1) }, { 'rock-memory': dir2(0.1) });
 
-    const ctx: RouterContext = { prompt: 'describe the strata', memoryDir: dir };
-    // maxHits 8 > the 7 memories: nothing is evicted by the cap itself, the
-    // admission happens or does not on its own merits.
-    const hits = await resolveBlended(ctx, loadMemoriesFromDir(dir), dir, { maxHits: 8 });
-    const target = hits.find((h: GateHit) => h.memory.id === 'target');
-    assert.ok(
-      target,
-      `the plain-word memory at cosine 0.75 >= 0.70 must be admitted, got ${hits.map((h: GateHit) => h.memory.id).join(', ')}`,
+    const store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
+    try {
+      assert.equal(store.ftsMatch('"schicht"', 10).length, 1, 'both words would match if queried');
+      assert.equal(store.ftsMatch('"strata"', 10).length, 1);
+    } finally {
+      store.close();
+    }
+
+    const memories = loadMemoriesFromDir(dir);
+    const outcome = await blendedSearch('die Schicht und die Strata', memories, dir, 5);
+    assert.deepEqual(outcome.keyword, [], 'non-id terms are never FTS-queried');
+
+    const ctx: RouterContext = { prompt: 'die Schicht und die Strata', memoryDir: dir };
+    const hits = await resolveBlended(ctx, memories, dir);
+    assert.deepEqual(
+      hits,
+      resolve(ctx, memories, { maxHits: 5 }),
+      'the prompt degrades to the plain topic-only output: two rare words admit nothing',
     );
-    assert.equal(target!.gate, 'keyword');
-    assert.match(target!.reason, /keyword match \(corroborated: strata\)/);
   } finally {
     stub.restore();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -559,7 +564,7 @@ test('corroboration end-to-end: the outside-top-k plain-word memory is admitted 
 // Degraded path end-to-end (router + search + store, no deps seam)
 // ---------------------------------------------------------------------------
 
-test('degraded path end-to-end: silent semantic path + strong keyword match -> keyword hit first, then the exact topic-only output', async () => {
+test('degraded path end-to-end: silent semantic path + id keyword match -> keyword hit first, then the exact topic-only output', async () => {
   const dir = tmpDir();
   const stub = stubFetch();
   try {
@@ -584,7 +589,7 @@ test('degraded path end-to-end: silent semantic path + strong keyword match -> k
     const hits = await resolveBlended(ctx, memories, dir);
     assert.equal(hits[0].memory.id, 'task-memory');
     assert.equal(hits[0].gate, 'keyword');
-    assert.match(hits[0].reason, /keyword match \(strong: 4e7729ab\)/);
+    assert.match(hits[0].reason, /keyword match \(id: 4e7729ab\)/);
 
     const topicOnly = resolve(ctx, memories, { maxHits: 5 });
     assert.ok(
@@ -648,7 +653,9 @@ test('FTS safety: NEAR( is carried as literal phrase text, not operator semantic
   const stub = stubFetch();
   try {
     // strata appears NOWHERE adjacent to "near": an operator-semantics NEAR
-    // would match, the literal quoted phrase must not.
+    // would match, the literal quoted phrase must not. (With the id-only
+    // gate the term is not even queried - this pins that the whole prompt
+    // yields no keyword hit either way.)
     writeMemory(dir, 'strata-note', 'die Schicht und die Strata der Gesteine');
     await rebuildIndex(dir);
     const outcome = await blendedSearch('NEAR(strata)', loadMemoriesFromDir(dir), dir, 5);
@@ -660,57 +667,52 @@ test('FTS safety: NEAR( is carried as literal phrase text, not operator semantic
 });
 
 // ---------------------------------------------------------------------------
-// AC4 (second half): the "Bonsai-Baum" negative control stays quiet because
-// the phrase query only matches ADJACENT words.
+// AC4 (second half): the hyphenated-compound negative controls stay quiet:
+// `Bonsai-Baum` / `strata-builds` are not id tokens, so neither the whole
+// word NOR any part of it is ever FTS-queried - even in a corpus that spells
+// the compound out adjacently (which a phrase query would have matched).
 // ---------------------------------------------------------------------------
 
-test('Bonsai-Baum negative control: bonsai alone would qualify (df 9), but the phrase "bonsai baum" matches nothing unless the words are adjacent', async () => {
+test('Bonsai-Baum negative control: not an id token, never queried, silent even when "Bonsai Baum" is adjacent in a memory', async () => {
   const dir = tmpDir();
   const stub = stubFetch();
   try {
     for (let i = 0; i < 9; i++) {
       writeMemory(dir, `bonsai-${i}`, `Wie gieße ich meinen Bonsai richtig im Sommer ${i}`);
     }
+    // The decoys a queried phrase WOULD have matched: both words adjacent.
+    writeMemory(dir, 'bonsai-tree', 'Der Bonsai Baum braucht Kalk');
+    writeMemory(dir, 'strata-builds-note', 'die Strata Builds Pipeline der Geologie');
+    writeMemory(dir, 'task-target', 'carry task 4e7729ab across branches');
     await rebuildIndex(dir);
+
     const store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
     try {
-      assert.equal(store.ftsDocCount('"bonsai"'), 9, 'df 9 <= 12: the plain word alone WOULD qualify');
-      assert.deepEqual(
-        store.ftsMatch('"bonsai baum"', 10),
-        [],
-        'the phrase only matches adjacent words - none of the 9 notes spells "Bonsai Baum" out',
+      assert.equal(
+        store.ftsMatch('"bonsai baum"', 10).filter((r: { id: string }) => r.id === 'bonsai-tree')
+          .length,
+        1,
+        'sanity: the phrase WOULD match the adjacent-spelling memory if it were ever issued',
+      );
+      assert.ok(
+        store.ftsMatch('"strata builds"', 10).length >= 1,
+        'sanity: the strata-builds phrase WOULD match too',
       );
     } finally {
       store.close();
     }
 
-    // The discriminating decoy: BOTH words present, but not adjacent. An
-    // unquoted/bare FTS query would implicitly AND the terms and match
-    // this memory; the quoted phrase literal must not.
-    writeMemory(dir, 'bonsai-under-tree', 'Der Bonsai steht im Sommer unter dem Baum');
-    await rebuildIndex(dir);
-
-    const outcome = await blendedSearch(
+    for (const prompt of [
       'Wie pflege ich einen Bonsai-Baum',
-      loadMemoriesFromDir(dir),
-      dir,
-      5,
-    );
-    assert.deepEqual(
-      outcome.keyword,
-      [],
-      'the negative control admits nothing: wie/ich/einen are stopwords, pflege matches nothing, and the strong phrase "bonsai baum" matches nothing - not even the decoy carrying both words non-adjacent',
-    );
-
-    // And when the compound IS spelled out somewhere, the phrase finds it.
-    writeMemory(dir, 'bonsai-tree', 'Der Bonsai Baum braucht Kalk');
-    await rebuildIndex(dir);
-    const store2 = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
-    try {
-      const rows = store2.ftsMatch('"bonsai baum"', 10);
-      assert.deepEqual(rows.map((r: { id: string }) => r.id), ['bonsai-tree']);
-    } finally {
-      store2.close();
+      'fix the strata-builds pipeline',
+      'see task-4e7729ab now',
+    ]) {
+      const outcome = await blendedSearch(prompt, loadMemoriesFromDir(dir), dir, 5);
+      assert.deepEqual(
+        outcome.keyword,
+        [],
+        `"${prompt}": hyphenated words are not id tokens - neither the whole word nor its parts are queried, so nothing admits even where the phrase matches`,
+      );
     }
   } finally {
     stub.restore();

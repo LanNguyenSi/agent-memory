@@ -14,7 +14,7 @@ const {
   KEYWORD_MAX_DF,
   loadKeywordConfig,
   extractKeywordTerms,
-  isStrongTerm,
+  isIdToken,
   quotePhrase,
 } = require('./keyword');
 const { debug } = require('../debug');
@@ -402,18 +402,13 @@ async function rebuildIndex(memoryDir: string): Promise<IndexResult> {
 }
 
 // One keyword match collected by blendedSearch: a memory matched by one or
-// more QUALIFYING (df-capped) prompt terms, with the shape split, the best
-// bm25, and - the part the caller cannot reconstruct anywhere else - the
-// memory's real query cosine (max over its document and chunk vectors)
-// computed in the SAME store session that already holds the query vector,
-// so it exists even for memories outside the semantic top-k and the prompt
-// is embedded exactly once.
+// more QUALIFYING (df-capped) id tokens, with the matched tokens and the
+// best bm25. Only id tokens (see isIdToken in src/embed/keyword.ts) are
+// ever queried, so every hit here is an exact-identifier match.
 interface KeywordHit {
   memory: Memory;
-  strongTerms: string[];
-  matchedTerms: string[];
+  idTerms: string[];
   bm25: number;
-  cosine: number | null;
 }
 
 interface BlendedSearchResult {
@@ -434,14 +429,14 @@ const KEYWORD_ROW_CAP = KEYWORD_MAX_DF * 32;
 
 // Shared body of semanticSearch + blendedSearch: exactly one store open,
 // exactly one query embedding (or query-cache hit), document+chunk KNN
-// merge, and - when `keywordCfg` is supplied and enabled - the FTS keyword
-// pass over the SAME store session (no second embed, no second open).
+// merge, and - when `keywordEnabled` - the FTS keyword pass over the SAME
+// store session (no second embed, no second open).
 async function runBlendedSearch(
   prompt: string,
   memories: Memory[],
   memoryDir: string,
   k: number,
-  keywordCfg: { corroborationFloor: number; keywordBoost: number } | null,
+  keywordEnabled: boolean,
 ): Promise<BlendedSearchResult> {
   const empty: BlendedSearchResult = { semantic: [], keyword: [] };
   const cfg = resolveProviderConfig({ autoDetectOllama: true });
@@ -554,12 +549,12 @@ async function runBlendedSearch(
       );
 
     const keyword: KeywordHit[] = [];
-    if (keywordCfg !== null) {
+    if (keywordEnabled) {
       // The keyword pass must never turn a working search into a failed
       // one: any throw below (a corrupt FTS index, an unexpected store
       // error) degrades to "no keyword matches" with one stderr warning.
       try {
-        collectKeywordMatches(store, queryVec, prompt, byId, keyword, cfg.model);
+        collectKeywordMatches(store, prompt, byId, keyword);
       } catch (err: unknown) {
         keyword.length = 0;
         if (!keywordWarned) {
@@ -577,37 +572,32 @@ async function runBlendedSearch(
   }
 }
 
-// One pass per prompt term over the FTS index: a term qualifies only when
-// at most KEYWORD_MAX_DF distinct MEMORIES (not rows) contain it; a
-// qualifying term then credits every memory it matches, split by the
-// shape rule (strong vs plain) on the ORIGINAL prompt token. Corroboration
-// cosines are batch-computed for exactly the candidate set - the memory's
-// best cosine against its document/chunk vectors, which exists for every
-// indexed memory whether or not it made the semantic top-k (the whole
-// point: plain-word admission has to ask this of memories the KNN never
-// returned, and this is the one session that holds the query vector).
+// One FTS pass per id-token prompt term over the FTS index: a term whose
+// ORIGINAL token is not an id token (see isIdToken in src/embed/keyword.ts)
+// is never queried, never counted and never credits anything; an id term
+// qualifies only when at most KEYWORD_MAX_DF distinct MEMORIES (not rows)
+// contain it, and a qualifying term then credits every memory it matches.
+// Per-prompt keyword work is therefore exactly two FTS reads (df count +
+// rows) per id token - no embedding, no cosine batch.
 function collectKeywordMatches(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   store: any,
-  queryVec: number[],
   prompt: string,
   byId: Map<string, Memory>,
   out: KeywordHit[],
-  model: string,
 ): void {
   const terms = extractKeywordTerms(prompt);
   if (terms.length === 0) return;
   interface Match {
-    strongTerms: string[];
-    matchedTerms: string[];
+    idTerms: string[];
     bm25: number;
   }
   const perId = new Map<string, Match>();
   for (const t of terms) {
+    if (!isIdToken(t.term)) continue;
     const query = quotePhrase(t.phrase);
     const df = store.ftsDocCount(query);
     if (df === 0 || df > KEYWORD_MAX_DF) continue;
-    const strong = isStrongTerm(t.term);
     for (const row of store.ftsMatch(query, KEYWORD_ROW_CAP) as {
       id: string;
       chunkIndex: number;
@@ -615,39 +605,18 @@ function collectKeywordMatches(
     }[]) {
       let match = perId.get(row.id);
       if (!match) {
-        match = { strongTerms: [], matchedTerms: [], bm25: row.score };
+        match = { idTerms: [], bm25: row.score };
         perId.set(row.id, match);
       }
-      if (!match.matchedTerms.includes(t.phrase)) {
-        match.matchedTerms.push(t.phrase);
-        if (strong) match.strongTerms.push(t.phrase);
-      }
+      if (!match.idTerms.includes(t.phrase)) match.idTerms.push(t.phrase);
       if (row.score < match.bm25) match.bm25 = row.score;
     }
   }
   if (perId.size === 0) return;
-  const ids = [...perId.keys()];
-  // Corroboration cosines over the SAME embedding space the semantic search
-  // used (model-tag-filtered exactly like search()/searchChunks()): a
-  // stale-model memory gets null - "no corroboration available" - rather
-  // than a meaningless cross-space cosine.
-  const cosines = new Map<string, number>(
-    (store.cosinesForIds(queryVec, ids, model) as {
-      id: string;
-      similarity: number;
-    }[]).map((c) => [c.id, c.similarity]),
-  );
-  for (const id of ids) {
+  for (const [id, match] of perId) {
     const memory = byId.get(id);
     if (!memory) continue; // index row for a memory not in this call's set
-    const match = perId.get(id)!;
-    out.push({
-      memory,
-      strongTerms: match.strongTerms,
-      matchedTerms: match.matchedTerms,
-      bm25: match.bm25,
-      cosine: cosines.has(id) ? (cosines.get(id) as number) : null,
-    });
+    out.push({ memory, idTerms: match.idTerms, bm25: match.bm25 });
   }
   out.sort((a, b) => a.bm25 - b.bm25);
 }
@@ -661,15 +630,15 @@ async function semanticSearch(
   // Pure semantic caller (MCP memory_search, resolveConfidence): the
   // keyword pass never runs here, so this path costs exactly what it costed
   // before the keyword path existed.
-  const { semantic } = await runBlendedSearch(prompt, memories, memoryDir, k, null);
+  const { semantic } = await runBlendedSearch(prompt, memories, memoryDir, k, false);
   return semantic;
 }
 
 // resolveBlended's default search entry point: one store open and one query
 // embedding (or query-cache hit) per prompt, shared by the semantic KNN and
-// the keyword pass. `MEMORY_ROUTER_KEYWORD=off` skips the keyword config
-// entirely and passes null - the search then takes the byte-identical
-// pre-keyword code path (nothing keyword-related even reads the FTS table).
+// the keyword pass. `MEMORY_ROUTER_KEYWORD=off` skips the keyword pass
+// entirely - the search then takes the byte-identical pre-keyword code path
+// (nothing keyword-related even reads the FTS table).
 async function blendedSearch(
   prompt: string,
   memories: Memory[],
@@ -682,7 +651,7 @@ async function blendedSearch(
     memories,
     memoryDir,
     k,
-    cfg.enabled ? cfg : null,
+    cfg.enabled,
   );
   return { semantic, keyword };
 }

@@ -393,14 +393,6 @@ interface FtsMatchRow {
   score: number;
 }
 
-// Best query cosine (same 1 - distance/2 scale as search(), so directly
-// comparable to a semantic score) between the query vector and one memory's
-// document/chunk vectors.
-interface IdSimilarity {
-  id: string;
-  similarity: number;
-}
-
 function openIndex(opts: IndexStoreOptions): {
   // Stores the embedding under `model`. Readers that pass an
   // `expectedModel` to getEmbedding/search reject rows whose stored model
@@ -459,19 +451,6 @@ function openIndex(opts: IndexStoreOptions): {
   listFtsIds: () => string[];
   ftsDocCount: (phrase: string) => number;
   ftsMatch: (phrase: string, limit: number) => FtsMatchRow[];
-  // Best cosine for each of `ids` between a query vector and that memory's
-  // document vector / chunk vectors (the MAX over all of them, on search()'s
-  // exact 1 - distance/2 scale, computed with sqlite-vec's own
-  // vec_distance_cosine so the numbers are directly comparable to a
-  // semanticSearch score). Stale-model rows never contribute. This lets the
-  // keyword gate corroborate a candidate that fell OUTSIDE the semantic
-  // top-k without embedding the prompt a second time (the caller already
-  // holds the query vector from the same store session).
-  cosinesForIds: (
-    queryEmbedding: number[],
-    ids: string[],
-    expectedModel?: string,
-  ) => IdSimilarity[];
   // Count of `entries` rows whose `model` is NULL or mismatches the
   // argument. Surfaces "you ran with model A, the index has model B" so
   // CLI callers can warn the user without re-running their own probes.
@@ -1159,94 +1138,6 @@ function openIndex(opts: IndexStoreOptions): {
     }
   }
 
-  // Best-cosine lookups for keyword corroboration (see the interface docs).
-  // Uses sqlite-vec's own vec_distance_cosine scalar + the same
-  // 1 - distance/2 mapping as search()/searchChunks(), so a corroboration
-  // cosine is directly comparable to a semanticSearch score and to the
-  // blend's relevance floor. Per-id instead of one IN(...) query: the
-  // candidate set is already bounded by KEYWORD_MAX_DF per qualifying term.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let _cosineDocStmt: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let _cosineDocModelStmt: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let _cosineChunkStmt: any = null;
-  function cosineDocStmt() {
-    if (!_cosineDocStmt) {
-      _cosineDocStmt = db.prepare(`
-        SELECT vec_distance_cosine(?, vec.embedding) AS distance
-        FROM vec JOIN entries ON entries.rowid = vec.rowid
-        WHERE entries.id = ?
-      `);
-    }
-    return _cosineDocStmt;
-  }
-  function cosineDocModelStmt() {
-    if (!_cosineDocModelStmt) {
-      _cosineDocModelStmt = db.prepare(`
-        SELECT vec_distance_cosine(?, vec.embedding) AS distance
-        FROM vec JOIN entries ON entries.rowid = vec.rowid
-        WHERE entries.id = ? AND entries.model = ?
-      `);
-    }
-    return _cosineDocModelStmt;
-  }
-  function cosineChunkStmt() {
-    if (!_cosineChunkStmt) {
-      _cosineChunkStmt = db.prepare(`
-        SELECT vec_distance_cosine(?, chunk_vec.embedding) AS distance
-        FROM chunk_vec JOIN chunks ON chunks.rowid = chunk_vec.rowid
-        WHERE chunks.id = ? AND chunks.model = ?
-      `);
-    }
-    return _cosineChunkStmt;
-  }
-
-  function cosinesForIds(
-    queryEmbedding: number[],
-    ids: string[],
-    expectedModel?: string,
-  ): IdSimilarity[] {
-    if (dimensions === null || queryEmbedding.length !== dimensions || ids.length === 0) {
-      return [];
-    }
-    if (!vecTableExists && !tableExists('vec')) return []; // nothing embedded yet
-    const blob = toBlob(queryEmbedding);
-    // Chunk vectors are only comparable when model-tagged like every other
-    // read path (a NULL/pre-v2 or different-model row never scores), so the
-    // chunk side is only consulted when an expected model was supplied.
-    const chunkVecReady =
-      expectedModel !== undefined &&
-      chunkTablesReady &&
-      (chunkVecTableExists || tableExists('chunk_vec'));
-    if (chunkVecReady) chunkVecTableExists = true;
-    const out: IdSimilarity[] = [];
-    for (const id of ids) {
-      let bestDistance: number | null = null;
-      const docRow = (
-        expectedModel === undefined
-          ? (cosineDocStmt().get(blob, id) as { distance: number } | undefined)
-          : (cosineDocModelStmt().get(blob, id, expectedModel) as
-              | { distance: number }
-              | undefined)
-      );
-      if (docRow) bestDistance = docRow.distance;
-      if (chunkVecReady) {
-        for (const r of cosineChunkStmt().all(blob, id, expectedModel) as {
-          distance: number;
-        }[]) {
-          if (bestDistance === null || r.distance < bestDistance) {
-            bestDistance = r.distance;
-          }
-        }
-      }
-      if (bestDistance !== null) {
-        out.push({ id, similarity: Math.max(0, 1 - bestDistance / 2) });
-      }
-    }
-    return out;
-  }
-
   const countStaleModelStmt = db.prepare(
     'SELECT COUNT(*) AS n FROM entries WHERE model IS NULL OR model != ?',
   );
@@ -1515,7 +1406,6 @@ function openIndex(opts: IndexStoreOptions): {
     listFtsIds,
     ftsDocCount,
     ftsMatch,
-    cosinesForIds,
     getCachedQuery,
     putCachedQuery,
     cacheSize,

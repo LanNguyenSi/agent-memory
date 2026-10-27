@@ -15,7 +15,6 @@ const {
 const { semanticSearch, blendedSearch } = require('./embed/indexer');
 const {
   loadKeywordConfig,
-  admitsKeywordCandidate,
   keywordReason,
   KEYWORD_MAX_HITS,
   KEYWORD_ADMISSION_OFFSET,
@@ -107,8 +106,8 @@ function dedupeAndRank(hits: GateHit[], maxHits: number): GateHit[] {
 // The seam accepts BOTH result shapes: a bare array of semantic hits (the
 // pre-keyword shape every existing fake returns, treated as "no keyword
 // matches") and the blendedSearch result { semantic, keyword } that carries
-// the FTS keyword candidates (each with its shape split, best bm25 and
-// corroboration cosine) alongside the semantic hits.
+// the FTS keyword candidates (each an id-token match with its matched
+// tokens and best bm25) alongside the semantic hits.
 interface SemanticSearchHit {
   memory: Memory;
   score: number;
@@ -116,10 +115,8 @@ interface SemanticSearchHit {
 
 interface KeywordSearchHit {
   memory: Memory;
-  strongTerms: string[];
-  matchedTerms: string[];
+  idTerms: string[];
   bm25: number;
-  cosine: number | null;
 }
 
 type SearchOutcome =
@@ -213,10 +210,10 @@ async function resolveBlended(
   const semanticK = Math.max(maxHits, Math.round(weights.candidateK));
   let semanticHits: { memory: Memory; score: number }[] = [];
   // Keyword candidates from the SAME search session as the semantic hits
-  // (FTS5 matches with their shape split, best bm25 and corroboration
-  // cosine, see src/embed/indexer.ts blendedSearch). Stays empty when the
-  // keyword path is off, the index predates the FTS table / has no FTS
-  // rows, or nothing matched - every branch below is then inert.
+  // (id-token FTS5 matches with their best bm25, see src/embed/indexer.ts
+  // blendedSearch). Stays empty when the keyword path is off, the index
+  // predates the FTS table / has no FTS rows, or nothing matched - every
+  // branch below is then inert.
   let keywordMatches: KeywordSearchHit[] = [];
   try {
     const outcome = await deps.semanticSearch(ctx.prompt, memories, memoryDir, semanticK);
@@ -297,19 +294,17 @@ async function resolveBlended(
   if (!keywordConfig.enabled) keywordMatches = [];
   // Admissions: memories with NO semantic hit above the floor, at most
   // KEYWORD_MAX_HITS per prompt, best bm25 first (keywordMatches arrives
-  // sorted that way from the search layer). A memory that DOES have an
-  // above-floor semantic hit is not keyword-only; it takes the boost path
-  // below instead. The admission predicate itself (strong match admits;
-  // plain word needs corroboration: cosine >= the corroboration floor OR
-  // >= 2 qualifying matched terms) lives in src/embed/keyword.ts.
+  // sorted that way from the search layer). Every candidate is an id-token
+  // match - the search layer queries nothing else (see isIdToken in
+  // src/embed/keyword.ts) - so every one of them admits. A memory that DOES
+  // have an above-floor semantic hit is not keyword-only; it takes the
+  // boost path below instead.
   const semanticHitIds = new Set(semanticHits.map((h) => h.memory.id));
   const admitted: KeywordSearchHit[] = [];
   for (const candidate of keywordMatches) {
     if (admitted.length >= KEYWORD_MAX_HITS) break;
     if (semanticHitIds.has(candidate.memory.id)) continue;
-    if (admitsKeywordCandidate(candidate, keywordConfig.corroborationFloor)) {
-      admitted.push(candidate);
-    }
+    admitted.push(candidate);
   }
   const admittedById = new Map<string, KeywordSearchHit>(
     admitted.map((a) => [a.memory.id, a]),
@@ -363,14 +358,11 @@ async function resolveBlended(
   // keeps working exactly as it did before this change.
   const toolHits: GateHit[] = ctx.tool ? toolGate.evaluate(ctx, memories) : [];
 
-  // Semantic hits ABOVE the floor that also match a strong qualifying term
-  // get + keywordBoost (exact-token evidence breaking the tie between two
-  // genuine semantic matches); plain-word matches never boost an
-  // above-floor hit (the semantic score already carries them).
-  const strongMatchById = new Map<string, KeywordSearchHit>(
-    keywordMatches
-      .filter((m) => m.strongTerms.length > 0)
-      .map((m) => [m.memory.id, m]),
+  // Semantic hits ABOVE the floor that also match an id token get
+  // + keywordBoost (exact-token evidence breaking the tie between two
+  // genuine semantic matches).
+  const idMatchById = new Map<string, KeywordSearchHit>(
+    keywordMatches.map((m) => [m.memory.id, m]),
   );
 
   const candidateIds = new Set<string>([
@@ -414,10 +406,10 @@ async function resolveBlended(
       reasonParts.push(keywordReason(keywordOnly));
       gate = 'keyword';
     } else {
-      const strongMatch = strongMatchById.get(id);
-      if (strongMatch) {
+      const idMatch = idMatchById.get(id);
+      if (idMatch) {
         keywordBoost = keywordConfig.keywordBoost;
-        reasonParts.push(keywordReason(strongMatch));
+        reasonParts.push(keywordReason(idMatch));
       }
     }
 

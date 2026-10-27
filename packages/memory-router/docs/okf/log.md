@@ -1,5 +1,19 @@
 # Bundle log
 
+- 2026-10-27T07:01:37Z, keyword gate narrowed to identifier tokens only:
+  the shape rule and the plain-word admission routes (cosine
+  corroboration, the 2-term route, `MEMORY_ROUTER_KEYWORD_CORROBORATION`)
+  are gone; `isIdToken` in `keyword.ts` (ASCII alnum run, 6+ chars, one
+  letter and one digit) is the only way a prompt token reaches the FTS
+  query, and the store's `cosinesForIds` batch was removed with them.
+  Rewrote `score-blend-resolver.md` (admissions/boost section now states
+  the id rule, corroboration removed; router citations re-pointed) and
+  `semantic-search-silent-noop.md` (keyword paragraph: id-only query
+  sentence, wrapper passes `keywordEnabled: false`; `router.ts`,
+  `indexer.ts` and `index-store.ts` citations re-pointed for the removed
+  lines); re-verified `gate-composition-and-dedup.md` and
+  `native-deps-and-ci-smoke.md` (claims unchanged, their `router.ts` and
+  `index-store.ts` citations re-pointed for the line shift).
 - 2026-10-27T06:27:22Z, FTS5 keyword path (index schema v4):
   `semanticSearch` is now a wrapper over the shared `runBlendedSearch`
   engine, `blendedSearch` adds the keyword pass, `resolveBlended` admits

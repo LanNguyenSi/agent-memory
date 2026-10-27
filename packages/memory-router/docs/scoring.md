@@ -14,7 +14,7 @@ for the headline defaults this document backs.
 | **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory, not a standalone full-score hit |
 | **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
 | **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker |
-| **Keyword evidence** (schema v4) | SQLite FTS5 match of rare exact tokens from the prompt (task ids, tags, identifiers) against name/description/chunk text | Two roles, both bounded: it can admit a keyword-only memory at the floor edge (gate `keyword`), and it can lift an above-floor memory by a flat `+0.02`; it never rescues a below-floor semantic score. See [The keyword gate](#the-keyword-gate-schema-v4) |
+| **Keyword evidence** (schema v4) | SQLite FTS5 match of IDENTIFIER tokens from the prompt (task ids like `4e7729ab`, build tags like `b11905`) against name/description/chunk text; only tokens passing the id rule are queried at all | Two roles, both bounded: it can admit a keyword-only memory at the floor edge (gate `keyword`), and it can lift an above-floor memory by a flat `+0.02`; it never rescues a below-floor semantic score. See [The keyword gate](#the-keyword-gate-schema-v4) |
 
 The semantic score is one number per memory: the better of the memory's
 document vector (`name` + `description` + body, cut at 8,000 characters)
@@ -41,60 +41,64 @@ accepted.
 
 ## The keyword gate (schema v4)
 
-Embeddings blur exact tokens: a task id like `4e7729ab`, a tag like
-`b11905`, or an identifier like `MTPLX` is one rare word among thousands
-and often scores below the relevance floor. The keyword gate adds an
-exact-token path over the FTS5 index (`chunks_fts`, built by
-`memory-router index`; see
+Embeddings blur exact identifiers: a task id like `4e7729ab` or a build
+tag like `b11905` is one rare token among thousands and often scores below
+the relevance floor. The keyword gate adds an exact-token path over the
+FTS5 index (`chunks_fts`, built by `memory-router index`; see
 [commands.md](commands.md#building-the-embedding-index)) without touching
 the calibrated blend: a keyword hit can never lift a below-floor semantic
 match, and the strongest thing it does to an above-floor memory is a flat
 `+0.02`.
 
+Plain words are deliberately excluded from the keyword path: rare German
+and English words and product names (`strata`, `rein`, `bringen`,
+`JavaScript`, `WLAN`, `IPv6`) are exactly as rare in a corpus as real
+ids, and cosine cannot separate them on bge-m3 (unrelated memories score
+0.69 to 0.78), so admitting anything but ids trades one recall win for
+many precision losses.
+
 How a prompt token qualifies:
 
-- The prompt is split on whitespace; each token's alphanumeric pieces
-  form a quoted FTS phrase (every operator character is gone, so nothing
-  can inject FTS syntax), common de/en stopwords are dropped, and each
-  piece is also checked as a standalone term.
-- A term only counts when it is **rare**: it appears in at most 12
-  distinct memories (`KEYWORD_MAX_DF`). A term in 13+ memories carries no
-  locating signal and is skipped.
-- A token is **strong** by shape (checked on the original token, before
-  case folding): contains a digit (`4e7729ab`), an internal
-  lower-to-upper transition (`MTPLX`, `OpenAI`), an inner `-`, `_` or `.`
-  (`Bonsai-Baum`, `config.yaml`), or is 3+ letters all uppercase (`FTS`,
-  `PR`... but `PR` is only 2, so plain). Everything else is **plain**.
+- The prompt is split on whitespace; edge punctuation is trimmed and the
+  resulting ORIGINAL token must pass the **id rule**: a single run of
+  ASCII letters and digits only (`-`, `_`, `.`, `/` or any other
+  character disqualifies it), at least `KEYWORD_MIN_ID_LENGTH` (6)
+  characters long, with at least one letter and at least one digit.
+  `4e7729ab`, `b11905`, `a1b2c3`, `base64` pass; `IPv6`, `arm64`, `S12`
+  (too short), `UTF-8`, `v0.7.4`, `studio-tb`, `finish_reason`
+  (separators, and neither part of a hyphenated word is checked),
+  `JavaScript`, `MTPLX`, `abcdef` (no digit) and `123456` (no letter)
+  do not.
+- A non-id token is never FTS-queried, never counted, and can never admit
+  or boost; per prompt the keyword pass costs exactly two FTS reads per
+  id token.
+- An id token only counts when it is **rare**: it appears in at most 12
+  distinct memories (`KEYWORD_MAX_DF`). An id copy-pasted through 13+
+  memories carries no locating signal and is skipped.
 
 Admission (`src/embed/keyword.ts`), for memories with **no** above-floor
 semantic hit:
 
-- A strong-term match is admitted on its own: nobody pastes a task id or
-  an identifier into a prompt by accident.
-- A plain-word match is admitted only with corroboration: the memory's
-  cosine to the prompt (its document/chunk best, computed for the
-  candidate set whether or not it made the semantic top-k) is at least
-  the corroboration floor (`MEMORY_ROUTER_KEYWORD_CORROBORATION`, default
-  `0.70`) **or** at least 2 qualifying terms matched.
+- An id-token match is admitted on its own: nobody pastes a task id into
+  a prompt by accident. This is the only admission route there is.
 - At most **2** keyword-only admissions per prompt, best bm25 first.
 
 Scoring: an admitted memory blends at `minSemanticScore + 0.01` (floor
 edge: enough to enter the ranking, never enough to outrank a real
-semantic hit) with gate `keyword` and reason `keyword match (strong: X)`
-or `keyword match (corroborated: X)`. A memory that already has an
-above-floor semantic hit and also matches a strong token keeps gate
-`confidence` and gains `keywordBoost` (`MEMORY_ROUTER_KEYWORD_BOOST`,
-default `0.02`) plus the keyword reason. In the degraded case (no
-semantic hits at all) admitted keyword memories take the first slots
-ahead of the topic-only output, which is otherwise unchanged.
+semantic hit) with gate `keyword` and reason `keyword match (id: X)`. A
+memory that already has an above-floor semantic hit and also matches an
+id token keeps gate `confidence` and gains `keywordBoost`
+(`MEMORY_ROUTER_KEYWORD_BOOST`, default `0.02`) plus the keyword reason.
+In the degraded case (no semantic hits at all) admitted keyword memories
+take the first slots ahead of the topic-only output, which is otherwise
+unchanged.
 
 Env knobs (separate from the `MEMORY_ROUTER_BLEND_*` namespace; invalid
 values fall back to defaults): `MEMORY_ROUTER_KEYWORD=off` disables the
 whole path (the hook behaves byte-identically to the pre-keyword
-resolver), `MEMORY_ROUTER_KEYWORD_CORROBORATION` and
-`MEMORY_ROUTER_KEYWORD_BOOST` adjust the two numbers above. The keyword
-pass never turns a working search into a failed one: any FTS error
-degrades to "no keyword matches" with one stderr line
+resolver) and `MEMORY_ROUTER_KEYWORD_BOOST` adjusts the boost above. The
+keyword pass never turns a working search into a failed one: any FTS
+error degrades to "no keyword matches" with one stderr line
 (`docs/okf/semantic-search-silent-noop.md`).
 
 ## Degradation and the Tool Gate

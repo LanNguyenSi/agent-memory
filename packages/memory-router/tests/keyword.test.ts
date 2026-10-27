@@ -1,6 +1,6 @@
 // Unit tests for src/embed/keyword.ts: the keyword path's pure logic -
-// prompt tokenizing/sanitizing, the shape rule (identifier vs word), the
-// env-backed config, and the admission predicate. The FTS wiring (store +
+// prompt tokenizing/sanitizing, the id rule (identifier vs word), the
+// env-backed config, and the reason text. The FTS wiring (store +
 // rebuild + router) is covered in tests/keyword-index.test.ts and
 // tests/keyword-gate.test.ts.
 
@@ -10,60 +10,120 @@ const assert = require('node:assert/strict');
 const {
   KEYWORD_MAX_DF,
   KEYWORD_MAX_HITS,
-  KEYWORD_CORROBORATION_DEFAULT,
+  KEYWORD_MIN_ID_LENGTH,
   KEYWORD_BOOST_DEFAULT,
   loadKeywordConfig,
   extractKeywordTerms,
-  isStrongTerm,
+  isIdToken,
   quotePhrase,
-  admitsKeywordCandidate,
   keywordReason,
 } = require('../src/embed/keyword');
 
-test('exported constants: df cap 12, max admissions 2, corroboration 0.70, boost 0.02', () => {
+test('exported constants: df cap 12, max admissions 2, min id length 6, boost 0.02', () => {
   assert.equal(KEYWORD_MAX_DF, 12);
   assert.equal(KEYWORD_MAX_HITS, 2);
-  assert.equal(KEYWORD_CORROBORATION_DEFAULT, 0.7);
+  assert.equal(KEYWORD_MIN_ID_LENGTH, 6);
   assert.equal(KEYWORD_BOOST_DEFAULT, 0.02);
 });
 
-// --- The shape rule (AC4) -------------------------------------------------
+// --- The id rule (AC1) ------------------------------------------------------
+//
+// A token qualifies only as a single ASCII letter/digit run, at least
+// KEYWORD_MIN_ID_LENGTH characters, with at least one letter AND at least
+// one digit. One named case per example from the rule's specification.
 
-test('shape rule: 4e7729ab, b11905, MTPLX, studio-tb, deliverableRepo, memory_router, v0.7.4 are strong', () => {
-  assert.equal(isStrongTerm('4e7729ab'), true, 'contains a digit');
-  assert.equal(isStrongTerm('b11905'), true, 'contains a digit');
-  assert.equal(isStrongTerm('MTPLX'), true, 'ALL CAPS, 3+ letters');
-  assert.equal(isStrongTerm('studio-tb'), true, 'inner -');
-  assert.equal(isStrongTerm('deliverableRepo'), true, 'internal capital');
-  assert.equal(isStrongTerm('memory_router'), true, 'inner _');
-  assert.equal(isStrongTerm('v0.7.4'), true, 'digit + inner .');
+test('id rule: 4e7729ab qualifies (alnum run, 8 chars, letters and digits)', () => {
+  assert.equal(isIdToken('4e7729ab'), true);
 });
 
-test('shape rule: strata, bonsai and Strata are plain words, not identifiers', () => {
-  assert.equal(isStrongTerm('strata'), false);
-  assert.equal(isStrongTerm('bonsai'), false);
-  assert.equal(
-    isStrongTerm('Strata'),
-    false,
-    'a LEADING capital is not an internal lower→upper transition and not ALL CAPS',
-  );
+test('id rule: b11905 qualifies (6 chars, one letter, five digits)', () => {
+  assert.equal(isIdToken('b11905'), true);
 });
 
-test('shape rule: Bonsai-Baum IS strong by the rule (inner -), documented, not fixed away', () => {
-  // The rule keys on SHAPE; `Bonsai-Baum` has an inner `-`, so it reads as
-  // an identifier. What keeps the "Wie pflege ich einen Bonsai-Baum"
-  // negative control quiet is NOT the shape rule but the phrase query:
-  // `Bonsai-Baum` becomes the FTS phrase "bonsai baum", which only matches
-  // ADJACENT words - on a corpus where no memory spells the compound out,
-  // it matches nothing (pinned end-to-end in tests/keyword-index.test.ts).
-  assert.equal(isStrongTerm('Bonsai-Baum'), true);
+test('id rule: a1b2c3 qualifies (6 chars, alternating letters and digits)', () => {
+  assert.equal(isIdToken('a1b2c3'), true);
 });
 
-test('shape rule: edge cases - two-letter caps plain, lowercase-with-inner-cap strong, trailing punctuation token trimmed by the tokenizer', () => {
-  assert.equal(isStrongTerm('AB'), false, 'ALL CAPS needs 3+ letters');
-  assert.equal(isStrongTerm('aBc'), true, 'lower→upper inside the word');
-  assert.equal(isStrongTerm('strata'), false);
-  assert.equal(isStrongTerm(''), false);
+test('id rule: base64 qualifies (6 chars, letters then digits)', () => {
+  assert.equal(isIdToken('base64'), true);
+});
+
+test('id rule: IPv6 does not qualify (only 4 characters)', () => {
+  assert.equal(isIdToken('IPv6'), false);
+});
+
+test('id rule: arm64 does not qualify (only 5 characters)', () => {
+  assert.equal(isIdToken('arm64'), false);
+});
+
+test('id rule: UTF-8 does not qualify (separator character)', () => {
+  assert.equal(isIdToken('UTF-8'), false);
+});
+
+test('id rule: v0.7.4 does not qualify (separator characters)', () => {
+  assert.equal(isIdToken('v0.7.4'), false);
+});
+
+test('id rule: studio-tb does not qualify (inner hyphen)', () => {
+  assert.equal(isIdToken('studio-tb'), false);
+});
+
+test('id rule: finish_reason does not qualify (inner underscore)', () => {
+  assert.equal(isIdToken('finish_reason'), false);
+});
+
+test('id rule: JavaScript does not qualify (letters only, no digit)', () => {
+  assert.equal(isIdToken('JavaScript'), false);
+});
+
+test('id rule: WLAN does not qualify (letters only, and short)', () => {
+  assert.equal(isIdToken('WLAN'), false);
+});
+
+test('id rule: MTPLX does not qualify (letters only)', () => {
+  assert.equal(isIdToken('MTPLX'), false);
+});
+
+test('id rule: deliverableRepo does not qualify (letters only)', () => {
+  assert.equal(isIdToken('deliverableRepo'), false);
+});
+
+test('id rule: S12 does not qualify (only 3 characters)', () => {
+  assert.equal(isIdToken('S12'), false);
+});
+
+test('id rule: 123456 does not qualify (digits only, no letter)', () => {
+  assert.equal(isIdToken('123456'), false);
+});
+
+test('id rule: abcdef does not qualify (letters only, no digit)', () => {
+  assert.equal(isIdToken('abcdef'), false);
+});
+
+test('id rule: Bonsai-Baum does not qualify, and neither do its parts Bonsai and Baum', () => {
+  assert.equal(isIdToken('Bonsai-Baum'), false, 'inner hyphen');
+  assert.equal(isIdToken('Bonsai'), false, 'the parts are no id tokens either');
+  assert.equal(isIdToken('Baum'), false);
+});
+
+test('id rule: strata-builds does not qualify, and neither do its parts strata and builds', () => {
+  assert.equal(isIdToken('strata-builds'), false, 'inner hyphen');
+  assert.equal(isIdToken('strata'), false, 'the parts are no id tokens either');
+  assert.equal(isIdToken('builds'), false);
+});
+
+test('id rule: separator runs that carry letters AND digits do not qualify (task-4e77, b11905_x, a1.2b3c4, a1/b2c3)', () => {
+  assert.equal(isIdToken('task-4e77'), false, 'hyphen inside an otherwise id-shaped run');
+  assert.equal(isIdToken('b11905_x'), false, 'underscore');
+  assert.equal(isIdToken('a1.2b3c4'), false, 'dot');
+  assert.equal(isIdToken('a1/b2c3d4'), false, 'slash');
+});
+
+test('id rule: empty and non-ASCII inputs do not qualify', () => {
+  assert.equal(isIdToken(''), false);
+  assert.equal(isIdToken('baum12'), true, 'sanity: the minimal 6-char alnum id');
+  assert.equal(isIdToken('bäum12'), false, 'non-ASCII letter is not [A-Za-z]');
+  assert.equal(isIdToken('baum١٢'), false, 'non-ASCII digit is not [0-9]');
 });
 
 // --- Tokenizer / sanitizer (AC2 building blocks) ---------------------------
@@ -103,11 +163,18 @@ test('tokenizer: empty prompt, whitespace-only prompt and pure punctuation/emoji
   assert.deepEqual(extractKeywordTerms('!!! ??? --- ... 🎉🎉'), []);
 });
 
-test('tokenizer: the shape-rule token keeps the original case and strips edge punctuation, the phrase is lowercased', () => {
-  const terms = extractKeywordTerms('deploy MTPLX and "MTPLX" again (MTPLX)');
-  const mtplx = terms.filter((t: { phrase: string }) => t.phrase === 'mtplx');
-  assert.equal(mtplx.length, 1, 'deduped across the quoted/parenthesized spellings');
-  assert.equal(mtplx[0].term, 'MTPLX', 'original token case kept for the shape rule');
+test('tokenizer: the id-rule token keeps the original case and strips edge punctuation, the phrase is lowercased', () => {
+  const terms = extractKeywordTerms('task "4e7729ab" again (4e7729ab)');
+  const id = terms.filter((t: { phrase: string }) => t.phrase === '4e7729ab');
+  assert.equal(id.length, 1, 'deduped across the quoted/parenthesized spellings');
+  assert.equal(id[0].term, '4e7729ab', 'original token case kept for the id rule');
+  assert.equal(isIdToken(id[0].term), true, 'the kept token is the queryable one');
+});
+
+test('tokenizer: multi-piece words never yield id tokens (the rule is asked about the whole token)', () => {
+  for (const t of extractKeywordTerms('fix UTF-8 in studio-tb v0.7.4 Bonsai-Baum')) {
+    assert.equal(isIdToken(t.term), false, `"${t.term}" must never enter the keyword path`);
+  }
 });
 
 test('quotePhrase: wraps in FTS5 double quotes; phrase bodies can never contain a quote to break out of', () => {
@@ -117,88 +184,37 @@ test('quotePhrase: wraps in FTS5 double quotes; phrase bodies can never contain 
   }
 });
 
-// --- Admission predicate (AC1 core) ---------------------------------------
+// --- Reason text -------------------------------------------------------------
 
-function candidate(overrides: Partial<{
-  id: string;
-  strongTerms: string[];
-  matchedTerms: string[];
-  bm25: number;
-  cosine: number | null;
-}> = {}) {
-  return {
-    id: 'c',
-    strongTerms: [] as string[],
-    matchedTerms: ['strata'] as string[],
-    bm25: -1,
-    cosine: null as number | null,
-    ...overrides,
-  };
-}
-
-test('admission: a strong qualifying match admits a memory regardless of cosine', () => {
+test('keywordReason: the single reason form names the matched id tokens', () => {
   assert.equal(
-    admitsKeywordCandidate(candidate({ strongTerms: ['4e7729ab'], cosine: 0.1 }), 0.7),
-    true,
+    keywordReason({ idTerms: ['4e7729ab'] }),
+    'keyword match (id: 4e7729ab)',
   );
   assert.equal(
-    admitsKeywordCandidate(candidate({ strongTerms: ['4e7729ab'], cosine: null }), 0.7),
-    true,
-  );
-});
-
-test('admission: a plain word with cosine exactly at the 0.70 corroboration floor admits; just below does not', () => {
-  assert.equal(admitsKeywordCandidate(candidate({ cosine: 0.7 }), 0.7), true);
-  assert.equal(admitsKeywordCandidate(candidate({ cosine: 0.69 }), 0.7), false);
-});
-
-test('admission: a plain word below the corroboration floor still admits with 2 qualifying matched terms', () => {
-  assert.equal(
-    admitsKeywordCandidate(
-      candidate({ matchedTerms: ['strata', 'schicht'], cosine: 0.2 }),
-      0.7,
-    ),
-    true,
-  );
-});
-
-test('admission: cosine null (no comparable vector at all) never corroborates a single plain word', () => {
-  assert.equal(admitsKeywordCandidate(candidate({ cosine: null }), 0.7), false);
-});
-
-test('keywordReason: strong matches render the strong form, plain corroborated matches the corroborated form', () => {
-  assert.equal(
-    keywordReason({ strongTerms: ['4e7729ab'], matchedTerms: ['4e7729ab'] }),
-    'keyword match (strong: 4e7729ab)',
-  );
-  assert.equal(
-    keywordReason({ strongTerms: [], matchedTerms: ['strata'] }),
-    'keyword match (corroborated: strata)',
+    keywordReason({ idTerms: ['4e7729ab', 'b11905'] }),
+    'keyword match (id: 4e7729ab, b11905)',
   );
 });
 
 // --- Config / env overrides -----------------------------------------------
 
-test('config: all three keyword env vars unset resolves the built-in defaults and enabled=true', () => {
+test('config: the keyword env vars unset resolve the built-in defaults and enabled=true', () => {
   const prev = [
     process.env.MEMORY_ROUTER_KEYWORD,
-    process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION,
     process.env.MEMORY_ROUTER_KEYWORD_BOOST,
   ];
   delete process.env.MEMORY_ROUTER_KEYWORD;
-  delete process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION;
   delete process.env.MEMORY_ROUTER_KEYWORD_BOOST;
   try {
     const cfg = loadKeywordConfig();
     assert.deepEqual(cfg, {
       enabled: true,
-      corroborationFloor: 0.7,
       keywordBoost: 0.02,
     });
   } finally {
     restore('MEMORY_ROUTER_KEYWORD', prev[0]);
-    restore('MEMORY_ROUTER_KEYWORD_CORROBORATION', prev[1]);
-    restore('MEMORY_ROUTER_KEYWORD_BOOST', prev[2]);
+    restore('MEMORY_ROUTER_KEYWORD_BOOST', prev[1]);
   }
 });
 
@@ -218,33 +234,34 @@ test('config: MEMORY_ROUTER_KEYWORD=off disables (trimmed/case-insensitive); any
   }
 });
 
-test('config: corroboration/boost overrides set apply, invalid or negative ones fall back to the defaults (envFloat shape)', () => {
-  const prevC = process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION;
+test('config: boost override set applies, invalid or negative ones fall back to 0.02 (envFloat shape)', () => {
   const prevB = process.env.MEMORY_ROUTER_KEYWORD_BOOST;
   try {
-    process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION = '0.5';
     process.env.MEMORY_ROUTER_KEYWORD_BOOST = '0.1';
-    assert.deepEqual(loadKeywordConfig().corroborationFloor, 0.5);
     assert.deepEqual(loadKeywordConfig().keywordBoost, 0.1);
 
     for (const bad of ['abc', '-1', '']) {
-      process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION = bad;
       process.env.MEMORY_ROUTER_KEYWORD_BOOST = bad;
-      const cfg = loadKeywordConfig();
       assert.equal(
-        cfg.corroborationFloor,
-        KEYWORD_CORROBORATION_DEFAULT,
-        `"${bad}" must fall back to the corroboration default`,
-      );
-      assert.equal(
-        cfg.keywordBoost,
+        loadKeywordConfig().keywordBoost,
         KEYWORD_BOOST_DEFAULT,
         `"${bad}" must fall back to the boost default`,
       );
     }
   } finally {
-    restore('MEMORY_ROUTER_KEYWORD_CORROBORATION', prevC);
     restore('MEMORY_ROUTER_KEYWORD_BOOST', prevB);
+  }
+});
+
+test('config: MEMORY_ROUTER_KEYWORD_CORROBORATION is gone (no longer read by anything)', () => {
+  const prev = process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION;
+  try {
+    process.env.MEMORY_ROUTER_KEYWORD_CORROBORATION = '0';
+    const cfg = loadKeywordConfig();
+    assert.equal(cfg.keywordBoost, 0.02, 'the removed env var must not influence the config');
+    assert.equal('corroborationFloor' in cfg, false, 'the config has no corroboration field');
+  } finally {
+    restore('MEMORY_ROUTER_KEYWORD_CORROBORATION', prev);
   }
 });
 
