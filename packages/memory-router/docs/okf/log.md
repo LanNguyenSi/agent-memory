@@ -1,6 +1,6 @@
 # Bundle log
 
-- 2026-10-27T11:20:00Z, injection budget review fixes: `renderHitsBudgeted`
+- 2026-10-27T09:44:54Z, injection budget review fixes: `renderHitsBudgeted`
   now shortens hits 2 to n before dropping and shortens the top hit last,
   then raises kept hits again top-down; `GateHit` gains `chunkOffset`
   (semantic winner offset, or the FTS row's `char_offset` now returned by
@@ -30,7 +30,7 @@
   `keywordContributedCount` doc comment; no line moved, no claim affected.
   Re-verified and re-stamped `gate-composition-and-dedup.md` and
   `score-blend-resolver.md`.
-- 2026-10-27T08:26:46Z, review round 2 on the keyword path (no design
+- 2026-10-27T08:26:46Z, review fixes on the keyword path (no design
   change): `ftsField` in `indexer.ts` normalizes a non-string frontmatter
   `name` (e.g. `name: 2026`) and a missing `description` before `replaceFts`
   so a rebuild no longer throws on ordinary memories; `resolveBlended` now
