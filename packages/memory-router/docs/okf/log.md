@@ -1,6 +1,6 @@
 # Bundle log
 
-- 2026-10-27T07:01:37Z, keyword gate narrowed to identifier tokens only:
+- 2026-10-27T07:15:20Z, keyword gate narrowed to identifier tokens only:
   the shape rule and the plain-word admission routes (cosine
   corroboration, the 2-term route, `MEMORY_ROUTER_KEYWORD_CORROBORATION`)
   are gone; `isIdToken` in `keyword.ts` (ASCII alnum run, 6+ chars, one
