@@ -317,6 +317,62 @@ test('blendedSearch: a keyword hit carries the index of the chunk that holds the
   }
 });
 
+test('blendedSearch: with several id tokens the keyword hit carries the chunk of the best-bm25 row across all of them', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-router-chunkthread-multi-'));
+  const stub = stubFetch(() => OFF);
+  try {
+    await withProviderEnv(async () => {
+      // The first prompt token (weak) occurs once in chunk 1; the second
+      // (strong) is repeated in chunk 3, which gives it the better bm25.
+      const weak = 'qw4r81ab';
+      const strong = 'zt9k52cd';
+      const body = [
+        para('ALPHA', 1000),
+        `${para('BRAVO', 900)} ${weak}`,
+        para('CHARLIE', 1100),
+        `${para('DELTA', 600)} ${Array.from({ length: 8 }, () => strong).join(' ')}`,
+      ].join('\n\n');
+      writeMemory(dir, 'multi.md', { name: 'Multi id', description: 'two ids', type: 'reference' }, body);
+      await rebuildIndex(dir);
+      const memories: Memory[] = loadMemoriesFromDir(dir);
+      const chunks: MemoryChunk[] = chunkBody(memories[0].body);
+      const weakChunk = chunks.findIndex((c) => c.text.includes(weak));
+      const strongChunk = chunks.findIndex((c) => c.text.includes(strong));
+      assert.ok(weakChunk >= 0 && strongChunk > weakChunk, 'fixture: two different chunks');
+
+      // Ground truth from the FTS table itself: which row has the best bm25.
+      const store = openIndex({
+        path: indexPath(dir),
+        meta: { provider: 'openai', model: MODEL },
+        readonly: true,
+      });
+      let bestChunk = -1;
+      let bestScore = Infinity;
+      try {
+        for (const term of [weak, strong]) {
+          for (const row of store.ftsMatch(`"${term}"`, 10) as { chunkIndex: number; score: number }[]) {
+            if (row.score < bestScore) {
+              bestScore = row.score;
+              bestChunk = row.chunkIndex;
+            }
+          }
+        }
+      } finally {
+        store.close();
+      }
+      assert.equal(bestChunk, strongChunk, 'fixture: the second token holds the best row');
+
+      const outcome = await blendedSearch(`look at ${weak} and ${strong}`, memories, dir, 5);
+      assert.equal(outcome.keyword.length, 1);
+      assert.deepEqual(outcome.keyword[0].idTerms.sort(), [strong, weak].sort());
+      assert.equal(outcome.keyword[0].chunkIndex, strongChunk);
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- hook binary on a real index -------------------------------------------
 
 test('hook, semantic path: the injected text is the matching chunk + description + path, not the body', async () => {
