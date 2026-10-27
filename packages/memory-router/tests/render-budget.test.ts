@@ -524,6 +524,19 @@ test('exactly at the budget: every hit keeps its unbudgeted form, nothing is sho
   assert.deepEqual([...blocksOf(excerptExact).values()].map(formOf), ['excerpt', 'excerpt']);
 });
 
+test('after drops, a top hit that fits the budget exactly keeps its whole form', () => {
+  const tiny = hit(mem('t1', 'short rule'), 0.9);
+  const lower = [hit(longMemory('t2'), 0.8, { chunkIndex: 1 }), hit(longMemory('t3'), 0.7, { chunkIndex: 1 })];
+  const roomy = renderHitsBudgeted([tiny, ...lower], { budgetBytes: 200 });
+  assert.equal(formOf(blocksOf(roomy).get('t1') as string), 'whole');
+  assert.deepEqual([...blocksOf(roomy).keys()], ['t1'], 'fixture: both lower hits are dropped');
+  const exact = injectBytes(roomy);
+  assert.equal(String(exact).length, String(200).length, 'fixture: same digit count as the budget');
+  const out = renderHitsBudgeted([tiny, ...lower], { budgetBytes: exact });
+  assert.equal(formOf(blocksOf(out).get('t1') as string), 'whole', 'size equal to the budget is a fit');
+  assert.equal(out.length, roomy.length);
+});
+
 // --- budget order: the top hit is the last to be shortened -----------------------
 
 function longWithDescription(id: string, descLen: number): Memory {
@@ -593,6 +606,15 @@ test('room freed by a drop is given back to the kept hits: a lower hit is raised
   assert.deepEqual([...blocks.values()].map(formOf), ['excerpt', 'excerpt'], 'r2 is raised back to its excerpt');
   assert.match(out, /1 lower-ranked memory left out/);
   assert.ok(injectBytes(out) <= budget);
+
+  // Raising is allowed to land exactly on the budget: rendering again with a
+  // budget equal to this output's size (same digit count, so the footer text
+  // is the same) gives the same forms.
+  const exact = injectBytes(out);
+  assert.equal(String(exact).length, String(budget).length, 'fixture: the footer prints the same number of digits');
+  const again = renderHitsBudgeted([a, b, c], { budgetBytes: exact });
+  assert.deepEqual([...blocksOf(again).values()].map(formOf), ['excerpt', 'excerpt']);
+  assert.equal(again.length, out.length);
 });
 
 test('raising stops at the first hit that no longer fits: a lower hit never gets room a higher hit still wants', () => {
