@@ -1,6 +1,6 @@
 # Bundle log
 
-- 2026-10-27T09:07:00Z, UserPromptSubmit injection budget: `renderHitsBudgeted`
+- 2026-10-27T09:06:50Z, UserPromptSubmit injection budget: `renderHitsBudgeted`
   (new, `src/render.ts`) injects description + matching chunk + path under a
   byte budget; `GateHit` gains `chunkIndex`, threaded by `resolveBlended`
   from the semantic winner chunk and the keyword hit's best-bm25 row;
