@@ -21,16 +21,16 @@ sources:
 
 # Semantic search's silent-no-op contract, and its loud counterpart
 
-`semanticSearch()` (`packages/memory-router/src/embed/indexer.ts:635-646`)
+`semanticSearch()` (`packages/memory-router/src/embed/indexer.ts:647-658`)
 is designed to return `[]`, not throw, when a corpus is not set up for
 semantic search; since schema v4 it is a thin wrapper over the shared
 engine `runBlendedSearch()`
-(`packages/memory-router/src/embed/indexer.ts:445-584`) with the keyword
+(`packages/memory-router/src/embed/indexer.ts:448-587`) with the keyword
 path disabled, and the contract below covers the wrapper and its
 `blendedSearch()` sibling alike. Since schema v3 it scores each memory as
 the better of its document vector and its best body chunk, so it runs two
 KNN queries (`store.search` and `store.searchChunks`,
-`packages/memory-router/src/embed/indexer.ts:516-517`) and merges them by
+`packages/memory-router/src/embed/indexer.ts:519-520`) and merges them by
 id; both paths are covered by the same contract. Separately, a set of
 integrity and provenance checks in the same subsystem throw instead, and
 what an operator sees for such a throw depends on which caller invoked
@@ -41,10 +41,10 @@ The call sites below are the ones among the hits of
 `rg -n 'semanticSearch\b' packages/memory-router/src` at the time of
 writing (comments, imports, and the definition set aside):
 
-- `resolveBlended()` (`packages/memory-router/src/router.ts:219`), used by
+- `resolveBlended()` (`packages/memory-router/src/router.ts:225`), used by
   the `UserPromptSubmit` hook, MCP `memory_resolve`, and
   `memory-router eval`. Since schema v4 its default search entry point is
-  `blendedSearch()` (`packages/memory-router/src/embed/indexer.ts:653-668`),
+  `blendedSearch()` (`packages/memory-router/src/embed/indexer.ts:665-680`),
   which returns `{ semantic, keyword }` and shares one store open and one
   query embedding with the keyword pass.
 - `resolveConfidence()` (`packages/memory-router/src/router.ts:79`), used
@@ -67,12 +67,12 @@ for a KNN query that itself returns no rows:
 
 | # | Condition | Where checked | stderr |
 |---|---|---|---|
-| 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:453-454` | none |
-| 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:457-464` | one line per process (`missingIndexWarned`, `packages/memory-router/src/embed/indexer.ts:458-459`) |
+| 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:456-457` | none |
+| 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:460-467` | one line per process (`missingIndexWarned`, `packages/memory-router/src/embed/indexer.ts:461-462`) |
 | 3 | Index exists, nothing has ever been embedded into it, and no width is recorded yet (see the `lint --conflicts --semantic` note below) | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:1318` | none |
 | 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:305-308`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:1001-1025`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
 | 5 | Every row inside the KNN window carries a different model tag (or a pre-v2 `NULL` tag) than the caller's model: the window starts at `k` and widens x4 per retry up to sqlite-vec's 4096-row KNN ceiling (`MAX_KNN_K`), and the search stops early once the index is exhausted, so this needs at least that many stale rows nearer to the query than the nearest current-model row | model filter inside the widening loop, `packages/memory-router/src/embed/index-store.ts:1329-1351` (documents) and `:1390-1399` (chunks) | see below |
-| 6 | A returned hit's `id` is not in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:541-560` | none |
+| 6 | A returned hit's `id` is not in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:544-563` | none |
 
 A memory whose chunks are absent or all stale scores on its document
 vector alone: `searchChunks()` returns `[]` when the file has no chunk
@@ -82,10 +82,10 @@ path is silent by design. It can only ever lower the chunk contribution,
 never the document one, so it never produces an empty result on its own.
 
 Row 5 is the path that coincides with the stale-model line
-(`packages/memory-router/src/embed/indexer.ts:478-483`). That line is
+(`packages/memory-router/src/embed/indexer.ts:481-486`). That line is
 written the first time in a process that a call opens the index and finds
 at least one stale-model row in it (`staleModelWarned`,
-`packages/memory-router/src/embed/indexer.ts:479-480`), whether or not
+`packages/memory-router/src/embed/indexer.ts:482-483`), whether or not
 that call's results lost anything to the filter, and it reports a
 corpus-wide count, not which query was affected. Later calls in the same
 process stay silent, and a call that finds no stale rows does not use up
@@ -108,7 +108,7 @@ every other memory out of the top k.
 
 Row 1 is easy to misread as "operator never configured embeddings."
 `resolveProviderConfig({ autoDetectOllama: true })`
-(`packages/memory-router/src/embed/indexer.ts:453`,
+(`packages/memory-router/src/embed/indexer.ts:456`,
 `packages/memory-router/src/embed/provider.ts:199-223`) auto-detects a
 local Ollama endpoint when no provider is set explicitly and no
 `OPENAI_API_KEY` is present
@@ -121,10 +121,10 @@ an explicit misconfiguration.
 The schema v4 keyword pass follows the same silent-no-op contract and
 adds no new way for the search to fail: `semanticSearch()` never runs it
 (the wrapper passes `keywordEnabled: false`,
-`packages/memory-router/src/embed/indexer.ts:635-646`), in
+`packages/memory-router/src/embed/indexer.ts:647-658`), in
 `blendedSearch()` any throw from the whole pass degrades to an empty
 keyword list with one stderr line per process (`keywordWarned`,
-`packages/memory-router/src/embed/indexer.ts:567-577`), the store-level
+`packages/memory-router/src/embed/indexer.ts:570-580`), the store-level
 FTS reads degrade their own errors to empty results and write one visible
 stderr line per process too (`warnFtsFailed` / `ftsWarned`,
 `packages/memory-router/src/embed/index-store.ts:96-102`, so a corrupt or
@@ -168,17 +168,17 @@ from `rg -n 'throw ' packages/memory-router/src/embed/index-store.ts packages/me
 - Fresh-query dimension mismatch, thrown by `putCachedQuery`
   (`packages/memory-router/src/embed/index-store.ts:1291-1295`, message
   starting `cached embedding dimension`), which `semanticSearch` calls at
-  `packages/memory-router/src/embed/indexer.ts:508`, before `search()` at
-  `packages/memory-router/src/embed/indexer.ts:516`.
+  `packages/memory-router/src/embed/indexer.ts:511`, before `search()` at
+  `packages/memory-router/src/embed/indexer.ts:519`.
 - `search()`'s own query-dimension check
   (`packages/memory-router/src/embed/index-store.ts:1319-1323`) and
   `searchChunks()`'s identical one
   (`packages/memory-router/src/embed/index-store.ts:1376-1380`), reached
   only when the query vector came from the query cache
-  (`packages/memory-router/src/embed/indexer.ts:486`), since a freshly
+  (`packages/memory-router/src/embed/indexer.ts:489`), since a freshly
   embedded vector meets `putCachedQuery`'s check first.
 - Embed-call failure: `embedBatch()` rejects, and
-  `packages/memory-router/src/embed/indexer.ts:505-507` catches it and
+  `packages/memory-router/src/embed/indexer.ts:508-510` catches it and
   rethrows it wrapped by `describeEmbedError`.
 
 `upsert`'s throws (`packages/memory-router/src/embed/index-store.ts:962-981`)
@@ -188,22 +188,22 @@ this path: `semanticSearch()` does not write.
 
 ### What each caller does with them
 
-- `resolveBlended()` (`packages/memory-router/src/router.ts:218-231`)
+- `resolveBlended()` (`packages/memory-router/src/router.ts:224-237`)
   catches any throw from the search and degrades to `resolve()`
-  (`packages/memory-router/src/router.ts:324`). The returned hits equal
+  (`packages/memory-router/src/router.ts:330`). The returned hits equal
   the unconfigured case: see [docs/scoring.md "Degradation and the Tool
   Gate"](../scoring.md#degradation-and-the-tool-gate), pinned by the
   tests at `packages/memory-router/tests/blend.test.ts:449` (a thrown
   search) and `packages/memory-router/tests/blend.test.ts:473` (no
   index/provider). stderr does not equal it: the catch interpolates
-  `String(err)` (`packages/memory-router/src/router.ts:229`), so the full
+  `String(err)` (`packages/memory-router/src/router.ts:235`), so the full
   error message, including the rebuild command a provenance error carries
   (`packages/memory-router/src/embed/index-store.ts:639`, `:668`), is
   written on every call that throws.
 - `memory-router test --semantic`
-  (`packages/memory-router/src/cli.ts:776-787`) catches the throw from
+  (`packages/memory-router/src/cli.ts:786-797`) catches the throw from
   `resolveConfidence`, writes a `warning:` line that also interpolates
-  `String(err)` (`packages/memory-router/src/cli.ts:784`), and prints the
+  `String(err)` (`packages/memory-router/src/cli.ts:794`), and prints the
   sync-only hits.
 - MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:80-92`)
   has no catch in its handler: the error leaves the tool handler.
@@ -216,9 +216,9 @@ writing:
 
 - `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:185-189`),
   run by `memory-router index`
-  (`packages/memory-router/src/cli.ts:582-583`). `runIndex` has no catch;
+  (`packages/memory-router/src/cli.ts:592-593`). `runIndex` has no catch;
   the CLI's top-level handler
-  (`packages/memory-router/src/cli.ts:1153-1156`) prints the error and
+  (`packages/memory-router/src/cli.ts:1188-1191`) prints the error and
   exits non-zero, so a provider or legacy-provenance mismatch fails the
   command with the rebuild command in its text.
 - `lint --conflicts --semantic`

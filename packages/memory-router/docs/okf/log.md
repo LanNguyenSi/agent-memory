@@ -1,5 +1,18 @@
 # Bundle log
 
+- 2026-10-27T09:07:00Z, UserPromptSubmit injection budget: `renderHitsBudgeted`
+  (new, `src/render.ts`) injects description + matching chunk + path under a
+  byte budget; `GateHit` gains `chunkIndex`, threaded by `resolveBlended`
+  from the semantic winner chunk and the keyword hit's best-bm25 row;
+  `PreToolUse` keeps `renderHitsAsContext`. `score-blend-resolver.md` gets a
+  section on the chunk index and `gate-composition-and-dedup.md` a paragraph
+  on the two renderers (both gain `src/render.ts` as a source). Every
+  `router.ts`, `cli.ts`, `indexer.ts`, `eval/runner.ts` citation in
+  `gate-composition-and-dedup.md`, `score-blend-resolver.md` and
+  `semantic-search-silent-noop.md` re-pointed for the line shift and
+  re-read against the new lines (claims unchanged);
+  `native-deps-and-ci-smoke.md` only re-verified (its README anchor and
+  claims are unaffected by the README addition under "Usage").
 - 2026-10-27T08:33:57Z, `src/eval/runner.ts`: whitespace-only re-indent of the
   `keywordContributedCount` doc comment; no line moved, no claim affected.
   Re-verified and re-stamped `gate-composition-and-dedup.md` and
