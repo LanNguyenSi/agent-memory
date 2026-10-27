@@ -427,8 +427,11 @@ README's "What the `UserPromptSubmit` hook injects" for the per-hit forms.
 | `MEMORY_ROUTER_INJECT_BUDGET` | Largest injection, in UTF-8 bytes of the rendered markdown. A positive integer. Unset: the default. Empty, `0`, negative, fractional or non-numeric: the default, plus one note on stderr. | `16384` |
 
 Over the budget, hits 2 to n are shortened first, lowest-ranked first, then
-dropped from the bottom, and only then is the top hit shortened; room a drop
-frees is given back to the kept hits, top-down. The top hit is always kept,
+dropped from the bottom, and only then is the top hit shortened. A hit that
+starts whole skips the excerpt form when it is not smaller than the whole body.
+Room a drop frees is given back top-down: each kept hit, best first, is lifted
+to the fullest form at which the output still fits, and a hit that cannot be
+lifted is passed over. The top hit is always kept,
 in its shortest form if need be, even when that alone exceeds the budget. The `PreToolUse` hook ignores the variable and
 keeps injecting full bodies.
 

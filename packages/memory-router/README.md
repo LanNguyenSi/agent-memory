@@ -226,8 +226,13 @@ The whole injection is held to **16,384 bytes** (UTF-8 bytes of the rendered
 text). Over that, hits 2 to n are shortened first, lowest-ranked first (whole
 body, then description + chunk + path, then description + path), then dropped
 from the bottom with a one-line note, and only then is the top hit shortened,
-so the best match keeps its excerpt for as long as it alone fits; room a drop
-frees is given back to the kept hits, top-down. The top hit is never dropped.
+so the best match keeps its excerpt for as long as it alone fits. A hit that
+starts whole skips the excerpt form when that form is not smaller than the
+whole body (a short body with a long description), going straight to
+description + path. Room a drop frees is given back top-down: each kept hit,
+best first, is lifted to the fullest form at which the output still fits, and a
+hit that cannot be lifted is passed over, so a lower hit only gets room the
+hits above it could not use. The top hit is never dropped.
 Shortening works on whole chunks and blocks, never on character offsets. The
 chunker itself splits a line or a code fence that is longer than its
 3,000-character cap, and a fence split that way is reopened and closed so the

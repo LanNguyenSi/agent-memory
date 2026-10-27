@@ -1,5 +1,15 @@
 # Bundle log
 
+- 2026-10-27T11:20:00Z, injection budget raise pass: `renderHitsBudgeted` now
+  gives each hit a ladder of forms (a hit that starts whole skips the excerpt
+  form when it is not smaller than the whole body) and the final raise lifts
+  each kept hit, best first, to the fullest rung that still fits, passing over
+  a hit that cannot be lifted instead of ending the pass. No claim in the
+  concept docs describes that rule; `router.ts` and `render.ts` citations were
+  re-pointed by the diff's line mapping (`ChunkRef` and `keywordChunkRef`
+  moved next to `blendCandidateHit`, `render.ts` gained the ladder helpers)
+  and each cited start and end line was checked to hold the same text as
+  before.
 - 2026-10-27T09:44:54Z, injection budget review fixes: `renderHitsBudgeted`
   now shortens hits 2 to n before dropping and shortens the top hit last,
   then raises kept hits again top-down; `GateHit` gains `chunkOffset`

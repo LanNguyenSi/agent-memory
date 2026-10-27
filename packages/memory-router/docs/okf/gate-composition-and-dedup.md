@@ -39,7 +39,7 @@ allocate result slots differently.
 The two hook callers also differ in how they render their hits, not only in
 which resolver produced them: `UserPromptSubmit` renders through
 `renderHitsBudgeted` (`packages/memory-router/src/hooks/user-prompt-submit.ts:64`,
-`packages/memory-router/src/render.ts:287`), which injects short memories
+`packages/memory-router/src/render.ts:326`), which injects short memories
 whole and long ones as description + matching chunk + path under a byte
 budget, while `PreToolUse` renders through the unbudgeted
 `renderHitsAsContext` (`packages/memory-router/src/hooks/pre-tool-use.ts:31`,
@@ -57,7 +57,7 @@ Two things worth stating explicitly:
   CLI verb's `resolve(ctx, memories, { maxHits })` call
   (`packages/memory-router/src/cli.ts:783`), run whether or not
   `--semantic` is also passed, and `resolveBlended`'s own degraded
-  fallback (`packages/memory-router/src/router.ts:345-346`, `resolve(ctx, memories, { maxHits })`;
+  fallback (`packages/memory-router/src/router.ts:333-334`, `resolve(ctx, memories, { maxHits })`;
   since schema v4 a keyword-admitted memory may take the first slots ahead of that
   output (see score-blend-resolver.md)). That fallback shapes the
   `UserPromptSubmit` hook's injected context, MCP `memory_resolve`'s

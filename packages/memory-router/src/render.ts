@@ -183,6 +183,9 @@ interface PreparedHit {
   chunkIndex: number | undefined;
   chunkOffset: number | undefined;
   blocks: Map<number, string>;
+  // The levels this hit can take, fullest first (see ladderOf). Computed on
+  // first use, which only happens under budget pressure.
+  ladder: number[] | undefined;
   hit: GateHit;
 }
 
@@ -201,6 +204,7 @@ function prepareHit(h: GateHit): PreparedHit {
     chunkIndex: h.chunkIndex,
     chunkOffset: h.chunkOffset,
     blocks: new Map(),
+    ladder: undefined,
     hit: h,
   };
 }
@@ -258,6 +262,32 @@ function blockAt(p: PreparedHit, level: number): string {
   return block;
 }
 
+// The levels a hit can take, fullest first, from its start level down to
+// minimal. A hit that starts whole skips the excerpt level when the excerpt
+// form is not smaller in bytes than the whole body: the excerpt adds the
+// description, a label and the path to text the whole form already holds, so
+// for a short body it is the larger of the two and shortening to it would
+// grow the output.
+function ladderOf(p: PreparedHit): number[] {
+  if (p.ladder !== undefined) return p.ladder;
+  const ladder = [p.startLevel];
+  if (p.startLevel === LEVEL_WHOLE) {
+    if (injectBytes(blockAt(p, LEVEL_EXCERPT)) < injectBytes(blockAt(p, LEVEL_WHOLE))) {
+      ladder.push(LEVEL_EXCERPT);
+    }
+    ladder.push(LEVEL_MINIMAL);
+  } else if (p.startLevel === LEVEL_EXCERPT) {
+    ladder.push(LEVEL_MINIMAL);
+  }
+  p.ladder = ladder;
+  return ladder;
+}
+
+// The next shorter level on the hit's ladder, or undefined at the bottom.
+function shorterLevel(p: PreparedHit, level: number): number | undefined {
+  return ladderOf(p).find((l) => l > level);
+}
+
 function assemble(prepared: PreparedHit[], levels: number[], kept: number, budget: number): string {
   const blocks: string[] = [];
   for (let i = 0; i < kept; i++) blocks.push(blockAt(prepared[i], levels[i]));
@@ -276,14 +306,23 @@ function assemble(prepared: PreparedHit[], levels: number[], kept: number, budge
 //
 // Per hit: whole body when it is short (SHORT_BODY_MAX_CHARS, or
 // FEEDBACK_BODY_MAX_CHARS for feedback), else description + best chunk + path.
-// Over budget, in this order: shorten hits 2..n, lowest-ranked first (whole,
-// then excerpt, then description + path only, one level at a time); drop from
-// the bottom; only then shorten the top hit, so the best match keeps its
-// excerpt for as long as it alone fits; finally raise the kept hits top-down
-// again while the output still fits, since a drop frees more than the
-// overshoot it fixed. The top hit is never dropped: when even its minimal
-// form is over the budget it is emitted in that form anyway. Shortening works
-// on whole blocks and whole chunks, never on character offsets.
+// Each hit has a ladder of levels, fullest first (see ladderOf): whole,
+// excerpt, minimal for a hit that starts whole, with the excerpt rung left out
+// when it is not smaller in bytes than the whole body; excerpt, minimal for a
+// hit that starts as an excerpt.
+//
+// Over budget, in this order: shorten hits 2..n, lowest-ranked first, one rung
+// at a time; drop from the bottom; only then shorten the top hit, so the best
+// match keeps its excerpt for as long as it alone fits; finally give room
+// back. A drop frees more than the overshoot it fixed, so each kept hit,
+// top-down, is lifted to the fullest rung of its ladder at which the output
+// still fits, trying every rung between its start level and its current one,
+// and the pass moves on to the next hit when none fits. A hit is therefore
+// raised before any hit below it can be, and a lower hit only gets a rung the
+// higher ones could not use. The top hit is never dropped: when even its
+// minimal form is over the budget it is emitted in that form anyway.
+// Shortening works on whole blocks and whole chunks, never on character
+// offsets.
 function renderHitsBudgeted(hits: GateHit[], opts: { budgetBytes?: number } = {}): string {
   if (hits.length === 0) return '';
 
@@ -299,11 +338,15 @@ function renderHitsBudgeted(hits: GateHit[], opts: { budgetBytes?: number } = {}
   const sizeNow = (): number => injectBytes(assemble(prepared, levels, kept, budget));
   let size = sizeNow();
 
-  // 1. Shorten the lower-ranked hits (2..n), lowest first, one level at a
+  // 1. Shorten the lower-ranked hits (2..n), lowest first, one rung at a
   //    time. The top hit is not touched yet.
   for (let i = prepared.length - 1; i >= 1 && size > budget; i--) {
-    while (levels[i] < LEVEL_MINIMAL && size > budget) {
-      levels[i]++;
+    for (
+      let next = shorterLevel(prepared[i], levels[i]);
+      next !== undefined && size > budget;
+      next = shorterLevel(prepared[i], levels[i])
+    ) {
+      levels[i] = next;
       size = sizeNow();
     }
   }
@@ -313,30 +356,40 @@ function renderHitsBudgeted(hits: GateHit[], opts: { budgetBytes?: number } = {}
     size = sizeNow();
   }
   // 3. Only now shorten the top hit.
-  while (size > budget && levels[0] < LEVEL_MINIMAL) {
-    levels[0]++;
+  for (
+    let next = shorterLevel(prepared[0], levels[0]);
+    next !== undefined && size > budget;
+    next = shorterLevel(prepared[0], levels[0])
+  ) {
+    levels[0] = next;
     size = sizeNow();
   }
-  // 4. A drop frees more room than the overshoot it fixed. Give that room
-  //    back to the kept hits, top-down, one level at a time, as long as the
-  //    output still fits; the first hit that no longer fits ends the pass, so
-  //    a lower-ranked hit never gets room a higher-ranked one still wants.
-  raise: for (let i = 0; i < kept; i++) {
-    while (levels[i] > prepared[i].startLevel) {
-      levels[i]--;
-      if (sizeNow() > budget) {
-        levels[i]++;
-        break raise;
-      }
+  // 4. Give room back, top-down: each kept hit takes the fullest rung that
+  //    still fits, and a hit with no rung that fits is passed over.
+  for (let i = 0; i < kept; i++) {
+    const current = levels[i];
+    for (const candidate of ladderOf(prepared[i])) {
+      if (candidate >= current) break;
+      levels[i] = candidate;
+      if (sizeNow() <= budget) break;
+      levels[i] = current;
     }
   }
 
   return assemble(prepared, levels, kept, budget);
 }
 
+// The forms the budgeted renderer may give a hit, fullest first, by name.
+// Exported for tests that pin the ladder itself (see ladderOf).
+function ladderFor(h: GateHit): Array<'whole' | 'excerpt' | 'minimal'> {
+  const names = ['whole', 'excerpt', 'minimal'] as const;
+  return ladderOf(prepareHit(h)).map((l) => names[l]);
+}
+
 module.exports = {
   renderHitsAsContext,
   renderHitsBudgeted,
+  ladderFor,
   resolveInjectBudget,
   injectBytes,
   DEFAULT_INJECT_BUDGET_BYTES,

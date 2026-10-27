@@ -16,6 +16,7 @@ const { spawnSync } = require('node:child_process');
 const {
   renderHitsAsContext,
   renderHitsBudgeted,
+  ladderFor,
   resolveInjectBudget,
   injectBytes,
   DEFAULT_INJECT_BUDGET_BYTES,
@@ -617,7 +618,66 @@ test('room freed by a drop is given back to the kept hits: a lower hit is raised
   assert.equal(again.length, out.length);
 });
 
-test('raising stops at the first hit that no longer fits: a lower hit never gets room a higher hit still wants', () => {
+// The fixture shared by the raise-pass tests below: a hit "b" whose
+// description makes its excerpt form larger than its whole body, "a" ahead of
+// it and a long "c" behind it whose 5,000-char description cannot fit.
+function raiseFixture(): { a: GateHit; b: GateHit; c: GateHit } {
+  const a = hit(mem('a1', 'Rule one. '.repeat(30), { description: 'desc a1' }), 0.9);
+  const b = hit(mem('b2', 'Rule two body. '.repeat(70), { description: 'd'.repeat(300) }), 0.8);
+  const c = hit(
+    mem('c3', ('Para. '.repeat(250) + '\n\n').repeat(4), { description: 'e'.repeat(5000) }),
+    0.7,
+  );
+  return { a, b, c };
+}
+
+function footerFor(budget: number): string {
+  return `\n\n_1 lower-ranked memory left out to stay within the ${budget} byte injection budget._`;
+}
+
+test('room freed by a drop restores a short hit to its whole body even when its excerpt form would not fit', () => {
+  const { a, b, c } = raiseFixture();
+  // The two whole bodies plus the one-memory footer, to the byte. Dropping c3
+  // frees its room; b2's excerpt form (description, label and path on top of
+  // the same text) is larger than its whole body and does not fit in it, but
+  // the whole body does and must be restored.
+  const budget = injectBytes(renderHitsBudgeted([a, b], { budgetBytes: 1_000_000 })) + injectBytes(footerFor(9999));
+  assert.equal(String(budget).length, 4, 'fixture: the footer prints four digits');
+  const out = renderHitsBudgeted([a, b, c], { budgetBytes: budget });
+  const blocks = blocksOf(out);
+  assert.deepEqual([...blocks.keys()], ['a1', 'b2'], 'c3 was dropped');
+  assert.deepEqual([...blocks.values()].map(formOf), ['whole', 'whole'], 'b2 gets its whole body back');
+  assert.equal(injectBytes(out), budget, 'the output lands on the budget exactly');
+
+  // One byte less and b2 cannot stay whole: it goes to minimal, not to the
+  // larger excerpt.
+  const tighter = renderHitsBudgeted([a, b, c], { budgetBytes: budget - 1 });
+  assert.deepEqual([...blocksOf(tighter).values()].map(formOf), ['whole', 'minimal']);
+  assert.ok(injectBytes(tighter) <= budget - 1);
+});
+
+test('a hit that starts whole is never shortened to an excerpt that is not smaller than its whole body', () => {
+  const { b } = raiseFixture();
+  // Short body, long description: the excerpt form is the larger of the two.
+  assert.deepEqual(ladderFor(b), ['whole', 'minimal']);
+  // A body of two 950-char sections: the excerpt (one section) is smaller.
+  const twoSections = hit(mem('two', [para('TWOA', 950), para('TWOB', 950)].join('\n\n')), 0.8, { chunkIndex: 0 });
+  assert.deepEqual(ladderFor(twoSections), ['whole', 'excerpt', 'minimal']);
+  // A hit that starts as an excerpt has no whole rung.
+  assert.deepEqual(ladderFor(hit(longMemory('long'), 0.8, { chunkIndex: 1 })), ['excerpt', 'minimal']);
+
+  // The shortened output never contains an excerpt for the whole-start hit,
+  // at any budget.
+  const { a, c } = raiseFixture();
+  for (let budget = 1; budget < 1700; budget += 7) {
+    const out = renderHitsBudgeted([a, b, c], { budgetBytes: budget });
+    const blocks = blocksOf(out);
+    const forB = blocks.get('b2');
+    if (forB !== undefined) assert.notEqual(formOf(forB), 'excerpt', `budget ${budget}`);
+  }
+});
+
+test('room is given back top-down: a lower hit takes only the room the hits above it could not use', () => {
   const big = (id: string, score: number): GateHit =>
     hit(longWithDescription(id, 100), score, { chunkIndex: 1 });
   // c1 has a 610-char first chunk (no neighbour is added at that size), so
@@ -631,18 +691,30 @@ test('raising stops at the first hit that no longer fits: a lower hit never gets
   const hits = [a, b, small, dropMe];
   const gapB = excerptBytes(b) - minimalBytes(b);
   const gapSmall = excerptBytes(small) - minimalBytes(small);
+  const tight = firstBudgetWithForms([a, b, small], ['excerpt', 'minimal', 'minimal']);
+
+  // Room for the cheap lift only: b1 cannot be lifted, so the pass moves on
+  // and c1 is lifted into the room b1 could not use.
   const slack = 800;
   assert.ok(gapSmall < slack && slack < gapB, `fixture: the cheap lift (${gapSmall}) fits the slack, the dear one (${gapB}) does not`);
+  const cheap = renderHitsBudgeted(hits, { budgetBytes: tight + slack });
+  const cheapBlocks = blocksOf(cheap);
+  assert.deepEqual([...cheapBlocks.keys()], ['a1', 'b1', 'c1'], 'd1 was dropped');
+  assert.deepEqual([...cheapBlocks.values()].map(formOf), ['excerpt', 'minimal', 'excerpt']);
+  assert.ok(injectBytes(cheap) <= tight + slack);
 
-  const tight = firstBudgetWithForms([a, b, small], ['excerpt', 'minimal', 'minimal']);
-  const out = renderHitsBudgeted(hits, { budgetBytes: tight + slack });
-  const blocks = blocksOf(out);
-  assert.deepEqual([...blocks.keys()], ['a1', 'b1', 'c1'], 'd1 was dropped');
-  assert.deepEqual(
-    [...blocks.values()].map(formOf),
-    ['excerpt', 'minimal', 'minimal'],
-    'b1 cannot be lifted, so c1 does not get the room either',
-  );
+  // Room for either lift but not both: the higher-ranked hit gets it, not the
+  // cheaper lower one.
+  // The one-memory footer the dropped d1 leaves is part of the output.
+  const footer = injectBytes(footerFor(tight + gapB + 200));
+  const either = gapB + footer + 1;
+  assert.ok(either < gapB + footer + gapSmall, 'fixture: the two lifts do not both fit');
+  assert.equal(String(tight + either).length, String(tight + gapB + 200).length, 'fixture: same footer digits');
+  const picked = renderHitsBudgeted(hits, { budgetBytes: tight + either });
+  const pickedBlocks = blocksOf(picked);
+  assert.deepEqual([...pickedBlocks.keys()], ['a1', 'b1', 'c1'], 'd1 was dropped');
+  assert.deepEqual([...pickedBlocks.values()].map(formOf), ['excerpt', 'excerpt', 'minimal']);
+  assert.ok(injectBytes(picked) <= tight + either);
 });
 
 test('the budget is counted in UTF-8 bytes, not characters', () => {

@@ -108,18 +108,6 @@ function dedupeAndRank(hits: GateHit[], maxHits: number): GateHit[] {
 // matches") and the blendedSearch result { semantic, keyword } that carries
 // the FTS keyword candidates (each an id-token match with its matched
 // tokens and best bm25) alongside the semantic hits.
-// A hit's best chunk as the index knew it: its index and, when known, the
-// first character of that chunk in the body the index was built from.
-interface ChunkRef {
-  index: number;
-  offset?: number;
-}
-
-function keywordChunkRef(k: KeywordSearchHit): ChunkRef | undefined {
-  if (k.chunkIndex === undefined) return undefined;
-  return { index: k.chunkIndex, offset: k.chunkOffset };
-}
-
 interface SemanticSearchHit {
   memory: Memory;
   score: number;
@@ -481,6 +469,18 @@ interface BlendWeightsLike {
   recencyHalfLifeDays: number;
   typeWeight: number;
   minSemanticScore: number;
+}
+
+// A hit's best chunk as the index knew it: its index and, when known, the
+// first character of that chunk in the body the index was built from.
+interface ChunkRef {
+  index: number;
+  offset?: number;
+}
+
+function keywordChunkRef(k: KeywordSearchHit): ChunkRef | undefined {
+  if (k.chunkIndex === undefined) return undefined;
+  return { index: k.chunkIndex, offset: k.chunkOffset };
 }
 
 // One blended hit: semanticScore (already including any keyword boost) +
