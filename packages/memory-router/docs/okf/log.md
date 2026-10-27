@@ -1,6 +1,6 @@
 # Bundle log
 
-- 2026-10-27T11:20:00Z, injection budget raise pass: `renderHitsBudgeted` now
+- 2026-10-27T10:02:19Z, injection budget raise pass: `renderHitsBudgeted` now
   gives each hit a ladder of forms (a hit that starts whole skips the excerpt
   form when it is not smaller than the whole body) and the final raise lifts
   each kept hit, best first, to the fullest rung that still fits, passing over
