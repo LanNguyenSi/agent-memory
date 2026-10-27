@@ -6,6 +6,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-27
+
 ### Added
 
 - **The index stamps the chunker version and re-chunks when it changes.** `rebuildIndex` re-chunked a memory only when its mtime changed or it had no chunk rows, so a change to the chunker (`chunkBody`) left existing indexes with chunks cut by the old one. `src/embed/chunking.ts` now exports `CHUNKER_VERSION` (bump it when chunk boundaries change) and the index records it in the `meta` table (`chunker_version`; a new meta key, so the schema version stays 4). When the stored stamp is missing or differs, the next `index` run re-chunks every memory (chunk vectors and keyword rows rewritten, document vectors not re-embedded) and writes the stamp only after the whole run succeeded; an index without a stamp is re-chunked once. Read-only opens never write it. Pinned by `tests/embed-chunks.test.ts`.
