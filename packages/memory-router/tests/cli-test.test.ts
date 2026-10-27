@@ -185,3 +185,58 @@ test('hermetic: an ambient $MEMORY_ROUTER_DIR in the calling process does not le
     else process.env.MEMORY_ROUTER_DIR = original;
   }
 });
+
+// --- rendered size (what the UserPromptSubmit hook would inject) -----------
+
+const { resolve: resolveSync } = require('../src/router');
+const { renderHitsBudgeted } = require('../src/render');
+const { loadMemoriesFromDir } = require('../src/memory/loader');
+
+function renderedBytesInProcess(prompt: string, dir: string): number {
+  const hits = resolveSync(
+    { prompt, cwd: process.cwd(), memoryDir: dir },
+    loadMemoriesFromDir(dir),
+    { maxHits: 5 },
+  );
+  return Buffer.byteLength(renderHitsBudgeted(hits, { budgetBytes: 16384 }), 'utf8');
+}
+
+test('test verb prints the rendered size in bytes with the budget', () => {
+  const { status, stdout } = run(['test', 'git push --force to master', '--dir', FIXTURES]);
+  assert.equal(status, 0);
+  const expected = renderedBytesInProcess('git push --force to master', FIXTURES);
+  assert.ok(expected > 0);
+  assert.match(stdout, new RegExp(`rendered: ${expected} bytes \\(budget 16384 bytes\\)`));
+});
+
+test('test --json carries renderedBytes and budgetBytes, honoring MEMORY_ROUTER_INJECT_BUDGET', () => {
+  const base = run(['test', 'git push --force to master', '--dir', FIXTURES, '--json']);
+  assert.equal(base.status, 0);
+  const parsed = JSON.parse(base.stdout) as { renderedBytes: number; budgetBytes: number };
+  assert.equal(parsed.budgetBytes, 16384);
+  assert.equal(parsed.renderedBytes, renderedBytesInProcess('git push --force to master', FIXTURES));
+
+  const small = run(
+    ['test', 'git push --force to master', '--dir', FIXTURES, '--json'],
+    { MEMORY_ROUTER_INJECT_BUDGET: '1' },
+  );
+  const smallParsed = JSON.parse(small.stdout) as { renderedBytes: number; budgetBytes: number };
+  assert.equal(smallParsed.budgetBytes, 1);
+  assert.ok(smallParsed.renderedBytes > 0, 'the top hit is always rendered');
+});
+
+test('test --json: an invalid MEMORY_ROUTER_INJECT_BUDGET falls back to the default with one stderr note', () => {
+  const res = run(
+    ['test', 'git push --force to master', '--dir', FIXTURES, '--json'],
+    { MEMORY_ROUTER_INJECT_BUDGET: 'abc' },
+  );
+  assert.equal(res.status, 0);
+  assert.equal((JSON.parse(res.stdout) as { budgetBytes: number }).budgetBytes, 16384);
+  assert.equal(res.stderr.split('MEMORY_ROUTER_INJECT_BUDGET').length - 1, 1);
+});
+
+test('test --json for a prompt with no match reports 0 rendered bytes', () => {
+  const { status, stdout } = run(['test', 'rename a typescript variable to camelCase', '--dir', FIXTURES, '--json']);
+  assert.equal(status, 0);
+  assert.equal((JSON.parse(stdout) as { renderedBytes: number }).renderedBytes, 0);
+});

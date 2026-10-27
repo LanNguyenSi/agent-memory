@@ -27,6 +27,11 @@ const {
 const { loadMemoriesFromDir } = require('./memory/loader');
 const { resolve, resolveConfidence, dedupeAndRank } = require('./router');
 const { runGoldenEval } = require('./eval/runner');
+const {
+  renderHitsBudgeted,
+  resolveInjectBudget,
+  injectBytes,
+} = require('./render');
 const { formatEvalReportText, formatEvalReportJson } = require('./eval/format');
 const { loadMapping } = require('./migrate/mapping');
 const { planMigration, applyMigration } = require('./migrate/transform');
@@ -366,7 +371,10 @@ Commands:
     combined scoring, so its output is NOT a preview of what the hook
     would inject for the same prompt — use 'eval' for that. Prints the
     memories that would fire, their gate (topic / tool / confidence),
-    score, and description.
+    score, and description, then the size in bytes the UserPromptSubmit
+    renderer would inject for them (budget: $MEMORY_ROUTER_INJECT_BUDGET,
+    default 16384; hits here carry no matched-chunk information, so a long
+    memory renders as description + first chunk + path).
     Corpus dir resolution: --dir flag, then $MEMORY_ROUTER_DIR env. The
     sync gates (topic, tool) always run; --semantic also runs the async
     confidence gate (embeds via OpenAI when OPENAI_API_KEY is set, or via
@@ -383,6 +391,8 @@ Commands:
     precision / recall / MRR (mean reciprocal rank), plus how many prompts
     the semantic signal actually contributed a hit to. A REPORT, not a
     gate: exits 0 on any error-free run regardless of how the metrics look.
+    Also reports the mean and max bytes the UserPromptSubmit renderer would
+    inject over the golden prompts (same renderer and budget as the hook).
     Mirrors exactly what the UserPromptSubmit hook selects for each
     prompt: the score-blend resolver (resolveBlended) —
     semantic score (once it clears the MEMORY_ROUTER_BLEND_MIN_SEMANTIC
@@ -786,11 +796,28 @@ async function runTest(
     }
   }
 
+  // What the UserPromptSubmit hook's renderer would inject for these hits.
+  // Hits from the pre-blend resolver carry no chunk information, so a long
+  // memory shows as description + first chunk + path here.
+  const budgetBytes: number = resolveInjectBudget();
+  const renderedBytes: number = injectBytes(
+    renderHitsBudgeted(allHits, { budgetBytes }),
+  );
+
   if (json) {
-    process.stdout.write(formatTestReportJson(allHits, dir, prompt));
+    process.stdout.write(formatTestReportJson(allHits, dir, prompt, renderedBytes, budgetBytes));
     return;
   }
-  process.stdout.write(formatTestReportText(allHits, dir, prompt, memories.length));
+  process.stdout.write(
+    formatTestReportText(
+      allHits,
+      dir,
+      prompt,
+      memories.length,
+      renderedBytes,
+      budgetBytes,
+    ),
+  );
 }
 
 function formatTestReportText(
@@ -798,6 +825,8 @@ function formatTestReportText(
   dir: string,
   prompt: string,
   corpusSize: number,
+  renderedBytes: number,
+  budgetBytes: number,
 ): string {
   const lines: string[] = [];
   lines.push(`prompt: ${prompt}`);
@@ -819,6 +848,8 @@ function formatTestReportText(
     if (h.reason) lines.push(`      reason: ${h.reason}`);
   }
   lines.push('');
+  lines.push(`rendered: ${renderedBytes} bytes (budget ${budgetBytes} bytes)`);
+  lines.push('');
   return lines.join('\n');
 }
 
@@ -826,12 +857,16 @@ function formatTestReportJson(
   hits: GateHit[],
   dir: string,
   prompt: string,
+  renderedBytes: number,
+  budgetBytes: number,
 ): string {
   return (
     JSON.stringify(
       {
         prompt,
         dir,
+        renderedBytes,
+        budgetBytes,
         hits: hits.map((h) => ({
           id: h.memory.id,
           name: h.memory.frontmatter.name,

@@ -4,7 +4,8 @@
 //   {
 //     goldenPath, dir, corpusSize, semanticPathActive, vocabularySource,
 //     unknownExpectIds, semanticContributedCount, keywordContributedCount,
-//     perPrompt: [{ prompt, expect, got, isNegativeControl, precision, recall, reciprocalRank }],
+//     injection: { budgetBytes, meanBytes, maxBytes },
+//     perPrompt: [{ prompt, expect, got, isNegativeControl, precision, recall, reciprocalRank, injectBytes }],
 //     aggregate: { precision, recall, mrr, positiveCount,
 //                  negativeControls: { total, passed, failed, rate } }
 //   }
@@ -68,6 +69,12 @@ function formatEvalReportText(report: EvalReportLike): string {
     `negative controls: ${nc.passed}/${nc.total} passed` +
       (nc.rate === null ? "" : ` (${(nc.rate * 100).toFixed(1)}%)`),
   );
+  if (report.injection) {
+    const inj = report.injection;
+    lines.push(
+      `injected context: mean=${Math.round(inj.meanBytes)} bytes max=${inj.maxBytes} bytes (hook renderer, budget ${inj.budgetBytes} bytes, over all ${report.perPrompt.length} prompts)`,
+    );
+  }
   lines.push("");
   return lines.join("\n");
 }
@@ -89,6 +96,8 @@ interface EvalReportLike {
   unknownExpectIds: string[];
   semanticContributedCount: number;
   keywordContributedCount: number;
+  /** Absent in reports built before the injection budget existed. */
+  injection?: { budgetBytes: number; meanBytes: number; maxBytes: number };
   perPrompt: {
     prompt: string;
     expect: string[];
@@ -97,6 +106,7 @@ interface EvalReportLike {
     precision: number;
     recall: number;
     reciprocalRank: number | null;
+    injectBytes?: number;
   }[];
   aggregate: {
     precision: number;

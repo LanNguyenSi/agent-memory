@@ -135,6 +135,16 @@ declare global {
     gate: GateName;
     score: number;
     reason: string;
+    /**
+     * Index (0-based, as produced by chunkBody in src/embed/chunking.ts over
+     * `memory.body`) of the body chunk that matched the prompt best: the
+     * winning chunk vector of the semantic search, or for a keyword-only
+     * match the FTS row with the best bm25. Set only by resolveBlended and
+     * only when the search knew a chunk; absent for topic, tool and
+     * degraded-path hits. Consumed by renderHitsBudgeted (src/render.ts) to
+     * pick the excerpt it injects.
+     */
+    chunkIndex?: number;
   }
 
   interface Gate {

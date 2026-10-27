@@ -111,12 +111,18 @@ function dedupeAndRank(hits: GateHit[], maxHits: number): GateHit[] {
 interface SemanticSearchHit {
   memory: Memory;
   score: number;
+  // Winning chunk of the semantic score (see SemanticHit in
+  // src/embed/indexer.ts); absent when the document vector won.
+  chunk?: { index: number; offset: number };
 }
 
 interface KeywordSearchHit {
   memory: Memory;
   idTerms: string[];
   bm25: number;
+  // Chunk holding the best-bm25 id-token match; absent from seam fakes that
+  // predate chunk tracking.
+  chunkIndex?: number;
 }
 
 type SearchOutcome =
@@ -208,7 +214,7 @@ async function resolveBlended(
   // free-form text and the value below flows straight into a search "how
   // many rows" argument.
   const semanticK = Math.max(maxHits, Math.round(weights.candidateK));
-  let semanticHits: { memory: Memory; score: number }[] = [];
+  let semanticHits: SemanticSearchHit[] = [];
   // Keyword candidates from the SAME search session as the semantic hits
   // (id-token FTS5 matches with their best bm25, see src/embed/indexer.ts
   // blendedSearch). Stays empty when the keyword path is off, the index
@@ -337,6 +343,7 @@ async function resolveBlended(
         'keyword',
         [keywordReason(a)],
         now,
+        a.chunkIndex,
       ),
     );
     const taken = new Set(keywordFirst.map((h) => h.memory.id));
@@ -351,6 +358,13 @@ async function resolveBlended(
   const semanticById = new Map<string, number>(
     semanticHits.map((h) => [h.memory.id, h.score]),
   );
+  // Best chunk per semantic hit (only those whose winning vector was a
+  // chunk). Threaded onto the GateHit so the hook renderer can inject the
+  // matching excerpt instead of the whole body.
+  const semanticChunkById = new Map<string, number>();
+  for (const h of semanticHits) {
+    if (h.chunk !== undefined) semanticChunkById.set(h.memory.id, h.chunk.index);
+  }
 
   // Tool Gate: unrelated to the prompt-semantic blend above, only relevant
   // when the caller also passed a tool call (e.g. MCP's memory_resolve).
@@ -399,12 +413,17 @@ async function resolveBlended(
     if (hasSemanticHit) reasonParts.push(`semantic match (score=${semanticScore.toFixed(2)})`);
     let gate: GateHit['gate'] = hasSemanticHit ? 'confidence' : 'topic';
     let keywordBoost = 0;
+    // Chunk to excerpt: the semantic winner when there is one, else the
+    // chunk the id token matched in (keyword-only admission, or a semantic
+    // hit whose document vector won and so names no chunk).
+    let chunkIndex: number | undefined = semanticChunkById.get(id);
     if (keywordOnly) {
       // Admitted keyword-only memory: distinguishable gate + reason so the
       // eval can count it, floor-edge semantic score (see the admission
       // comment above).
       reasonParts.push(keywordReason(keywordOnly));
       gate = 'keyword';
+      chunkIndex = keywordOnly.chunkIndex;
     } else if (hasSemanticHit) {
       // Only an above-floor SEMANTIC hit that also matches an id token is
       // boosted (exact-token evidence breaking the tie between two genuine
@@ -416,6 +435,7 @@ async function resolveBlended(
       if (idMatch) {
         keywordBoost = keywordConfig.keywordBoost;
         reasonParts.push(keywordReason(idMatch));
+        if (chunkIndex === undefined) chunkIndex = idMatch.chunkIndex;
       }
     }
 
@@ -428,6 +448,7 @@ async function resolveBlended(
         gate,
         reasonParts,
         now,
+        chunkIndex,
       ),
     );
   }
@@ -458,6 +479,7 @@ function blendCandidateHit(
   gate: GateHit['gate'],
   reasonParts: string[],
   now: number,
+  chunkIndex?: number,
 ): GateHit {
   const topicBoost = topicHit ? weights.topicBoost : 0;
 
@@ -480,7 +502,11 @@ function blendCandidateHit(
   const parts = [...reasonParts];
   if (topicHit) parts.push(topicHit.reason);
 
-  return { memory, gate, score, reason: parts.join('; ') };
+  const hit: GateHit = { memory, gate, score, reason: parts.join('; ') };
+  // Only set when known, so hits without chunk information keep exactly
+  // the four-field shape they always had.
+  if (chunkIndex !== undefined) hit.chunkIndex = chunkIndex;
+  return hit;
 }
 
 // Privileges deterministic Tool-Gate hits ahead of the maxHits cap: a
