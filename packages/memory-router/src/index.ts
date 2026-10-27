@@ -17,7 +17,7 @@ const {
   DEFAULT_GATES,
 } = require('./router');
 const { rebuildIndex, semanticSearch, blendedSearch } = require('./embed/indexer');
-const { renderHitsAsContext } = require('./render');
+const { renderHitsAsContext, renderHitsBudgeted } = require('./render');
 
 module.exports = {
   loadMemoriesFromDir,
@@ -35,4 +35,5 @@ module.exports = {
   semanticSearch,
   blendedSearch,
   renderHitsAsContext,
+  renderHitsBudgeted,
 };

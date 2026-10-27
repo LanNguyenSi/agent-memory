@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const { loadMemoriesFromDir } = require('../memory/loader');
 const { resolveBlended } = require('../router');
-const { renderHitsAsContext } = require('../render');
+const { renderHitsBudgeted } = require('../render');
 const { readStdin } = require('./io');
 
 // Single source of truth for the version reported by the `--version` CLI
@@ -58,7 +58,10 @@ async function main(): Promise<void> {
     );
   }
 
-  const additionalContext = renderHitsAsContext(allHits);
+  // Budgeted form (description + matching chunk + path for long memories,
+  // total held to MEMORY_ROUTER_INJECT_BUDGET bytes); PreToolUse keeps the
+  // unbudgeted full-body renderer.
+  const additionalContext = renderHitsBudgeted(allHits);
   if (!additionalContext) return;
 
   process.stdout.write(

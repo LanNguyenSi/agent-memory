@@ -14,6 +14,11 @@ const { resolveBlended } = require("../router");
 const { indexPath } = require("../embed/indexer");
 const { resolveProviderConfig } = require("../embed/provider");
 const { loadGoldenFile } = require("./golden");
+const {
+  renderHitsBudgeted,
+  resolveInjectBudget,
+  injectBytes,
+} = require("../render");
 const { loadVocabularyResult } = require("../vocab/loader");
 
 /**
@@ -128,6 +133,12 @@ export interface PromptMetric {
   recall: number;
   /** null for negative-control prompts; MRR is undefined for them by design. */
   reciprocalRank: number | null;
+  /**
+   * Size in bytes of what the UserPromptSubmit hook would inject for this
+   * prompt's hits (renderHitsBudgeted, same budget as the hook); 0 when
+   * nothing is injected.
+   */
+  injectBytes: number;
 }
 
 /**
@@ -220,6 +231,15 @@ function aggregateMetrics(perPrompt: PromptMetric[]): AggregateMetrics {
   };
 }
 
+export interface InjectionSummary {
+  /** Budget the rendering was held to (MEMORY_ROUTER_INJECT_BUDGET or the default). */
+  budgetBytes: number;
+  /** Mean injected bytes over ALL golden prompts (prompts with no hit count as 0). */
+  meanBytes: number;
+  /** Largest injection over the golden prompts. */
+  maxBytes: number;
+}
+
 export interface EvalReport {
   goldenPath: string;
   dir: string;
@@ -242,6 +262,8 @@ export interface EvalReport {
   unknownExpectIds: string[];
   perPrompt: PromptMetric[];
   aggregate: AggregateMetrics;
+  /** Injected-context size over the golden set, see InjectionSummary. */
+  injection: InjectionSummary;
   /**
    * How many of the golden set's prompts had at least one hit attributed
    * to the semantic/confidence gate (resolveBlended's `gate: 'confidence'`
@@ -306,6 +328,9 @@ async function runGoldenEval(
   const unknownExpectIds = findUnknownExpectIds(golden.prompts, memories);
 
   const perPrompt: PromptMetric[] = [];
+  // Resolved once so an invalid MEMORY_ROUTER_INJECT_BUDGET notes itself on
+  // stderr a single time instead of once per golden prompt.
+  const budgetBytes: number = resolveInjectBudget();
   let semanticContributedCount = 0;
   let keywordContributedCount = 0;
   for (const entry of golden.prompts) {
@@ -333,8 +358,16 @@ async function runGoldenEval(
       expect: entry.expect,
       got,
       ...scored,
+      injectBytes: injectBytes(renderHitsBudgeted(hits, { budgetBytes })),
     });
   }
+  const sizes = perPrompt.map((p) => p.injectBytes);
+  const injection: InjectionSummary = {
+    budgetBytes,
+    meanBytes:
+      sizes.length === 0 ? 0 : sizes.reduce((a, b) => a + b, 0) / sizes.length,
+    maxBytes: sizes.length === 0 ? 0 : Math.max(...sizes),
+  };
 
   return {
     goldenPath,
@@ -345,6 +378,7 @@ async function runGoldenEval(
     unknownExpectIds,
     perPrompt,
     aggregate: aggregateMetrics(perPrompt),
+    injection,
     semanticContributedCount,
     keywordContributedCount,
   };

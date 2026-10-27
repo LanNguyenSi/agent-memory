@@ -1,10 +1,63 @@
 # Bundle log
 
+- 2026-10-27T10:46:38Z, `src/render.ts`: one comment line above `renderHitsBudgeted`
+  reworded (drops are relative to the top hit's form); no line moved, no
+  claim affected. Re-verified and re-stamped `gate-composition-and-dedup.md`
+  and `score-blend-resolver.md`.
+- 2026-10-27T10:26:36Z, injection budget rule: `renderHitsBudgeted` builds
+  each hit's ladder strictly decreasing in bytes (a shorter form only when its
+  block is smaller than the last rung kept, so a ladder can be just the whole
+  body) and picks, among the outputs that fit, the best one by the top hit's
+  rung, then the number of hits kept, then the rungs of hits 2 to n; lower
+  hits that fit next to a shortened top hit are no longer dropped. No claim in
+  the concept docs describes that rule. The `renderHitsBudgeted` citations in
+  `gate-composition-and-dedup.md` and `score-blend-resolver.md` were
+  re-pointed from `render.ts:326` to `render.ts:327`, and the `resolveBlended`
+  range in `score-blend-resolver.md` from `router.ts:198-455` to
+  `router.ts:198-462`, the line where the function closes; the other
+  `render.ts` citations (`render.ts:122`, `render.ts:225`, `render.ts:231`)
+  were checked to hold the same text as before.
+- 2026-10-27T10:02:19Z, injection budget raise pass: `renderHitsBudgeted` now
+  gives each hit a ladder of forms (a hit that starts whole skips the excerpt
+  form when it is not smaller than the whole body) and the final raise lifts
+  each kept hit, best first, to the fullest rung that still fits, passing over
+  a hit that cannot be lifted instead of ending the pass. No claim in the
+  concept docs describes that rule; `router.ts` and `render.ts` citations were
+  re-pointed by the diff's line mapping (`ChunkRef` and `keywordChunkRef`
+  moved next to `blendCandidateHit`, `render.ts` gained the ladder helpers)
+  and each cited start and end line was checked to hold the same text as
+  before.
+- 2026-10-27T09:44:54Z, injection budget review fixes: `renderHitsBudgeted`
+  now shortens hits 2 to n before dropping and shortens the top hit last,
+  then raises kept hits again top-down; `GateHit` gains `chunkOffset`
+  (semantic winner offset, or the FTS row's `char_offset` now returned by
+  `ftsMatch`) and `excerptFor` falls back to the first chunk when the stored
+  offset differs from the current body's chunk offset. `score-blend-resolver.md`
+  claim "chunk `i` at render time is the text that was embedded as chunk `i`"
+  now says it holds while the index is current, with the offset check as the
+  guard; its router.ts and render.ts citations for the chunk path were
+  re-read and re-pointed. Every `router.ts`, `indexer.ts`, `index-store.ts`
+  and `render.ts` citation in the four concept docs was shifted by the
+  diff's line mapping and spot-checked against the new lines (claims
+  unchanged).
+- 2026-10-27T09:06:50Z, UserPromptSubmit injection budget: `renderHitsBudgeted`
+  (new, `src/render.ts`) injects description + matching chunk + path under a
+  byte budget; `GateHit` gains `chunkIndex`, threaded by `resolveBlended`
+  from the semantic winner chunk and the keyword hit's best-bm25 row;
+  `PreToolUse` keeps `renderHitsAsContext`. `score-blend-resolver.md` gets a
+  section on the chunk index and `gate-composition-and-dedup.md` a paragraph
+  on the two renderers (both gain `src/render.ts` as a source). Every
+  `router.ts`, `cli.ts`, `indexer.ts`, `eval/runner.ts` citation in
+  `gate-composition-and-dedup.md`, `score-blend-resolver.md` and
+  `semantic-search-silent-noop.md` re-pointed for the line shift and
+  re-read against the new lines (claims unchanged);
+  `native-deps-and-ci-smoke.md` only re-verified (its README anchor and
+  claims are unaffected by the README addition under "Usage").
 - 2026-10-27T08:33:57Z, `src/eval/runner.ts`: whitespace-only re-indent of the
   `keywordContributedCount` doc comment; no line moved, no claim affected.
   Re-verified and re-stamped `gate-composition-and-dedup.md` and
   `score-blend-resolver.md`.
-- 2026-10-27T08:26:46Z, review round 2 on the keyword path (no design
+- 2026-10-27T08:26:46Z, review fixes on the keyword path (no design
   change): `ftsField` in `indexer.ts` normalizes a non-string frontmatter
   `name` (e.g. `name: 2026`) and a missing `description` before `replaceFts`
   so a rebuild no longer throws on ordinary memories; `resolveBlended` now

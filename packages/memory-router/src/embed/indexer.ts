@@ -420,6 +420,12 @@ interface KeywordHit {
   memory: Memory;
   idTerms: string[];
   bm25: number;
+  // Index of the chunk (chunkBody order) whose FTS row had the best bm25
+  // across all qualifying terms, i.e. the chunk that holds the identifier.
+  chunkIndex: number;
+  // First character of that chunk in the indexed body (the stored
+  // char_offset); absent when the store could not name it.
+  chunkOffset?: number;
 }
 
 interface BlendedSearchResult {
@@ -602,6 +608,8 @@ function collectKeywordMatches(
   interface Match {
     idTerms: string[];
     bm25: number;
+    chunkIndex: number;
+    chunkOffset?: number;
   }
   const perId = new Map<string, Match>();
   for (const t of terms) {
@@ -612,22 +620,38 @@ function collectKeywordMatches(
     for (const row of store.ftsMatch(query, KEYWORD_ROW_CAP) as {
       id: string;
       chunkIndex: number;
+      charOffset?: number;
       score: number;
     }[]) {
       let match = perId.get(row.id);
       if (!match) {
-        match = { idTerms: [], bm25: row.score };
+        match = {
+          idTerms: [],
+          bm25: row.score,
+          chunkIndex: row.chunkIndex,
+          chunkOffset: row.charOffset,
+        };
         perId.set(row.id, match);
       }
       if (!match.idTerms.includes(t.phrase)) match.idTerms.push(t.phrase);
-      if (row.score < match.bm25) match.bm25 = row.score;
+      if (row.score < match.bm25) {
+        match.bm25 = row.score;
+        match.chunkIndex = row.chunkIndex;
+        match.chunkOffset = row.charOffset;
+      }
     }
   }
   if (perId.size === 0) return;
   for (const [id, match] of perId) {
     const memory = byId.get(id);
     if (!memory) continue; // index row for a memory not in this call's set
-    out.push({ memory, idTerms: match.idTerms, bm25: match.bm25 });
+    out.push({
+      memory,
+      idTerms: match.idTerms,
+      bm25: match.bm25,
+      chunkIndex: match.chunkIndex,
+      ...(match.chunkOffset !== undefined ? { chunkOffset: match.chunkOffset } : {}),
+    });
   }
   out.sort((a, b) => a.bm25 - b.bm25);
 }

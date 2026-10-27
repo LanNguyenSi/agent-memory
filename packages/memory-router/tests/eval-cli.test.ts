@@ -217,3 +217,66 @@ test("--help points the eval --json schema pointer at docs/commands.md, not READ
   );
   assert.doesNotMatch(stdout, /README\.md/);
 });
+
+// --- injected-context size over the golden set ------------------------------
+
+test("eval --json reports per-prompt injectBytes and the mean/max injection summary", () => {
+  const { loadMemoriesFromDir } = require("../src/memory/loader");
+  const { resolveBlended } = require("../src/router");
+  const { renderHitsBudgeted } = require("../src/render");
+
+  const { status, stdout } = run(["eval", GOLDEN_PATH, "--dir", CORPUS_DIR, "--json"]);
+  assert.equal(status, 0);
+  const parsed = JSON.parse(stdout) as {
+    injection: { budgetBytes: number; meanBytes: number; maxBytes: number };
+    perPrompt: Array<{ prompt: string; injectBytes: number }>;
+  };
+  assert.equal(parsed.injection.budgetBytes, 16384);
+  const sizes = parsed.perPrompt.map((p) => p.injectBytes);
+  assert.equal(sizes.length, 6);
+  assert.ok(sizes.every((n) => Number.isInteger(n) && n >= 0));
+  assert.equal(parsed.injection.maxBytes, Math.max(...sizes));
+  assert.equal(
+    parsed.injection.meanBytes,
+    sizes.reduce((a, b) => a + b, 0) / sizes.length,
+    "mean is over ALL prompts, an empty injection counts as 0 bytes",
+  );
+  assert.ok(sizes.some((n) => n === 0), "fixture: at least one prompt injects nothing");
+  assert.ok(parsed.injection.maxBytes > 0);
+
+  // Same renderer as the hook: re-resolve every golden prompt in-process.
+  const memories = loadMemoriesFromDir(CORPUS_DIR);
+  return (async () => {
+    for (const p of parsed.perPrompt) {
+      const hits = await resolveBlended({ prompt: p.prompt, memoryDir: CORPUS_DIR }, memories, CORPUS_DIR);
+      assert.equal(
+        p.injectBytes,
+        Buffer.byteLength(renderHitsBudgeted(hits, { budgetBytes: 16384 }), "utf8"),
+        `prompt: ${p.prompt}`,
+      );
+    }
+  })();
+});
+
+test("eval text output states the mean and max injected bytes", () => {
+  const { status, stdout } = run(["eval", GOLDEN_PATH, "--dir", CORPUS_DIR]);
+  assert.equal(status, 0);
+  assert.match(
+    stdout,
+    /injected context: mean=\d+ bytes max=\d+ bytes \(hook renderer, budget 16384 bytes, over all 6 prompts\)/,
+  );
+});
+
+test("eval honors MEMORY_ROUTER_INJECT_BUDGET, and an invalid value notes itself once, not once per prompt", () => {
+  const ok = run(["eval", GOLDEN_PATH, "--dir", CORPUS_DIR, "--json"], {
+    MEMORY_ROUTER_INJECT_BUDGET: "1",
+  });
+  assert.equal((JSON.parse(ok.stdout) as { injection: { budgetBytes: number } }).injection.budgetBytes, 1);
+
+  const bad = run(["eval", GOLDEN_PATH, "--dir", CORPUS_DIR, "--json"], {
+    MEMORY_ROUTER_INJECT_BUDGET: "-5",
+  });
+  assert.equal(bad.status, 0);
+  assert.equal((JSON.parse(bad.stdout) as { injection: { budgetBytes: number } }).injection.budgetBytes, 16384);
+  assert.equal(bad.stderr.split("MEMORY_ROUTER_INJECT_BUDGET").length - 1, 1);
+});

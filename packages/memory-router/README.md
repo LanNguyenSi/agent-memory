@@ -202,6 +202,57 @@ on stdout. See [docs/scoring.md](docs/scoring.md#embedding-provider) for
 the ongoing per-prompt cost once an embedding index/provider are
 configured, and how to fall back to the topic-only path.
 
+#### What the `UserPromptSubmit` hook injects, and how much
+
+Injecting every hit's whole body made a long memory cost its whole length on
+every prompt that touched it. `UserPromptSubmit` therefore injects, per hit:
+
+- the **whole body** when the memory is short (at most 2,000 characters), or
+  a `type: feedback` memory up to 3,000 characters, so a rule with its "Why"
+  and "How to apply" lines is never cut;
+- otherwise the **description**, the **chunk that matched the prompt** (and
+  the chunk after it when the matching one is short, under 600 characters),
+  and the memory's absolute path as ``_Full memory:_ `<path>` `` (the path in
+  backticks, so a copy takes it alone), which the agent can `Read` for the
+  rest. The matching chunk is the one the semantic search scored highest, or
+  for a keyword hit the chunk that holds the identifier. A hit that comes
+  with no chunk information (a topic-only hit, the degraded path, or a memory
+  whose document vector won) shows the first chunk, and so does a hit whose
+  index is older than the file: the search records where the matching chunk
+  started, and when the current body has a different chunk at that position
+  the renderer does not trust the stored index.
+
+The whole injection is held to **16,384 bytes** (UTF-8 bytes of the rendered
+text). Each hit has a ladder of forms: the form it starts in (whole body, or
+description + chunk + path), then description + chunk + path, then
+description + path, each lower form only when it is smaller in bytes than the
+form above it, so a short body with a long description, whose shorter forms
+would be larger, is never "shortened" into one of them. When every hit fits in
+its starting form, nothing changes. Otherwise, among the outputs that fit (the
+hits in rank order up to some cut, each in a form of its ladder, and a one-line
+note on how many were left out), the renderer picks the best one in this
+order: the top hit's form first (fuller wins), then the number of hits kept
+(more wins), then the form of hit 2, of hit 3 and so on (fuller wins). In
+effect the best match keeps its fullest form whenever it fits alone; as many
+lower hits are kept as fit next to it in their shortest forms, and hits are
+dropped only from the bottom; and the kept hits get the fullest forms that
+fit, best-ranked first, so a lower hit only gets room the hits above it could
+not use. The top hit is never dropped: when nothing fits, it is injected alone
+in its shortest form, over the budget. No hit is ever injected larger than its
+starting form.
+Shortening works on whole chunks and blocks, never on character offsets. The
+chunker itself splits a line or a code fence that is longer than its
+3,000-character cap, and a fence split that way is reopened and closed so the
+injected text stays balanced. Set
+`MEMORY_ROUTER_INJECT_BUDGET` to a positive integer to change the budget; an
+empty, zero, negative, fractional or non-numeric value falls back to the
+default with one note on stderr.
+
+`PreToolUse` is unchanged: its Tool Gate hits are few and rule-shaped, and it
+still injects each hit's full body. `memory-router test` prints the size in
+bytes the `UserPromptSubmit` renderer would inject, and `memory-router eval`
+reports the mean and maximum over the golden set.
+
 ### As an MCP server (imperative queries)
 
 ```json
