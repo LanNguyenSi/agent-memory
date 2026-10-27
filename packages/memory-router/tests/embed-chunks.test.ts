@@ -1445,3 +1445,265 @@ test('the merged result is cut to exactly k when the document top-k and the chun
     }
   });
 });
+
+// =========================================================================
+// Chunker version stamp: rebuildIndex re-chunks every memory when the
+// stored `chunker_version` is missing or differs from CHUNKER_VERSION, and
+// stamps it only after the whole pass succeeded.
+// =========================================================================
+
+const { CHUNKER_VERSION } = require('../src/embed/chunking');
+
+function storedStamp(dbPath: string): string | null {
+  const rows = rawQuery<{ value: string }[]>(
+    dbPath,
+    "SELECT value FROM meta WHERE key = 'chunker_version'",
+  );
+  return rows.length === 0 ? null : rows[0].value;
+}
+
+function writeStamp(dbPath: string, value: string | null): void {
+  const raw = new Database(dbPath);
+  try {
+    if (value === null)
+      raw.prepare("DELETE FROM meta WHERE key = 'chunker_version'").run();
+    else
+      raw
+        .prepare(
+          "INSERT INTO meta (key, value) VALUES ('chunker_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .run(value);
+  } finally {
+    raw.close();
+  }
+}
+
+function docVectorHex(dbPath: string): string {
+  return JSON.stringify(
+    rawQuery<unknown[]>(
+      dbPath,
+      'SELECT rowid, hex(embedding) AS h FROM vec ORDER BY rowid',
+    ),
+  );
+}
+
+function ftsDump(dbPath: string): string {
+  return JSON.stringify(
+    rawQuery<unknown[]>(
+      dbPath,
+      'SELECT mid, cidx, text FROM chunks_fts ORDER BY mid, cidx',
+    ),
+  );
+}
+
+function tamperChunksAndFts(dbPath: string): void {
+  const raw = new Database(dbPath);
+  sqliteVec.load(raw);
+  try {
+    raw.prepare('UPDATE chunks SET char_offset = 987654').run();
+    raw.prepare("UPDATE chunks_fts SET text = 'tampered'").run();
+  } finally {
+    raw.close();
+  }
+}
+
+function stampCorpus(): string {
+  const memDir = tmpDir('stamp-corpus');
+  for (const n of ['one', 'two']) {
+    writeMemory(memDir, `${n}.md`, {
+      name: `Memory ${n}`,
+      description: `About ${n}`,
+      body: `## Part A\n${n} ${'a'.repeat(1700)}\n\n## Part B\n${n} ${'b'.repeat(1700)}`,
+    });
+  }
+  return memDir;
+}
+
+test('fresh index: the chunker version is stamped after the first rebuild', async () => {
+  const memDir = stampCorpus();
+  const stub = stubFetch(() => ON);
+  try {
+    await withProviderEnv(async () => {
+      await rebuildIndex(memDir);
+      assert.equal(storedStamp(indexPath(memDir)), String(CHUNKER_VERSION));
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});
+
+test('equal stamp and unchanged mtimes: no chunk rewrite and no embed calls', async () => {
+  const memDir = stampCorpus();
+  const stub = stubFetch(() => ON);
+  try {
+    await withProviderEnv(async () => {
+      await rebuildIndex(memDir);
+      const idxPath = indexPath(memDir);
+      tamperChunksAndFts(idxPath);
+      const callsBefore = stub.calls();
+      const second = await rebuildIndex(memDir);
+      assert.equal(stub.calls(), callsBefore, 'no embed request');
+      assert.equal(second.embedded, 0);
+      assert.equal(second.chunksEmbedded, 0);
+      const offsets = rawQuery<{ char_offset: number }[]>(
+        idxPath,
+        'SELECT DISTINCT char_offset FROM chunks',
+      );
+      assert.deepEqual(
+        offsets.map((r) => r.char_offset),
+        [987654],
+        'chunk rows untouched',
+      );
+      assert.match(ftsDump(idxPath), /tampered/, 'fts rows untouched');
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});
+
+test('differing stamp, unchanged mtimes: every memory re-chunked, FTS rewritten, document vectors byte-identical', async () => {
+  const memDir = stampCorpus();
+  let generation = 1;
+  const stub = stubFetch(() => [1, generation]);
+  try {
+    await withProviderEnv(async () => {
+      await rebuildIndex(memDir);
+      const idxPath = indexPath(memDir);
+      const docsBefore = docVectorHex(idxPath);
+      const ftsBefore = ftsDump(idxPath);
+      tamperChunksAndFts(idxPath);
+      writeStamp(idxPath, String(CHUNKER_VERSION + 1));
+      // A re-embedded document would now come back different.
+      generation = 2;
+      const callsBefore = stub.calls();
+      const second = await rebuildIndex(memDir);
+      assert.ok(stub.calls() > callsBefore, 'chunk embed calls happen');
+      assert.equal(second.embedded, 0, 'no document re-embedded');
+      assert.ok(
+        second.chunksEmbedded >= 4,
+        `both memories re-chunked, got ${second.chunksEmbedded}`,
+      );
+      assert.equal(
+        docVectorHex(idxPath),
+        docsBefore,
+        'document vectors byte-identical',
+      );
+      assert.equal(
+        ftsDump(idxPath),
+        ftsBefore,
+        'FTS rows rewritten from the chunker output',
+      );
+      const offsets = rawQuery<{ char_offset: number }[]>(
+        idxPath,
+        'SELECT char_offset FROM chunks WHERE char_offset = 987654',
+      );
+      assert.equal(offsets.length, 0, 'chunk rows rewritten');
+      assert.equal(chunkVecRowCount(idxPath), chunkTotal(idxPath));
+      assert.equal(storedStamp(idxPath), String(CHUNKER_VERSION));
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});
+
+test('existing index without a stamp: re-chunked once, then stamped and a second rebuild is a no-op', async () => {
+  const memDir = stampCorpus();
+  const stub = stubFetch(() => ON);
+  try {
+    await withProviderEnv(async () => {
+      await rebuildIndex(memDir);
+      const idxPath = indexPath(memDir);
+      writeStamp(idxPath, null);
+      assert.equal(storedStamp(idxPath), null);
+      const second = await rebuildIndex(memDir);
+      assert.equal(second.embedded, 0);
+      assert.ok(second.chunksEmbedded > 0, 're-chunked once');
+      assert.equal(storedStamp(idxPath), String(CHUNKER_VERSION));
+      const callsBefore = stub.calls();
+      const third = await rebuildIndex(memDir);
+      assert.equal(third.chunksEmbedded, 0);
+      assert.equal(stub.calls(), callsBefore, 'second rebuild is a no-op');
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});
+
+test('failure in the middle of the re-chunk pass leaves the stamp untouched, the next run completes it', async () => {
+  const memDir = stampCorpus();
+  const stub = stubFetch(() => ON);
+  try {
+    await withProviderEnv(async () => {
+      await rebuildIndex(memDir);
+      const idxPath = indexPath(memDir);
+      writeStamp(idxPath, String(CHUNKER_VERSION + 1));
+      stub.restore();
+      const failing = stubFetch(() => ON, { failOnRequest: 1 });
+      try {
+        await assert.rejects(
+          () => rebuildIndex(memDir),
+          /stubbed embed failure on request 1/,
+        );
+      } finally {
+        failing.restore();
+      }
+      assert.equal(
+        storedStamp(idxPath),
+        String(CHUNKER_VERSION + 1),
+        'old stamp kept',
+      );
+      const healing = stubFetch(() => ON);
+      try {
+        const next = await rebuildIndex(memDir);
+        assert.ok(next.chunksEmbedded > 0, 'the next run redoes the pass');
+        assert.equal(storedStamp(idxPath), String(CHUNKER_VERSION));
+      } finally {
+        healing.restore();
+      }
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});
+
+test('readonly open never writes the chunker version stamp', async () => {
+  const memDir = stampCorpus();
+  const stub = stubFetch(() => ON);
+  try {
+    await withProviderEnv(async () => {
+      await rebuildIndex(memDir);
+      const idxPath = indexPath(memDir);
+      writeStamp(idxPath, null);
+      const ro = openIndex({ path: idxPath, readonly: true });
+      try {
+        assert.equal(ro.getChunkerVersion(), null);
+        ro.setChunkerVersion(CHUNKER_VERSION);
+      } finally {
+        ro.close();
+      }
+      assert.equal(
+        storedStamp(idxPath),
+        null,
+        'readonly setChunkerVersion is a no-op',
+      );
+
+      const rw = openIndex({ path: idxPath, dimensions: 2 });
+      try {
+        rw.setChunkerVersion(7);
+        assert.equal(rw.getChunkerVersion(), 7);
+        rw.setChunkerVersion(8);
+        assert.equal(rw.getChunkerVersion(), 8, 'upsert overwrites');
+      } finally {
+        rw.close();
+      }
+    });
+  } finally {
+    stub.restore();
+    fs.rmSync(memDir, { recursive: true, force: true });
+  }
+});

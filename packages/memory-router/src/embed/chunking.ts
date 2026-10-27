@@ -39,6 +39,13 @@
 const CHUNK_TARGET_CHARS = 1500;
 const CHUNK_MAX_CHARS = 3000;
 
+// Version of the chunking algorithm. Bump it whenever chunk boundaries
+// change (a rule change in chunkBody, or CHUNK_TARGET_CHARS /
+// CHUNK_MAX_CHARS): rebuildIndex stamps it in the index and re-chunks every
+// memory when the stored stamp is missing or differs, so existing indexes do
+// not keep chunks cut by the old chunker.
+const CHUNKER_VERSION = 1;
+
 // One chunk of a memory body, as produced by chunkBody: `index` is its
 // 0-based position in the body, `offset` the character offset of its first
 // character into the RAW body, `text` the chunk itself.
@@ -247,4 +254,9 @@ function chunkBody(body: string): MemoryChunk[] {
   return mergePieces(body, splitOversized(body, splitPieces(body)));
 }
 
-module.exports = { chunkBody, CHUNK_TARGET_CHARS, CHUNK_MAX_CHARS };
+module.exports = {
+  chunkBody,
+  CHUNK_TARGET_CHARS,
+  CHUNK_MAX_CHARS,
+  CHUNKER_VERSION,
+};

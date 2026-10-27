@@ -38,6 +38,12 @@
 //   embedding is actually written to a fresh index, and never overwritten
 //   afterward. This needs no schema_version bump or migration entry — it's
 //   just new keys in an existing generic table.
+//   The same holds for `chunker_version`: the CHUNKER_VERSION (see
+//   src/embed/chunking.ts) the stored chunk rows were cut with. It is a
+//   plain meta key, not a table or column change, so schema_version stays 4;
+//   a missing key means "chunked by an unknown chunker" and makes
+//   rebuildIndex re-chunk once. Unlike the provenance rows it is upserted
+//   (setChunkerVersion), and never written on a readonly open.
 //   Dimensions are never hardcoded: a brand-new index defers creating the
 //   `vec` virtual table (whose column width is fixed for the life of the
 //   file — sqlite-vec bakes `FLOAT[N]` into the CREATE TABLE text) until the
@@ -443,6 +449,11 @@ function openIndex(opts: IndexStoreOptions): {
   // memories out of `k`.
   replaceChunks: (id: string, model: string, chunks: ChunkInput[]) => void;
   listChunkIds: () => string[];
+  // Chunker version stamp (meta key `chunker_version`): null when never
+  // stamped. `setChunkerVersion` upserts it and is a no-op on a readonly
+  // open.
+  getChunkerVersion: () => number | null;
+  setChunkerVersion: (version: number) => void;
   searchChunks: (
     queryEmbedding: number[],
     k: number,
@@ -1076,6 +1087,20 @@ function openIndex(opts: IndexStoreOptions): {
     replaceChunksTx(id, model, chunks);
   }
 
+  function getChunkerVersion(): number | null {
+    const raw = metaValue('chunker_version');
+    if (raw === null) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) ? n : null;
+  }
+
+  function setChunkerVersion(version: number): void {
+    if (opts.readonly) return;
+    db.prepare(
+      'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    ).run('chunker_version', String(version));
+  }
+
   function listChunkIds(): string[] {
     if (!chunkTablesReady) return [];
     return (listChunkIdsStmt().all() as { id: string }[]).map((r) => r.id);
@@ -1430,6 +1455,8 @@ function openIndex(opts: IndexStoreOptions): {
     search,
     replaceChunks,
     listChunkIds,
+    getChunkerVersion,
+    setChunkerVersion,
     searchChunks,
     replaceFts,
     listFtsIds,

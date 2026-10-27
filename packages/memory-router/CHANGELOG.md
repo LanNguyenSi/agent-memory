@@ -6,6 +6,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **The index stamps the chunker version and re-chunks when it changes.** `rebuildIndex` re-chunked a memory only when its mtime changed or it had no chunk rows, so a change to the chunker (`chunkBody`) left existing indexes with chunks cut by the old one. `src/embed/chunking.ts` now exports `CHUNKER_VERSION` (bump it when chunk boundaries change) and the index records it in the `meta` table (`chunker_version`; a new meta key, so the schema version stays 4). When the stored stamp is missing or differs, the next `index` run re-chunks every memory (chunk vectors and keyword rows rewritten, document vectors not re-embedded) and writes the stamp only after the whole run succeeded; an index without a stamp is re-chunked once. Read-only opens never write it. Pinned by `tests/embed-chunks.test.ts`.
+
 ### Changed
 
 - **The keyword path now finds an id token wrapped inside a larger prompt token.** A prompt like `task:4e7729ab`, `4e7729ab's`, a URL `https://x/t/4e7729ab` or a path `src/a1b2c3.ts` was inert, because only the whole whitespace token was tested against the id rule and none of these whole tokens pass it. A whitespace token is now ALSO split at the id separators `:` `/` `.` `#` `?` `=` `'` `-` and the typographic apostrophe U+2019, the smart-quote form of `'` (the underscore is not one, so `snake_case` names stay whole) and every part that passes the unchanged id rule becomes a queryable id of its own, deduped so a bare id still yields exactly one term; an id part is never deduped away by a non-id whole token with an equal phrase, so a stopword prefix like `the:a1b2c3` keeps its id. Non-id parts, hyphenated compounds like `Bonsai-Baum`, `v0.7.4` and snake_case names stay inert, so no new false positive is introduced; `isIdToken`, the df cap and the admission cap are untouched. Pinned by `tests/keyword.test.ts` and `tests/keyword-index.test.ts`.
