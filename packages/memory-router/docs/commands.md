@@ -370,6 +370,7 @@ reports the negative-control prompts separately.
   "unknownExpectIds": [],
   "semanticContributedCount": 0,
   "keywordContributedCount": 0,
+  "injection": { "budgetBytes": 16384, "meanBytes": 1523.5, "maxBytes": 3012 },
   "perPrompt": [
     {
       "prompt": "merge this PR for the billing module",
@@ -378,7 +379,8 @@ reports the negative-control prompts separately.
       "isNegativeControl": false,
       "precision": 1,
       "recall": 1,
-      "reciprocalRank": 1
+      "reciprocalRank": 1,
+      "injectBytes": 1024
     }
   ],
   "aggregate": {
@@ -402,9 +404,40 @@ the small boost given to already-semantic id matches is not counted,
 it never wins a slot on its own). The text report prints both as
 `semantic contributed: N/M prompts` and `keyword contributed: N/M prompts`.
 `vocabularySource` states which topic vocabulary the Topic Gate used for
-the run (see [docs/memory-schema.md](memory-schema.md)). Exits 1 only on
+the run (see [docs/memory-schema.md](memory-schema.md)).
+
+`injectBytes` (per prompt) and `injection` (over the golden set) report the
+size of the context the `UserPromptSubmit` hook would inject for the hits the
+run resolved: the same renderer (`renderHitsBudgeted`) under the same budget,
+`MEMORY_ROUTER_INJECT_BUDGET` or 16,384 bytes. `meanBytes` averages over ALL
+prompts, a prompt with no hit counting as 0; `maxBytes` is the largest. The
+text report prints one line, `injected context: mean=N bytes max=M bytes`.
+The figure is the rendered markdown, not the hook's JSON-wrapped stdout, which
+is a little larger (JSON escaping and the wrapper). Exits 1 only on
 a real setup error (`golden.yml` missing or unparsable, or the corpus dir
 missing); exits 0 on any error-free run regardless of the metric values.
+
+## Injection size: `MEMORY_ROUTER_INJECT_BUDGET`, `test` and `eval`
+
+The `UserPromptSubmit` hook holds what it injects to a byte budget; see the
+README's "What the `UserPromptSubmit` hook injects" for the per-hit forms.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MEMORY_ROUTER_INJECT_BUDGET` | Largest injection, in UTF-8 bytes of the rendered markdown. A positive integer. Unset: the default. Empty, `0`, negative, fractional or non-numeric: the default, plus one note on stderr. | `16384` |
+
+Over the budget, the lowest-ranked hits are shortened first, then dropped
+(the top hit is always kept, in its shortest form if need be, even when that
+alone exceeds the budget). The `PreToolUse` hook ignores the variable and
+keeps injecting full bodies.
+
+`memory-router test <prompt>` prints `rendered: N bytes (budget B bytes)`
+after the matches, and `--json` carries `renderedBytes` and `budgetBytes`
+(`0` for no match). `test` runs the pre-blend resolver, whose hits carry no
+matched-chunk information, so a long memory shows as description + first
+chunk + path there. `memory-router eval` reports `injectBytes` per prompt and
+the `injection` summary, see
+[the eval schema](#memory-router-eval-metric-definitions-and-json-schema).
 
 ## Coverage / regression suite
 

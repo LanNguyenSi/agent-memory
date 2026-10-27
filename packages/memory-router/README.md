@@ -202,6 +202,36 @@ on stdout. See [docs/scoring.md](docs/scoring.md#embedding-provider) for
 the ongoing per-prompt cost once an embedding index/provider are
 configured, and how to fall back to the topic-only path.
 
+#### What the `UserPromptSubmit` hook injects, and how much
+
+Injecting every hit's whole body made a long memory cost its whole length on
+every prompt that touched it. `UserPromptSubmit` therefore injects, per hit:
+
+- the **whole body** when the memory is short (at most 2,000 characters), or
+  a `type: feedback` memory up to 3,000 characters, so a rule with its "Why"
+  and "How to apply" lines is never cut;
+- otherwise the **description**, the **chunk that matched the prompt** (and
+  the chunk after it when the matching one is short, under 600 characters),
+  and the memory's absolute path as `_Full memory: <path>_`, which the agent
+  can `Read` for the rest. The matching chunk is the one the semantic search
+  scored highest, or for a keyword hit the chunk that holds the identifier.
+  A hit that comes with no chunk information (a topic-only hit, the degraded
+  path, or a memory whose document vector won) shows the first chunk.
+
+The whole injection is held to **16,384 bytes** (UTF-8 bytes of the rendered
+text). Over that, the lowest-ranked hits are shortened first (whole body, then
+description + chunk + path, then description + path), then dropped from the
+bottom with a one-line note; the top hit is never dropped, and shortening
+works on whole chunks, never inside a code fence or a line. Set
+`MEMORY_ROUTER_INJECT_BUDGET` to a positive integer to change the budget; an
+empty, zero, negative, fractional or non-numeric value falls back to the
+default with one note on stderr.
+
+`PreToolUse` is unchanged: its Tool Gate hits are few and rule-shaped, and it
+still injects each hit's full body. `memory-router test` prints the size in
+bytes the `UserPromptSubmit` renderer would inject, and `memory-router eval`
+reports the mean and maximum over the golden set.
+
 ### As an MCP server (imperative queries)
 
 ```json
