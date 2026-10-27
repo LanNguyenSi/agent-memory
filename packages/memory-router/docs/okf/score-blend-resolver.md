@@ -94,7 +94,8 @@ is inert. Only ID tokens reach the search layer at all: `isIdToken` in
 `packages/memory-router/src/embed/keyword.ts` admits a prompt token to
 the FTS query only when the whole token (edge punctuation trimmed) - or,
 after splitting the token at the id separators `:` `/` `.` `#` `?` `=` `'`
-`-` (the underscore is not one), one of its parts - is a single ASCII
+`-` and the typographic apostrophe U+2019 (the underscore is not one), one
+of its parts - is a single ASCII
 letter/digit run of at least `KEYWORD_MIN_ID_LENGTH` (6) characters
 carrying at least one letter and one digit, and the store then skips a
 term contained by more than `KEYWORD_MAX_DF` (12) memories, so every

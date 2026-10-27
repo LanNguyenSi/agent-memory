@@ -65,12 +65,15 @@ How a prompt token qualifies:
   at least one letter and at least one digit. `4e7729ab`, `b11905`, `a1b2c3`,
   `base64` pass.
 - A token whose id hides inside a larger word is ALSO split at the **id
-  separators** `:` `/` `.` `#` `?` `=` `'` `-` (the underscore is NOT one, so
-  `snake_a1b2c3` stays whole) and every part that passes the same id rule
-  becomes a queryable id on its own. This is what lets `task:4e7729ab`,
-  `4e7729ab's`, a URL `https://x/t/4e7729ab` and a path `src/a1b2c3.ts` reach
-  the keyword path; a whole token that is already an id yields one term,
-  never a duplicate.
+  separators** `:` `/` `.` `#` `?` `=` `'` `-` and the typographic apostrophe
+  U+2019 (the smart-quote form of `'`, so `4e7729ab’s` splits too; the
+  underscore is NOT a separator, so `snake_a1b2c3` stays whole) and every
+  part that passes the same id rule becomes a queryable id on its own. This
+  is what lets `task:4e7729ab`, `4e7729ab's`, a URL `https://x/t/4e7729ab`
+  and a path `src/a1b2c3.ts` reach the keyword path; a whole token that is
+  already an id yields one term, never a duplicate, and an id part is never
+  deduped away by a non-id whole token whose phrase happens to equal it
+  (`the:a1b2c3` still yields the id `a1b2c3`).
 - Anything that fails the id rule, whole or in part, is inert: `IPv6`,
   `arm64`, `S12` (too short), `UTF-8`, `v0.7.4`, `studio-tb`, `foo:bar`,
   `snake_a1b2c3` (no id part), `JavaScript`, `MTPLX`, `abcdef` (no digit) and

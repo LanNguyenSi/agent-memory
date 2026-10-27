@@ -126,11 +126,20 @@ interface KeywordTerm {
 // what lets `task:4e7729ab`, `4e7729ab's`, `https://x/t/4e7729ab` and
 // `src/a1b2c3.ts` reach the keyword path without any non-id part (or a
 // snake_case name, whose underscore is not a separator) becoming queryable.
-// Whole-token emission is unchanged, and both passes dedupe through `seen`,
-// so a token that is already an id yields exactly one term (never a dup).
+// Whole-token emission is unchanged, and a token that is already an id
+// yields exactly one term (never a dup). The two passes dedupe through two
+// phrase-keyed sets, NOT one: `seenWhole` dedupes the whole-token emission
+// (a repeated non-id token never emits twice), `seenId` holds the phrases
+// already covered by a QUERYABLE term - a whole-token phrase registers there
+// only when the whole token itself passes isIdToken, a part phrase always.
+// One shared set would be the bug this split fixes: dropping a stopword
+// prefix gives `the:a1b2c3` the phrase `a1b2c3` even though the whole token
+// `the:a1b2c3` is never queried (it is no id), and registering that inert
+// phrase would then dedupe away the very `a1b2c3` part that IS the id.
 function extractKeywordTerms(prompt: string): KeywordTerm[] {
   if (!prompt) return [];
-  const seen = new Set<string>();
+  const seenWhole = new Set<string>();
+  const seenId = new Set<string>();
   const terms: KeywordTerm[] = [];
   for (const word of prompt.split(/\s+/)) {
     const pieces = word.match(/[\p{L}\p{N}]+/gu);
@@ -143,12 +152,19 @@ function extractKeywordTerms(prompt: string): KeywordTerm[] {
     }
     if (kept.length === 0) continue;
     const phrase = kept.join(' ');
-    if (!seen.has(phrase)) {
-      seen.add(phrase);
+    if (!seenWhole.has(phrase)) {
+      seenWhole.add(phrase);
       // The id rule's token for the whole word: the original word with edge
       // punctuation stripped (`"4e7729ab"` and `(4e7729ab)` still read as
-      // the token they are), never lowercased.
+      // the token they are), never lowercased. An id whole token whose phrase
+      // a part already covered is skipped (one term per id, never a dup);
+      // only a whole token that IS an id registers in `seenId`.
       const original = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+      const wholeIsId = isIdToken(original);
+      if (wholeIsId) {
+        if (seenId.has(phrase)) continue;
+        seenId.add(phrase);
+      }
       terms.push({ term: original, phrase });
     }
     // An id hidden inside a larger token: split at the id separators and let
@@ -159,8 +175,8 @@ function extractKeywordTerms(prompt: string): KeywordTerm[] {
     for (const part of word.split(ID_SEPARATORS)) {
       if (!isIdToken(part)) continue;
       const partPhrase = part.toLowerCase();
-      if (seen.has(partPhrase)) continue;
-      seen.add(partPhrase);
+      if (seenId.has(partPhrase)) continue;
+      seenId.add(partPhrase);
       terms.push({ term: part, phrase: partPhrase });
     }
   }
@@ -169,13 +185,14 @@ function extractKeywordTerms(prompt: string): KeywordTerm[] {
 
 // Id separators: the characters an id can hide between when it is wrapped in
 // a larger prompt token (a `task:4e7729ab` or `x=a1b2c3` reference, a URL
-// path segment, a dotted path `src/a1b2c3.ts`, a possessive `4e7729ab's`).
-// A whitespace token is checked part by part at these boundaries (consecutive
-// separators collapse, so empty edge parts vanish). The underscore is
-// deliberately absent: snake_case names (`b11905_x`, `finish_reason`) stay
-// whole and stay non-ids. Each part is re-checked with the UNCHANGED
-// isIdToken, so only real id parts become queryable.
-const ID_SEPARATORS = /[:\/.#?='\-]+/;
+// path segment, a dotted path `src/a1b2c3.ts`, a possessive `4e7729ab's` or
+// its typographic form `4e7729ab’s` - U+2019, the “smart quote” spellings
+// produce). A whitespace token is checked part by part at these boundaries
+// (consecutive separators collapse, so empty edge parts vanish). The
+// underscore is deliberately absent: snake_case names (`b11905_x`,
+// `finish_reason`) stay whole and stay non-ids. Each part is re-checked with
+// the UNCHANGED isIdToken, so only real id parts become queryable.
+const ID_SEPARATORS = /[:\/.#?='\u2019-]+/;
 
 // The id rule (checked on the ORIGINAL token, before lowercasing): a single
 // run of ASCII letters and digits only, at least KEYWORD_MIN_ID_LENGTH

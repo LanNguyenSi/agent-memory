@@ -187,10 +187,11 @@ test('quotePhrase: wraps in FTS5 double quotes; phrase bodies can never contain 
 // --- id subtokens inside a larger token (URLs, paths, task: refs) ----------
 //
 // A whitespace token is ALSO split at the id separators (`:` `/` `.` `#`
-// `?` `=` `'` `-`; the underscore is NOT a separator) and every part that
-// passes the UNCHANGED isIdToken becomes its own term whose term and phrase
-// are that part. Whole-token behaviour is kept, so a token that is already an
-// id yields one term (never a duplicate). One named case per example.
+// `?` `=` `'` `-` and the typographic apostrophe U+2019; the underscore is
+// NOT a separator) and every part that passes the UNCHANGED isIdToken
+// becomes its own term whose term and phrase are that part. Whole-token
+// behaviour is kept, so a token that is already an id yields one term (never
+// a duplicate). One named case per example.
 
 function idTerms(prompt: string): string[] {
   return extractKeywordTerms(prompt)
@@ -253,6 +254,7 @@ test('subtoken: each id separator alone surfaces the id part', () => {
     'x=a1b2c3',
     "x'a1b2c3",
     'x-a1b2c3',
+    'x\u2019a1b2c3',
   ]) {
     assert.deepEqual(idTerms(tok), ['a1b2c3'], `"${tok}" must yield the id a1b2c3`);
   }
@@ -282,6 +284,49 @@ test('subtoken FTS safety: an id part taken from a URL yields an FTS-safe phrase
     'a phrase may only contain letters, digits and single spaces',
   );
   assert.ok(!idTerm.phrase.includes('"'), 'the phrase body cannot break out of quotePhrase');
+});
+
+// --- Stopword-prefixed tokens: a whole-token phrase never swallows the id ---
+//
+// Dropping the stopword prefix makes the WHOLE token's phrase equal the id
+// part's phrase (e.g. `the:a1b2c3` has phrase `a1b2c3`) while the whole
+// token itself is no id and is never queried; only terms that are (or could
+// be) queried may dedupe, so the id part must survive. One named case per
+// example.
+
+test('subtoken: stopword prefix the: does not swallow the id (the:a1b2c3 yields a1b2c3)', () => {
+  assert.deepEqual(idTerms('the:a1b2c3'), ['a1b2c3']);
+});
+
+test('subtoken: stopword prefix get- does not swallow the id (get-4e7729ab yields 4e7729ab)', () => {
+  assert.deepEqual(idTerms('get-4e7729ab'), ['4e7729ab']);
+});
+
+test('subtoken: stopword prefix for/ does not swallow the id (for/4e7729ab yields 4e7729ab)', () => {
+  assert.deepEqual(idTerms('for/4e7729ab'), ['4e7729ab']);
+});
+
+test('subtoken: stopword prefix a/ does not swallow the id (a/a1b2c3.ts yields a1b2c3)', () => {
+  assert.deepEqual(idTerms('a/a1b2c3.ts'), ['a1b2c3']);
+});
+
+test('subtoken: stopword prefix use/ does not swallow the id (use/a1b2c3 yields a1b2c3)', () => {
+  assert.deepEqual(idTerms('use/a1b2c3'), ['a1b2c3']);
+});
+
+test('subtoken: for/x1y2z3 and x1y2z3 yields exactly one id term x1y2z3', () => {
+  assert.deepEqual(idTerms('for/x1y2z3 and x1y2z3'), ['x1y2z3']);
+});
+
+test('subtoken: a bare id after a token whose part covers it yields no second term (x:a1b2c3 a1b2c3)', () => {
+  // `x` is no stopword, so the whole phrase `x a1b2c3` differs from the id
+  // phrase; only the part pass marks `a1b2c3` as queried, and the later bare
+  // id token must see that and stay deduped (one FTS read, not two).
+  assert.deepEqual(idTerms('x:a1b2c3 a1b2c3'), ['a1b2c3']);
+});
+
+test('subtoken: the typographic apostrophe U+2019 splits, 4e7729ab\u2019s yields the id term 4e7729ab', () => {
+  assert.deepEqual(idTerms('4e7729ab\u2019s'), ['4e7729ab']);
 });
 
 // --- Reason text -------------------------------------------------------------

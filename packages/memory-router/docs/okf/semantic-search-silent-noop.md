@@ -138,7 +138,11 @@ while a read-only open still neither creates nor migrates the table (the
 same rule as the v3 chunk tables above). Only id tokens are ever queried
 (see `isIdToken` in `packages/memory-router/src/embed/keyword.ts`), so
 the FTS reads a prompt costs are two per id token at most, and a prompt
-without one reads the FTS index not at all.
+without one reads the FTS index not at all. Since an id PART of a larger
+token (a `task:4e7729ab` or `src/a1b2c3.ts` reference) now counts as an
+id token for this bound, a token with several id parts costs two reads
+per part; the bound is a cost description, not a cap - there is no code
+limit on how many id tokens one prompt may carry.
 
 ## Errors that can propagate out of `semanticSearch()`
 
