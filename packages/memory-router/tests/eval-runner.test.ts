@@ -85,6 +85,7 @@ const {
   vocabularySourceLabel,
   promptToHits,
   findUnknownExpectIds,
+  findUnknownForbidIds,
 } = require("../src/eval/runner");
 const { loadGoldenFile } = require("../src/eval/golden");
 
@@ -233,7 +234,7 @@ test("loadGoldenFile: omitted expect: defaults to [] (negative control)", () => 
   try {
     const golden = loadGoldenFile(p);
     assert.deepEqual(golden.prompts, [
-      { prompt: "no expect key at all", expect: [] },
+      { prompt: "no expect key at all", expect: [], forbid: [] },
     ]);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -305,23 +306,26 @@ test("aggregateMetrics: hand-verified aggregate over the fixture perPrompt set",
   // Same 6-prompt scenario as the full runGoldenEval test below, built
   // directly from scorePrompt so this test also pins the aggregation math
   // in isolation from the router/loader wiring.
+  const noForbid = { forbid: [] as string[], forbidViolations: [] as string[] };
   const perPrompt = [
-    { prompt: "p1", expect: ["a"], got: ["a"], ...scorePrompt(["a"], ["a"]) },
+    { prompt: "p1", expect: ["a"], got: ["a"], ...noForbid, ...scorePrompt(["a"], ["a"]) },
     {
       prompt: "p2",
       expect: ["a", "b"],
       got: ["b", "a"],
+      ...noForbid,
       ...scorePrompt(["a", "b"], ["b", "a"]),
     },
     {
       prompt: "p3",
       expect: ["a", "phantom"],
       got: ["a"],
+      ...noForbid,
       ...scorePrompt(["a", "phantom"], ["a"]),
     },
-    { prompt: "p4", expect: ["b"], got: ["a"], ...scorePrompt(["b"], ["a"]) },
-    { prompt: "p5", expect: [], got: [], ...scorePrompt([], []) },
-    { prompt: "p6", expect: [], got: ["a"], ...scorePrompt([], ["a"]) },
+    { prompt: "p4", expect: ["b"], got: ["a"], ...noForbid, ...scorePrompt(["b"], ["a"]) },
+    { prompt: "p5", expect: [], got: [], ...noForbid, ...scorePrompt([], []) },
+    { prompt: "p6", expect: [], got: ["a"], ...noForbid, ...scorePrompt([], ["a"]) },
   ];
   const agg = aggregateMetrics(perPrompt);
   assert.equal(agg.precision, 0.75);
@@ -334,6 +338,35 @@ test("aggregateMetrics: hand-verified aggregate over the fixture perPrompt set",
     failed: 1,
     rate: 0.5,
   });
+  assert.deepEqual(agg.forbid, { total: 0, violated: 0 });
+});
+
+test("aggregateMetrics: forbid summary counts prompts with a forbid list and, of those, the ones with a violation (never mixed into P/R/MRR)", () => {
+  const entry = (
+    prompt: string,
+    expect: string[],
+    got: string[],
+    forbid: string[],
+  ) => ({
+    prompt,
+    expect,
+    got,
+    forbid,
+    forbidViolations: got.filter((id) => forbid.includes(id)),
+    ...scorePrompt(expect, got),
+  });
+  const withViolation = aggregateMetrics([
+    entry("clean", ["a"], ["a"], ["old"]),
+    entry("dirty", ["a"], ["a", "old"], ["old"]),
+    entry("no forbid", ["a"], ["a"], []),
+  ]);
+  assert.deepEqual(withViolation.forbid, { total: 2, violated: 1 });
+  // Precision still counts the forbidden id as a plain wrong hit and nothing else.
+  assert.equal(withViolation.precision, (1 + 0.5 + 1) / 3);
+  assert.equal(withViolation.mrr, 1);
+
+  const allClean = aggregateMetrics([entry("clean", ["a"], ["a"], ["old"])]);
+  assert.deepEqual(allClean.forbid, { total: 1, violated: 0 });
 });
 
 interface PromptMetricLike {
@@ -586,4 +619,148 @@ test("findUnknownExpectIds: empty when every expect id resolves against the corp
   const memories: Memory[] = [fakeMemory("real_a")];
   const prompts = [{ expect: ["real_a"] }, { expect: [] }];
   assert.deepEqual(findUnknownExpectIds(prompts, memories), []);
+});
+
+// --- loadGoldenFile forbid ------------------------------------------------
+//
+// One case per input shape of the optional `forbid` field: present, absent,
+// empty, deduplicated, and every malformed shape.
+
+function writeGolden(yaml: string): { p: string; cleanup: () => void } {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "memory-router-golden-"));
+  const p = path.join(tmp, "forbid.yml");
+  fs.writeFileSync(p, yaml);
+  return { p, cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
+}
+
+test("loadGoldenFile: forbid present is parsed next to expect", () => {
+  const { p, cleanup } = writeGolden(
+    'prompts:\n  - prompt: "x"\n    expect: ["new"]\n    forbid: ["old", "older"]\n',
+  );
+  try {
+    assert.deepEqual(loadGoldenFile(p).prompts[0], {
+      prompt: "x",
+      expect: ["new"],
+      forbid: ["old", "older"],
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("loadGoldenFile: forbid absent defaults to [] (the fixture golden set has no forbid anywhere)", () => {
+  const golden = loadGoldenFile(GOLDEN_PATH);
+  for (const entry of golden.prompts) assert.deepEqual(entry.forbid, []);
+});
+
+test("loadGoldenFile: an explicitly empty forbid is [] and a negative control may carry forbid", () => {
+  const empty = writeGolden('prompts:\n  - prompt: "x"\n    expect: ["a"]\n    forbid: []\n');
+  try {
+    assert.deepEqual(loadGoldenFile(empty.p).prompts[0].forbid, []);
+  } finally {
+    empty.cleanup();
+  }
+  const nc = writeGolden('prompts:\n  - prompt: "x"\n    forbid: ["old"]\n');
+  try {
+    assert.deepEqual(loadGoldenFile(nc.p).prompts[0], {
+      prompt: "x",
+      expect: [],
+      forbid: ["old"],
+    });
+  } finally {
+    nc.cleanup();
+  }
+});
+
+test("loadGoldenFile: duplicate forbid ids collapse at load time", () => {
+  const { p, cleanup } = writeGolden(
+    'prompts:\n  - prompt: "x"\n    expect: ["a"]\n    forbid: ["old", "old"]\n',
+  );
+  try {
+    assert.deepEqual(loadGoldenFile(p).prompts[0].forbid, ["old"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("loadGoldenFile: malformed forbid (not a list, non-string entries, null) throws a path-prefixed error", () => {
+  for (const bad of ['"old"', "[1, 2]", "[old, [nested]]", "{a: b}", "null"]) {
+    const { p, cleanup } = writeGolden(
+      `prompts:\n  - prompt: "x"\n    expect: ["a"]\n    forbid: ${bad}\n`,
+    );
+    try {
+      assert.throws(
+        () => loadGoldenFile(p),
+        /prompts\[0\]\.forbid must be an array of memory-id strings/,
+        `forbid: ${bad} must be rejected`,
+      );
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test("loadGoldenFile: an id listed in both expect and forbid is rejected (it could never be satisfied)", () => {
+  const { p, cleanup } = writeGolden(
+    'prompts:\n  - prompt: "x"\n    expect: ["a", "b"]\n    forbid: ["b"]\n',
+  );
+  try {
+    assert.throws(
+      () => loadGoldenFile(p),
+      /prompts\[0\] lists b in both expect and forbid/,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+// --- forbid in the runner -------------------------------------------------
+
+test("findUnknownForbidIds: flags forbid ids absent from the corpus, deduped across prompts", () => {
+  const memories: Memory[] = [fakeMemory("real_a")];
+  const unknown = findUnknownForbidIds(
+    [{ forbid: ["real_a", "ghost"] }, { forbid: ["ghost", "ghost_2"] }, { forbid: [] }],
+    memories,
+  );
+  assert.deepEqual(new Set(unknown), new Set(["ghost", "ghost_2"]));
+  assert.equal(unknown.length, 2);
+  assert.deepEqual(findUnknownForbidIds([{ forbid: ["real_a"] }], memories), []);
+});
+
+test("runGoldenEval: forbid ids found in the result are reported per prompt and in the aggregate, without touching P/R/MRR", async () => {
+  // Against the fixture corpus (topic-only path) this prompt returns
+  // feedback_force_push (see the hand-verified run above): forbidding it
+  // must show as a violation, forbidding an id that is not returned must not.
+  const { p, cleanup } = writeGolden(
+    [
+      "prompts:",
+      '  - prompt: "rm -rf the build directory to start fresh"',
+      '    expect: ["feedback_deploy_checklist"]',
+      '    forbid: ["feedback_force_push", "feedback_unknown_ghost"]',
+      '  - prompt: "git push --force to master"',
+      '    expect: ["feedback_force_push"]',
+      '    forbid: ["feedback_deploy_checklist"]',
+      '  - prompt: "what is the weather in Berlin today"',
+      "",
+    ].join("\n"),
+  );
+  try {
+    const report = await runGoldenEval(p, CORPUS_DIR);
+    const [dirty, clean, plain] = report.perPrompt;
+    assert.deepEqual(dirty.forbid, ["feedback_force_push", "feedback_unknown_ghost"]);
+    assert.deepEqual(dirty.forbidViolations, ["feedback_force_push"]);
+    assert.deepEqual(clean.forbidViolations, []);
+    assert.deepEqual(plain.forbid, []);
+    assert.deepEqual(plain.forbidViolations, []);
+    assert.deepEqual(report.aggregate.forbid, { total: 2, violated: 1 });
+    assert.deepEqual(report.unknownForbidIds, ["feedback_unknown_ghost"]);
+    // The violation does not change scoring: the dirty prompt is a plain miss
+    // (precision 0, rr 0), the clean one a plain hit.
+    assert.equal(dirty.precision, 0);
+    assert.equal(clean.reciprocalRank, 1);
+  } finally {
+    cleanup();
+  }
 });

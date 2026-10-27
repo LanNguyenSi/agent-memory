@@ -127,6 +127,17 @@ interface BlendWeights {
    * the cap is now opt-in via MEMORY_ROUTER_BLEND_CANDIDATE_K.
    */
   candidateK: number;
+  /**
+   * Semantic-score penalty for a retired project memory (frontmatter
+   * `status: retired` on a `type: project` memory, see isRetiredProject).
+   * resolveBlended subtracts it from the memory's raw semantic score BEFORE
+   * the relevance floor, so a retired memory needs a semantic match at least
+   * `minSemanticScore + retiredPenalty` strong to survive at all and then
+   * ranks that much lower. 0 disables the demotion; a value above the
+   * largest possible cosine (1) removes retired memories from the semantic
+   * path altogether. Overridable via MEMORY_ROUTER_BLEND_RETIRED_PENALTY.
+   */
+  retiredPenalty: number;
 }
 
 // --- Model-conditional relevance floor default ------------------------------
@@ -203,6 +214,7 @@ const BLEND_DEFAULTS: BlendWeights = {
   minSemanticScoreSource: 'fallback',
   minSemanticScoreModel: null,
   candidateK: 5,
+  retiredPenalty: 0.05,
 };
 
 // Ollama model identifiers can carry a `:tag` suffix (`bge-m3:latest`,
@@ -338,6 +350,10 @@ function loadBlendWeights(): BlendWeights {
     minSemanticScoreSource: minSemantic.usedOverride ? 'env' : minSemanticDefault.source,
     minSemanticScoreModel: minSemanticDefault.model,
     candidateK: envFloat('MEMORY_ROUTER_BLEND_CANDIDATE_K', BLEND_DEFAULTS.candidateK),
+    retiredPenalty: envFloat(
+      'MEMORY_ROUTER_BLEND_RETIRED_PENALTY',
+      BLEND_DEFAULTS.retiredPenalty,
+    ),
   };
 }
 
@@ -355,6 +371,20 @@ const TYPE_MODIFIER_UNITS: Record<MemoryType, number> = {
   reference: 0.25,
   user: 0,
 };
+
+// A memory is "retired" when its frontmatter says `status: retired` AND it
+// is a `type: project` memory: project memories describe setups and states
+// that can be removed or superseded, while the other types (feedback rules,
+// user facts, reference pointers) do not go stale that way, so a stray
+// `status: retired` on them is ignored rather than hiding a live rule. The
+// value is compared trimmed and case-insensitively; a non-string (a YAML
+// boolean, number or list) is never retired.
+function isRetiredProject(memory: Memory): boolean {
+  const fm = memory.frontmatter;
+  if (fm.type !== 'project') return false;
+  const status: unknown = fm.status;
+  return typeof status === 'string' && status.trim().toLowerCase() === 'retired';
+}
 
 function typeModifier(type: MemoryType, weights: BlendWeights): number {
   return (TYPE_MODIFIER_UNITS[type] ?? 0) * weights.typeWeight;
@@ -382,6 +412,7 @@ module.exports = {
   computeAmbiguity,
   confidenceThreshold,
   loadBlendWeights,
+  isRetiredProject,
   typeModifier,
   recencyModifier,
   resolveDefaultMinSemanticScore,

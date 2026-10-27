@@ -116,9 +116,19 @@ function parseMemoryFileWithReason(path: string, source: string): ParseResult {
     };
   }
   const resolvedTopics = fm.topics ?? fm.metadata?.topics ?? [];
+  // `status` follows the same liberal read as `type`: top-level wins, a
+  // falsy top-level value falls back to `metadata.status`. The key is only
+  // written when a value was found, so a memory without a status keeps
+  // exactly the frontmatter shape it had before the field existed.
+  const resolvedStatus = fm.status || fm.metadata?.status;
 
   const id = basename(path, extname(path));
-  const frontmatter = { ...fm, type: resolvedType, topics: resolvedTopics };
+  const frontmatter = {
+    ...fm,
+    type: resolvedType,
+    topics: resolvedTopics,
+    ...(resolvedStatus ? { status: resolvedStatus } : {}),
+  };
   return {
     ok: true,
     memory: { id, path, frontmatter, body },

@@ -3,7 +3,7 @@ type: invariant
 title: Three resolvers, two dedup rules
 description: memory-router exports three resolvers that combine gate/signal hits into a ranked list; this maps each production call site to its resolver and gate set, and states how the two dedup/ranking functions underneath them differ.
 tags: [gate-composition, dedup, resolveBlended, resolve, rankWithToolPrivilege]
-timestamp: 2026-10-27T13:44:19Z
+timestamp: 2026-10-27T20:05:11Z
 sources:
   - packages/memory-router/src/router.ts
   - packages/memory-router/src/render.ts
@@ -20,7 +20,7 @@ sources:
 
 `packages/memory-router/src/router.ts` exports three resolvers (`resolve`,
 `resolveConfidence`, `resolveBlended`; its `module.exports` at
-`packages/memory-router/src/router.ts:568-574`), and it is easy to assume
+`packages/memory-router/src/router.ts:595-601`), and it is easy to assume
 there is one canonical way memory-router combines gate hits. There is not:
 the call sites in the table below pick different resolvers, for different
 reasons, and the two dedup/ranking functions underneath them
@@ -50,16 +50,16 @@ full body.
 
 Two things worth stating explicitly:
 
-- `DEFAULT_GATES` (`packages/memory-router/src/router.ts:26`) is **not**
+- `DEFAULT_GATES` (`packages/memory-router/src/router.ts:27`) is **not**
   what the `PreToolUse` hook runs. It passes its own `{ gates: [toolGate]
   }`, dropping the Topic Gate entirely, since a pending tool call has no
   prompt text for the Topic Gate's keyword match to run against.
   `DEFAULT_GATES` is used by every `resolve()` call that passes no `gates`
-  option (`packages/memory-router/src/router.ts:59`): among them the `test`
+  option (`packages/memory-router/src/router.ts:60`): among them the `test`
   CLI verb's `resolve(ctx, memories, { maxHits })` call
   (`packages/memory-router/src/cli.ts:783`), run whether or not
   `--semantic` is also passed, and `resolveBlended`'s own degraded
-  fallback (`packages/memory-router/src/router.ts:333-334`, `resolve(ctx, memories, { maxHits })`;
+  fallback (`packages/memory-router/src/router.ts:360-361`, `resolve(ctx, memories, { maxHits })`;
   since schema v4 a keyword-admitted memory may take the first slots ahead of that
   output (see score-blend-resolver.md)). That fallback shapes the
   `UserPromptSubmit` hook's injected context, MCP `memory_resolve`'s
@@ -70,7 +70,7 @@ Two things worth stating explicitly:
   `{ gates: [toolGate] }` is the only `resolve()` call that overrides the
   gate set (`rg -n 'gates:' packages/memory-router/src` finds it and no
   other at the time of writing).
-- `resolveConfidence` (`packages/memory-router/src/router.ts:68-89`) is the
+- `resolveConfidence` (`packages/memory-router/src/router.ts:69-90`) is the
   narrowest of the three resolvers this module exports: the Confidence
   Gate run in isolation, with its own `maxHits` default (`3`, vs.
   `resolve`'s and `resolveBlended`'s `5`). Its only call site under
@@ -83,14 +83,14 @@ Two things worth stating explicitly:
 
 ## Two dedup functions, one shared tie-break, different slot allocation
 
-`dedupeAndRank` (`packages/memory-router/src/router.ts:91-98`) is the
+`dedupeAndRank` (`packages/memory-router/src/router.ts:92-99`) is the
 simpler of the two: keep the highest-scoring hit per `memory.id` across
 every input hit, sort the survivors descending by score, and slice to
 `maxHits`. `resolve()` uses it internally, and `cli.ts`'s `test --semantic`
 path uses it directly to merge the sync gates' hits with the confidence
 gate's hits into one ranked list.
 
-`rankWithToolPrivilege` (`packages/memory-router/src/router.ts:545-566`),
+`rankWithToolPrivilege` (`packages/memory-router/src/router.ts:572-593`),
 called only from `resolveBlended`
 (`rg -n 'rankWithToolPrivilege\(' packages/memory-router/src`), starts
 from the same per-id "highest score wins" merge, but then partitions the
@@ -102,7 +102,7 @@ matched (a deterministic `1.0` hit) can be pushed out of the result by
 enough higher-scoring blend hits; under `rankWithToolPrivilege`, a
 blend-scored hit cannot displace it, because tool-matched hits are placed
 ahead of all other hits before the `maxHits` slice
-(`packages/memory-router/src/router.ts:562-565`).
+(`packages/memory-router/src/router.ts:589-592`).
 Attribution for a memory hit by both paths is unaffected by this
 difference (whichever hit has the higher score still wins the
 `gate`/`score`/`reason` fields, in both functions); what differs is which
@@ -112,7 +112,7 @@ This split matters for MCP `memory_resolve`, which builds `ctx` with an
 optional `tool` next to the prompt
 (`packages/memory-router/src/mcp/server.ts:117-125`). The `UserPromptSubmit`
 hook (`packages/memory-router/src/hooks/user-prompt-submit.ts:40`) and
-`memory-router eval` (`packages/memory-router/src/eval/runner.ts:345`)
+`memory-router eval` (`packages/memory-router/src/eval/runner.ts:389`)
 build `ctx` with no `tool` field. For a prompt that scored many memories
 highly while a pending command also matched a memory, the Tool Gate hit
 keeps its slot regardless of the blend score distribution.

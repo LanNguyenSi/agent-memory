@@ -14,6 +14,7 @@ for the headline defaults this document backs.
 | **Topic boost** | Keyword dictionary mapped to memory `topics:` | A boost added on top of whatever else fires for that memory, not a standalone full-score hit |
 | **Recency modifier** | Exponential decay on the memory file's mtime | A small tie-breaker: a more recently touched memory ranks slightly higher, all else equal |
 | **Type modifier** | Memory `type` (`feedback` weighted highest) | A small tie-breaker |
+| **Retired marker** (`status: retired`, project memories only) | The memory's own frontmatter, set by the operator | Subtracts `MEMORY_ROUTER_BLEND_RETIRED_PENALTY` (default `0.05`) from the semantic score before the relevance floor, so a retired memory needs a stronger match to appear and ranks lower when it does. See [Retired project memories](#retired-project-memories) |
 | **Keyword evidence** (schema v4) | SQLite FTS5 match of IDENTIFIER tokens from the prompt (task ids like `4e7729ab`, build tags like `b11905`) against name/description/chunk text; only tokens passing the id rule are queried at all | Two roles, both bounded: it can admit a keyword-only memory at the floor edge (gate `keyword`), and it can lift an above-floor memory by a flat `+0.02`; a below-floor cosine is never lifted or blended. See [The keyword gate](#the-keyword-gate-schema-v4) |
 
 The semantic score is one number per memory: the better of the memory's
@@ -35,9 +36,112 @@ weights are overridable via the `MEMORY_ROUTER_BLEND_*` env namespace
 (`MEMORY_ROUTER_BLEND_TOPIC_BOOST`, `MEMORY_ROUTER_BLEND_RECENCY_WEIGHT`,
 `MEMORY_ROUTER_BLEND_RECENCY_HALFLIFE_DAYS`,
 `MEMORY_ROUTER_BLEND_TYPE_WEIGHT`, `MEMORY_ROUTER_BLEND_MIN_SEMANTIC`,
-`MEMORY_ROUTER_BLEND_CANDIDATE_K`). A negative override for any of these
-is invalid and falls back to the built-in default rather than being
-accepted.
+`MEMORY_ROUTER_BLEND_CANDIDATE_K`, `MEMORY_ROUTER_BLEND_RETIRED_PENALTY`).
+A negative override for any of these is invalid and falls back to the
+built-in default rather than being accepted.
+
+## Retired project memories
+
+A `type: project` memory describes a setup or state that can be removed or
+replaced (an install deleted, a service switched off). Its text keeps
+matching prompts about that topic, so it kept filling ranks 3 to 5 next to
+the current memories. Age is a poor signal for this (most synced files
+share one restore mtime), so the operator marks such a memory explicitly:
+
+```yaml
+---
+name: project_old_embedding_setup
+type: project
+status: retired
+---
+```
+
+Only `resolveBlended` honours the marker: the UserPromptSubmit hook, the MCP
+`memory_resolve` tool and `eval` apply the demotion, while `memory-router test
+--semantic` and the MCP `memory_search` tool still rank a retired memory at
+its full score. Verify a marking with `eval` (a `forbid:` list) or through
+the hook, not with `test`.
+
+Only `status: retired` on a `type: project` memory has an effect (compared
+trimmed and case-insensitively; the field may also sit under `metadata.`,
+top-level wins). The same value on a `feedback`, `user` or `reference`
+memory is ignored: those types do not go stale that way, and a stray marker
+must not hide a live rule. Nothing marks a memory automatically.
+
+What a retired memory costs, step by step in `resolveBlended`:
+
+1. The search asks for one extra candidate per retired memory in the corpus
+   (at the default pool of 5 with two retired memories it asks for 7), so a
+   demotion can free a slot that a next-best candidate then takes.
+2. `MEMORY_ROUTER_BLEND_RETIRED_PENALTY` (default `0.05`) is subtracted from
+   the retired memory's raw semantic score, before the relevance floor. A
+   retired memory therefore needs `floor + penalty` (0.83 at the bge-m3 floor
+   of 0.78) to remain a semantic hit, and ranks `penalty` lower when it does.
+3. The floor filter runs, then the pool is sorted by the demoted scores and
+   cut back to the normal width. With no retired memory in the corpus none of
+   this runs: same search width, same hits, same order.
+
+Which input wins:
+
+- **Topic match.** The penalty comes off the semantic score and the topic
+  boost is added afterwards, as for any memory. At the defaults the penalty
+  (0.05) and the topic boost (0.05) are equal, so a retired memory with a
+  topic match ranks where it would without the marker, unless its semantic
+  match fell under `floor + penalty`: then only the topic match is left and
+  it is a topic-only candidate (a small score, after every semantic hit).
+  The topic gate itself is not changed by the marker.
+- **Keyword admission.** A memory admitted by an exact id token (gate
+  `keyword`) is not demoted: typing the id of a retired memory still finds
+  it.
+- **Degraded mode** (no index, no provider, search error, nothing above the
+  floor) runs the topic/tool-only `resolve()` path with no scoring, so the
+  marker does nothing there.
+- **Env.** `MEMORY_ROUTER_BLEND_RETIRED_PENALTY` unset, empty or whitespace
+  uses the default; a valid number wins, including `0` (demotion off, the
+  search is not widened either); a non-numeric, negative or non-finite value
+  falls back to the default. A value above the largest cosine (1) removes
+  retired memories from the semantic path altogether.
+
+### Measurement behind the default
+
+Replay on a copy of the 589-memory production corpus (never the original),
+index schema v4 rebuilt once and shared by every run, bge-m3 via llama.cpp
+at the 0.78 floor, golden set of 45 prompts (32 positive, 13 negative
+controls) with a `forbid:` list added to the three stale cases (see
+[commands.md](commands.md#memory-router-eval-metric-definitions-and-json-schema)).
+Three memories were marked `status: retired` in the copy, with their file
+mtimes preserved so the index stayed valid:
+
+| penalty | forbidden ids in the top 5 (3 stale prompts) | MRR | negative controls | precision |
+|---|---|---|---|---|
+| no marker (baseline) | 3 of 3 prompts violated | 0.698 | 11/13 | 0.378 |
+| 0 | 3 of 3 | 0.698 | 11/13 | 0.378 |
+| 0.02 | 2 of 3 | 0.698 | 11/13 | 0.406 |
+| 0.03 | 1 of 3 | 0.698 | 11/13 | 0.406 |
+| 0.035 to 1 | 0 of 3 | 0.698 | 11/13 | 0.406 |
+
+The raw cosines of the retired memories on the stale prompts were 0.756 to
+0.813, against the 0.78 floor (the largest, 0.813, exceeds it by 0.033), so any penalty above
+about 0.033 removes them;
+the golden set cannot tell apart anything between 0.035 and 1. The default
+is the low end of that plateau with a margin (0.05, about 1.5 times the
+smallest value that cleans every stale prompt) because the smaller the
+penalty, the more a deliberate question about a retired setup still finds
+it: on three explicit history questions (raw cosines 0.820 to 0.838) the floor rule leaves two of
+them above 0.78 at a 0.05 penalty and none at 0.10 (arithmetic on the
+measured cosines, not an eval run). The measurement is bge-m3 cosine; another model has
+another band, so recalibrate with `MEMORY_ROUTER_BLEND_RETIRED_PENALTY` and a
+`forbid:` golden set before relying on the default there. MRR, recall and the
+negative-control result did not move at any penalty, and the mean injected
+size fell from 5,485 to 5,316 bytes.
+
+Marking a file by editing it bumps its mtime, and the recency modifier
+(up to 0.05 for a fresh file) is added after the floor, so it can offset the
+penalty in the ranking among memories that survive the floor, but it cannot
+bring back one the floor dropped. Replaying with the three marked files
+touched (index refreshed for them) gave the same result at penalties 0.05,
+0.1 and 0.15: 0 of 3 stale prompts violating, MRR 0.698, negative controls
+11/13.
 
 ## The keyword gate (schema v4)
 

@@ -133,6 +133,13 @@ export interface PromptMetric {
   recall: number;
   /** null for negative-control prompts; MRR is undefined for them by design. */
   reciprocalRank: number | null;
+  /** The golden entry's `forbid` ids (`[]` when it has none). */
+  forbid: string[];
+  /**
+   * The subset of `forbid` that appears in `got`, in `got` order. Reported
+   * only: it never changes precision, recall or MRR.
+   */
+  forbidViolations: string[];
   /**
    * Size in bytes of what the UserPromptSubmit hook would inject for this
    * prompt's hits (renderHitsBudgeted, same budget as the hook); 0 when
@@ -196,6 +203,13 @@ export interface NegativeControlSummary {
   rate: number | null;
 }
 
+export interface ForbidSummary {
+  /** Prompts whose golden entry carries a non-empty `forbid` list. */
+  total: number;
+  /** Of those, prompts where at least one forbidden id appeared in the result. */
+  violated: number;
+}
+
 export interface AggregateMetrics {
   /** Mean precision across positive (non-negative-control) prompts. */
   precision: number;
@@ -207,6 +221,8 @@ export interface AggregateMetrics {
   positiveCount: number;
   /** Negative-control prompts are reported separately, never blended into P/R/MRR. */
   negativeControls: NegativeControlSummary;
+  /** `forbid` checks (stale-memory guard), reported separately from the metrics above. */
+  forbid: ForbidSummary;
 }
 
 function aggregateMetrics(perPrompt: PromptMetric[]): AggregateMetrics {
@@ -216,6 +232,7 @@ function aggregateMetrics(perPrompt: PromptMetric[]): AggregateMetrics {
     values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
 
   const passed = negative.filter((p) => p.precision === 1).length;
+  const withForbid = perPrompt.filter((p) => p.forbid.length > 0);
 
   return {
     precision: mean(positive.map((p) => p.precision)),
@@ -227,6 +244,10 @@ function aggregateMetrics(perPrompt: PromptMetric[]): AggregateMetrics {
       passed,
       failed: negative.length - passed,
       rate: negative.length === 0 ? null : passed / negative.length,
+    },
+    forbid: {
+      total: withForbid.length,
+      violated: withForbid.filter((p) => p.forbidViolations.length > 0).length,
     },
   };
 }
@@ -260,6 +281,13 @@ export interface EvalReport {
    * notice. Empty when every expect id resolves.
    */
   unknownExpectIds: string[];
+  /**
+   * Ids referenced in the golden file's `forbid:` arrays that don't match
+   * any loaded memory. Such a check can never fire, so it would pass
+   * vacuously; this is the warning surface for it, same as
+   * `unknownExpectIds`. Empty when every forbid id resolves.
+   */
+  unknownForbidIds: string[];
   perPrompt: PromptMetric[];
   aggregate: AggregateMetrics;
   /** Injected-context size over the golden set, see InjectionSummary. */
@@ -308,6 +336,21 @@ function findUnknownExpectIds(
   return [...unknown];
 }
 
+/** Same as findUnknownExpectIds, for the `forbid` lists. */
+function findUnknownForbidIds(
+  prompts: { forbid: string[] }[],
+  memories: Memory[],
+): string[] {
+  const corpusIds = new Set(memories.map((m) => m.id));
+  const unknown = new Set<string>();
+  for (const entry of prompts) {
+    for (const id of entry.forbid) {
+      if (!corpusIds.has(id)) unknown.add(id);
+    }
+  }
+  return [...unknown];
+}
+
 /**
  * Runs every prompt in `goldenPath` against the corpus at `dir` through
  * `promptToHits` and returns the full per-prompt + aggregate report.
@@ -326,6 +369,7 @@ async function runGoldenEval(
   const semanticPathActive = semanticPathAvailable(dir);
   const vocabularySource = vocabularySourceLabel(dir);
   const unknownExpectIds = findUnknownExpectIds(golden.prompts, memories);
+  const unknownForbidIds = findUnknownForbidIds(golden.prompts, memories);
 
   const perPrompt: PromptMetric[] = [];
   // Resolved once so an invalid MEMORY_ROUTER_INJECT_BUDGET notes itself on
@@ -358,6 +402,8 @@ async function runGoldenEval(
       expect: entry.expect,
       got,
       ...scored,
+      forbid: entry.forbid,
+      forbidViolations: got.filter((id) => entry.forbid.includes(id)),
       injectBytes: injectBytes(renderHitsBudgeted(hits, { budgetBytes })),
     });
   }
@@ -376,6 +422,7 @@ async function runGoldenEval(
     semanticPathActive,
     vocabularySource,
     unknownExpectIds,
+    unknownForbidIds,
     perPrompt,
     aggregate: aggregateMetrics(perPrompt),
     injection,
@@ -391,5 +438,6 @@ module.exports = {
   scorePrompt,
   aggregateMetrics,
   findUnknownExpectIds,
+  findUnknownForbidIds,
   runGoldenEval,
 };

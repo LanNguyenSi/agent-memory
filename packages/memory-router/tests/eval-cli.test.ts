@@ -280,3 +280,41 @@ test("eval honors MEMORY_ROUTER_INJECT_BUDGET, and an invalid value notes itself
   assert.equal((JSON.parse(bad.stdout) as { injection: { budgetBytes: number } }).injection.budgetBytes, 16384);
   assert.equal(bad.stderr.split("MEMORY_ROUTER_INJECT_BUDGET").length - 1, 1);
 });
+
+test("eval: a golden file with forbid ids reports the check in --json and in the text output; a malformed forbid exits 1 with the path-prefixed message", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "memory-router-eval-forbid-"));
+  try {
+    const good = path.join(tmp, "good.yml");
+    fs.writeFileSync(
+      good,
+      [
+        "prompts:",
+        '  - prompt: "rm -rf the build directory to start fresh"',
+        '    expect: ["feedback_deploy_checklist"]',
+        '    forbid: ["feedback_force_push"]',
+        "",
+      ].join("\n"),
+    );
+    const json = run(["eval", good, "--dir", CORPUS_DIR, "--json"]);
+    assert.equal(json.status, 0, json.stderr);
+    const parsed = JSON.parse(json.stdout);
+    assert.deepEqual(parsed.perPrompt[0].forbid, ["feedback_force_push"]);
+    assert.deepEqual(parsed.perPrompt[0].forbidViolations, ["feedback_force_push"]);
+    assert.deepEqual(parsed.aggregate.forbid, { total: 1, violated: 1 });
+    assert.deepEqual(parsed.unknownForbidIds, []);
+
+    const text = run(["eval", good, "--dir", CORPUS_DIR]);
+    assert.match(text.stdout, /forbid: feedback_force_push {2}FAIL \(present: feedback_force_push\)/);
+    assert.match(text.stdout, /forbid checks: 0\/1 prompts clean/);
+
+    const bad = path.join(tmp, "bad.yml");
+    fs.writeFileSync(bad, 'prompts:\n  - prompt: "x"\n    forbid: "feedback_force_push"\n');
+    const res = run(["eval", bad, "--dir", CORPUS_DIR]);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /prompts\[0\]\.forbid must be an array of memory-id strings/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

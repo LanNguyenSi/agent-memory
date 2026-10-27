@@ -39,6 +39,7 @@ declare global {
   interface MemoryMetadata {
     type?: MemoryType;
     topics?: Topic[];
+    status?: string;
     [key: string]: unknown;
   }
 
@@ -47,6 +48,15 @@ declare global {
     description: string;
     type: MemoryType;
     topics?: Topic[];
+    /**
+     * Optional lifecycle marker. Only the value `retired` has an effect, and
+     * only on `type: project` memories (see isRetiredProject in
+     * src/gates/confidence.ts): a retired project memory is demoted in the
+     * semantic ranking. Resolved from the top level or `metadata.status` by
+     * the loader (top-level wins); any other value, or a non-string, is
+     * carried through unchanged and ignored by the router.
+     */
+    status?: string;
     metadata?: MemoryMetadata;
     severity?: Severity;
     triggers?: MemoryTriggers;
