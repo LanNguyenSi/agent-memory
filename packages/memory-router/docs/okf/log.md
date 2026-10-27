@@ -1,5 +1,6 @@
 # Bundle log
 
+- 2026-10-27T19:42:24Z, `src/embed/indexer.ts`, `src/embed/index-store.ts`: the index stamps `CHUNKER_VERSION` (meta key `chunker_version`, schema stays v4) and `rebuildIndex` re-chunks every memory once when the stamp is missing or differs. `semantic-search-silent-noop.md` and `native-deps-and-ci-smoke.md`: citations into both files re-pointed after the inserted lines (primary and continuation citations, each checked against the cited code), no claim changed; both re-stamped.
 - 2026-10-27T14:19:20Z, `src/embed/keyword.ts`: a whitespace token is also split at the id separators (`: / . # ? = '`, `-`, U+2019; not `_`) and every part that passes the unchanged `isIdToken` becomes its own keyword term; whole tokens and queried id phrases dedupe separately, so a stopword prefix cannot swallow an id part. `score-blend-resolver.md` (separator claim) and `semantic-search-silent-noop.md` (two FTS reads per id term, now per id part) re-verified claim by claim against the current tree, including every line citation; the `replaceChunks` range in `semantic-search-silent-noop.md` was tightened to end at the function's closing line. Re-stamped both.
 - 2026-10-27T13:44:19Z, `src/render.ts`: a long `type: feedback` hit's excerpt appends its
   `**How to apply:**` paragraph (capped) when the picked chunks miss it;
