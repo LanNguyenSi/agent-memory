@@ -886,8 +886,10 @@ for (const [name, cp] of [
 test('resolveInjectBudget: printable characters next to the added ranges are echoed unchanged', () => {
   const warnings: string[] = [];
   // U+061B (just below U+061C), U+200A (just below the zero-width group),
-  // U+2027 (just below the line separators) and U+2060 WORD JOINER (just below
-  // the bidi isolates) are invisible-ish but printable: they must survive.
+  // U+2027 (just below the line separators) is printable and must survive.
+  // U+2060 WORD JOINER (just below the bidi isolates) is an invisible format
+  // character that this class does not strip yet; it is kept here only to pin
+  // that the class did not grow past the requested ranges.
   const kept = ['a', '\u061b', 'b', '\u200a', 'c', '\u2027', 'd', '\u2060', 'e'].join('');
   resolveInjectBudget({ MEMORY_ROUTER_INJECT_BUDGET: kept }, (m: string) => warnings.push(m));
   assert.equal(warnings.length, 1);
