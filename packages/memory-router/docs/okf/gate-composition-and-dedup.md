@@ -74,7 +74,7 @@ Two things worth stating explicitly:
   narrowest of the three resolvers this module exports: the Confidence
   Gate run in isolation, with its own `maxHits` default (`3`, vs.
   `resolve`'s and `resolveBlended`'s `5`). Its only call site under
-  `packages/memory-router/src` is the   `test --semantic` path
+  `packages/memory-router/src` is the `test --semantic` path
   (`packages/memory-router/src/cli.ts:800`), per
   `rg -n 'resolveConfidence\b' packages/memory-router/src`, which also
   shows the package entry point re-exporting it
