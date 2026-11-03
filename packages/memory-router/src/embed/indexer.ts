@@ -9,6 +9,7 @@ const {
   INDEX_DEFAULT_TIMEOUT_MS,
 } = require('./provider');
 const { openIndex } = require('./index-store');
+const { errorSummary, warnKeywordPathOnce } = require('./fts-warning');
 const { chunkBody, CHUNKER_VERSION } = require('./chunking');
 const {
   KEYWORD_MAX_DF,
@@ -443,10 +444,9 @@ interface BlendedSearchResult {
   keyword: KeywordHit[];
 }
 
-// Warned at most once per process (same shape as missingIndexWarned above):
-// a keyword-path failure must degrade to "no keyword matches", never take
-// the semantic search down with it, and never spam stderr per call.
-let keywordWarned = false;
+// The keyword-path warning goes through the once-per-process flag shared with
+// the store-level FTS reads (src/embed/fts-warning.ts): a keyword failure must
+// degrade to "no keyword matches", never take the semantic search down with it.
 
 // FTS rows fetched per qualifying term: terms are df-capped at
 // KEYWORD_MAX_DF MEMORIES, but each memory contributes one row per chunk,
@@ -584,12 +584,12 @@ async function runBlendedSearch(
         collectKeywordMatches(store, prompt, byId, keyword);
       } catch (err: unknown) {
         keyword.length = 0;
-        if (!keywordWarned) {
-          keywordWarned = true;
-          process.stderr.write(
-            `memory-router: keyword search failed, continuing without keyword matches: ${String(err)}\n`,
-          );
-        }
+        // Shared flag: a store-level FTS read may already have taken this
+        // process's one keyword line. Only the error class and the SQLite
+        // code are echoed, never the message (it can carry prompt text).
+        warnKeywordPathOnce(
+          `memory-router: keyword search failed, continuing without keyword matches: ${errorSummary(err)}\n`,
+        );
       }
     }
 

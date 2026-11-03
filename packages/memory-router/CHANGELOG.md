@@ -6,6 +6,11 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A keyword-index failure no longer echoes prompt text into stderr, and its two warnings now share one once-per-process line.** The store-level FTS reads in `src/embed/index-store.ts` and the keyword-pass wrapper in `src/embed/indexer.ts` both degraded to "no keyword matches" with a warning that ended in `String(err)`, and an SQLite FTS error message can quote back part of the phrase it was given, a phrase built from the user's prompt, so a corrupt index copied prompt text into the log and into whatever collects the hook's stderr. Each warning now names only the error class and the SQLite result code (`SqliteError (SQLITE_ERROR)`; an error without a code yields just its class, the message is never printed). Both paths also had their own once-per-process flag, so one process could write two keyword lines where `docs/scoring.md` and `docs/okf/semantic-search-silent-noop.md` promise one; the flag is now shared by both in the new `src/embed/fts-warning.ts`, so a process that trips the pass-level throw and a store-level FTS error as well writes exactly one keyword line. The missing-index and stale-model warnings keep their own flags. Pinned by `tests/fts-warning-hygiene.test.ts` and `tests/keyword-fts-warning.test.ts`.
+- **The invalid `MEMORY_ROUTER_INJECT_BUDGET` note strips the invisible format characters it used to echo.** `CONTROL_CHARS_RE` covered the C0 and C1 controls, the bidi marks and the isolates, but left U+2028, U+2029, U+061C, U+200B, U+200C, U+200D and U+FEFF in the echoed value, so a stray line separator could still break the log line apart downstream. They are stripped now, and printable text is still echoed unchanged (including U+00A0, U+00E9, U+2010, U+202F and every neighbour of the newly added ranges). Pinned by `tests/render-budget.test.ts`.
+
 ### Security
 
 - **`@hono/node-server` 2.1.5** (GHSA-rmxm-3fg6-px4f): the lockfile resolves 2.1.5 (was 2.0.12), which fixes `serveStatic` decoding the request path a second time and so letting a request bypass middleware on static paths (affected: `>= 1.19.10, < 2.1.3`). Lockfile only, pulled in through `@modelcontextprotocol/sdk`, whose range is unchanged.
