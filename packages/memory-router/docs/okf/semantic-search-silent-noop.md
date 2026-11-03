@@ -3,10 +3,11 @@ type: invariant
 title: Semantic search's silent-no-op contract, and its loud counterpart
 description: The conditions known at the time of writing under which semanticSearch() returns an empty array instead of throwing, with the stderr visibility of each, the errors that can propagate out of it instead, and how each of its callers, and each other openIndex() caller, handles those errors.
 tags: [semantic-search, silent-no-op, embedding-index, provenance, native-deps]
-timestamp: 2026-10-27T20:11:46Z
+timestamp: 2026-11-03T11:20:15Z
 sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
+  - packages/memory-router/src/embed/fts-warning.ts
   - packages/memory-router/src/embed/keyword.ts
   - packages/memory-router/src/embed/provider.ts
   - packages/memory-router/src/router.ts
@@ -16,6 +17,7 @@ sources:
   - packages/memory-router/src/lint/conflicts.ts
   - packages/memory-router/src/consolidate/near-dupes.ts
   - packages/memory-router/tests/blend.test.ts
+  - packages/memory-router/tests/fts-warning-hygiene.test.ts
   - packages/memory-router/docs/scoring.md
 ---
 
@@ -70,7 +72,7 @@ for a KNN query that itself returns no rows:
 | 1 | No embedding provider resolvable | `resolveProviderConfig` returns `null`, `packages/memory-router/src/embed/indexer.ts:469-470` | none |
 | 2 | Embedding index file does not exist on disk | `existsSync(idx)` is false, `packages/memory-router/src/embed/indexer.ts:473-480` | one line per process (`missingIndexWarned`, `packages/memory-router/src/embed/indexer.ts:474-475`) |
 | 3 | Index exists, nothing has ever been embedded into it, and no width is recorded yet (see the `lint --conflicts --semantic` note below) | `dimensions === null`, `packages/memory-router/src/embed/index-store.ts:1352` | none |
-| 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:312-315`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:1015-1039`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
+| 4 | Index had entries, but all of them were later removed (the rebuild's removal loop, `packages/memory-router/src/embed/indexer.ts:313-316`, deletes each entry's vector row, `packages/memory-router/src/embed/index-store.ts:1015-1039`) | the vector table keeps its recorded width, so `search()` passes the `dimensions` guard and the KNN query returns no rows | none (`countEntriesWithStaleModel` is 0) |
 | 5 | Every row inside the KNN window carries a different model tag (or a pre-v2 `NULL` tag) than the caller's model: the window starts at `k` and widens x4 per retry up to sqlite-vec's 4096-row KNN ceiling (`MAX_KNN_K`), and the search stops early once the index is exhausted, so this needs at least that many stale rows nearer to the query than the nearest current-model row | model filter inside the widening loop, `packages/memory-router/src/embed/index-store.ts:1363-1385` (documents) and `:1415-1424` (chunks) | see below |
 | 6 | A returned hit's `id` is not in the caller's loaded-memories map (the memory was removed from disk since it was indexed) | `byId` filter, `packages/memory-router/src/embed/indexer.ts:557-576` | none |
 
@@ -123,11 +125,13 @@ adds no new way for the search to fail: `semanticSearch()` never runs it
 (the wrapper passes `keywordEnabled: false`,
 `packages/memory-router/src/embed/indexer.ts:669-680`), in
 `blendedSearch()` any throw from the whole pass degrades to an empty
-keyword list with one stderr line per process (`keywordWarned`,
-`packages/memory-router/src/embed/indexer.ts:583-593`), the store-level
+keyword list with one stderr line per process
+(`packages/memory-router/src/embed/indexer.ts:583-593`), the store-level
 FTS reads degrade their own errors to empty results and write one visible
-stderr line per process too (`warnFtsFailed` / `ftsWarned`,
-`packages/memory-router/src/embed/index-store.ts:102-108`, so a corrupt or
+stderr line too (`warnFtsFailed` plus the shared once-per-process flag
+`warnKeywordPathOnce`,
+`packages/memory-router/src/embed/index-store.ts:105-109` and
+`packages/memory-router/src/embed/fts-warning.ts:32-37`, so a corrupt or
 dropped `chunks_fts` table is never silent: `ftsDocCount`
 `packages/memory-router/src/embed/index-store.ts:1155-1169`, `ftsMatch`
 `packages/memory-router/src/embed/index-store.ts:1171-1193`), and an
@@ -135,7 +139,18 @@ index file that predates v4 simply has no `chunks_fts` table for the
 open-time probe (`packages/memory-router/src/embed/index-store.ts:741`)
 to find - keyword matches then stay empty until a rebuild back-fills it,
 while a read-only open still neither creates nor migrates the table (the
-same rule as the v3 chunk tables above). Only id tokens are ever queried
+same rule as the v3 chunk tables above). That keyword line is counted
+per process and not per path: the pass-level warning and the store-level
+one take the same flag, so a run that trips the pass-level throw and a
+store-level FTS error as well still writes exactly one of them. Both
+forms name only the error class and the SQLite result code (e.g.
+`SqliteError (SQLITE_ERROR)`, through `errorSummary`,
+`packages/memory-router/src/embed/fts-warning.ts:21-27`) and never the
+error message: an SQLite FTS error message can quote back part of the
+phrase it was given, and that phrase is built from the user's prompt, so
+echoing the message (the `String(err)` this used to print) would copy
+prompt text into whatever collects the hook's stderr. Only id tokens are
+ever queried
 (see `isIdToken` in `packages/memory-router/src/embed/keyword.ts`), so
 the FTS reads a prompt costs are two per id token at most, and a prompt
 without one reads the FTS index not at all. Since an id PART of a larger
@@ -218,7 +233,7 @@ These do not go through `semanticSearch()`. The call sites are the ones
 `rg -n 'openIndex\(' packages/memory-router/src` finds at the time of
 writing:
 
-- `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:185-189`),
+- `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:186-190`),
   run by `memory-router index`
   (`packages/memory-router/src/cli.ts:592-593`). `runIndex` has no catch;
   the CLI's top-level handler

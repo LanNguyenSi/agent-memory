@@ -71,10 +71,10 @@ const LEVEL_MINIMAL = 2; // heading, stale prefix, description, path
 // Characters stripped from an env value before it is echoed to stderr, so a
 // stray byte cannot corrupt the log line or the terminal showing it: C0
 // controls and DEL, C1 controls (U+0080-U+009F, which include the 8-bit CSI
-// introducer U+009B), and the bidi / format marks that reorder or hide text
-// (U+200E, U+200F, U+202A-U+202E, U+2066-U+2069).
+// introducer U+009B), and the invisible format / bidi marks that reorder, hide
+// or split text (U+061C, U+200B-U+200F, U+2028-U+202E, U+2066-U+2069, U+FEFF).
 // eslint-disable-next-line no-control-regex
-const CONTROL_CHARS_RE = /[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const CONTROL_CHARS_RE = /[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
 
 // Resolves the injection budget: MEMORY_ROUTER_INJECT_BUDGET when it is a
 // positive integer (bytes), else the default. An unset variable is the normal

@@ -9,9 +9,10 @@
 // The break is exercised through the real blendedSearch path: after a rebuild
 // the FTS virtual table is replaced by a plain look-alike table (same name, so
 // the open-time probe still sees it and ftsTablesReady stays true, but every
-// MATCH query throws "no such column: chunks_fts"). The index-store module is
-// re-required fresh so the once-per-process flag starts clear and the "written
-// once, never again" assertion does not depend on test order.
+// MATCH query throws "no such column: chunks_fts"). The store, indexer and
+// shared-warning modules are re-required fresh so the once-per-process flag
+// starts clear and the "written once, never again" assertion does not depend on
+// test order.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -22,14 +23,23 @@ const Database = require('better-sqlite3');
 
 const STORE_PATH = require.resolve('../src/embed/index-store');
 const INDEXER_PATH = require.resolve('../src/embed/indexer');
+const WARN_PATH = require.resolve('../src/embed/fts-warning');
 const MODEL = 'text-embedding-3-small';
 const FTS_WARN_RE = /FTS keyword index query failed, continuing without keyword matches/g;
 
-function freshBlendedSearch() {
-  // Drop BOTH module caches so the fresh indexer picks up a fresh store (the
-  // once-per-process ftsWarned flag lives in the store module).
+// The once-per-process flag now lives in src/embed/fts-warning.ts and is shared
+// by both keyword-warning paths, so a test that wants a clear flag has to drop
+// that module from the cache too, next to the two modules that use it.
+function purgeWarningFlags(): void {
   delete require.cache[STORE_PATH];
   delete require.cache[INDEXER_PATH];
+  delete require.cache[WARN_PATH];
+}
+
+function freshBlendedSearch() {
+  // Drop every module cache so the fresh indexer picks up a fresh store (the
+  // once-per-process flag lives in the shared fts-warning module).
+  purgeWarningFlags();
   return require('../src/embed/indexer').blendedSearch;
 }
 
@@ -190,7 +200,7 @@ test('a corrupt FTS index: ftsMatch on its own returns no rows and warns once', 
     );
     raw.close();
 
-    delete require.cache[STORE_PATH];
+    purgeWarningFlags();
     const { openIndex } = require('../src/embed/index-store');
     const store = openIndex({ path: indexPath(dir), meta: { provider: 'openai', model: MODEL } });
     try {

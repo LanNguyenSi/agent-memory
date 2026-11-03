@@ -858,6 +858,44 @@ test('resolveInjectBudget: printable non-ASCII next to the stripped ranges is ec
   assert.ok(warnings[0].includes('x\u00a0\u00e9\u2010\u202fy'));
 });
 
+// The invisible format characters the class was extended with: each is stripped
+// by its own case, and the C0 case that was already covered keeps working.
+// Code points are written as numbers so the file itself carries no invisible
+// character (U+2028 and U+2029 are line terminators in a JS source).
+for (const [name, cp] of [
+  ['Arabic Letter Mark U+061C', 0x061c],
+  ['ZERO WIDTH SPACE U+200B', 0x200b],
+  ['ZERO WIDTH NON-JOINER U+200C', 0x200c],
+  ['ZERO WIDTH JOINER U+200D', 0x200d],
+  ['LINE SEPARATOR U+2028', 0x2028],
+  ['PARAGRAPH SEPARATOR U+2029', 0x2029],
+  ['BYTE ORDER MARK U+FEFF', 0xfeff],
+  ['C0 BEL U+0007 (already stripped)', 0x0007],
+] as [string, number][]) {
+  test(`resolveInjectBudget: ${name} in a bad value is not echoed to stderr`, () => {
+    const warnings: string[] = [];
+    const ch = String.fromCodePoint(cp);
+    resolveInjectBudget({ MEMORY_ROUTER_INJECT_BUDGET: `ab${ch}cd` }, (m: string) => warnings.push(m));
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('abcd'), 'the visible text survives, joined');
+    assert.ok(!warnings[0].includes(ch), `U+${cp.toString(16).toUpperCase()} leaked into the echoed value`);
+    assert.equal(warnings[0].split('\n').length, 2, 'one line plus the trailing newline');
+  });
+}
+
+test('resolveInjectBudget: printable characters next to the added ranges are echoed unchanged', () => {
+  const warnings: string[] = [];
+  // U+061B (just below U+061C), U+200A (just below the zero-width group),
+  // U+2027 (just below the line separators) is printable and must survive.
+  // U+2060 WORD JOINER (just below the bidi isolates) is an invisible format
+  // character that this class does not strip yet; it is kept here only to pin
+  // that the class did not grow past the requested ranges.
+  const kept = ['a', '\u061b', 'b', '\u200a', 'c', '\u2027', 'd', '\u2060', 'e'].join('');
+  resolveInjectBudget({ MEMORY_ROUTER_INJECT_BUDGET: kept }, (m: string) => warnings.push(m));
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes(kept), JSON.stringify(warnings[0]));
+});
+
 test('renderHitsBudgeted reads MEMORY_ROUTER_INJECT_BUDGET when no budget is passed', () => {
   const hits = threeShort();
   const full = renderHitsBudgeted(hits, { budgetBytes: 1_000_000 });

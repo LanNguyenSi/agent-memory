@@ -93,18 +93,18 @@
 const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
 const { createHash } = require('node:crypto');
+const { errorSummary, warnKeywordPathOnce } = require('./fts-warning');
 
-// Warned at most once per process, the same shape as the keyword/missing-
-// index/stale-model warnings in src/embed/indexer.ts: an FTS read that throws
-// (a corrupt or dropped chunks_fts table) must degrade to "no keyword
-// matches" with ONE visible stderr line, never a silent error and never one
-// line per query. Module-level so it survives every openIndex() call.
-let ftsWarned = false;
+// Warned at most once per process through the flag shared with the keyword-pass
+// wrapper in src/embed/indexer.ts (src/embed/fts-warning.ts), the same shape as
+// the missing-index/stale-model warnings there: an FTS read that throws (a
+// corrupt or dropped chunks_fts table) must degrade to "no keyword matches"
+// with ONE visible stderr line, never a silent error, never one line per query,
+// and never one line per warning path. Only the error class and the SQLite code
+// are echoed, never the message, which can carry part of the queried prompt.
 function warnFtsFailed(err: unknown): void {
-  if (ftsWarned) return;
-  ftsWarned = true;
-  process.stderr.write(
-    `memory-router: FTS keyword index query failed, continuing without keyword matches: ${String(err)}\n`,
+  warnKeywordPathOnce(
+    `memory-router: FTS keyword index query failed, continuing without keyword matches: ${errorSummary(err)}\n`,
   );
 }
 
