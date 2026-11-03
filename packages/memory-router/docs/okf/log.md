@@ -1,5 +1,10 @@
 # Bundle log
 
+- 2026-11-03T17:04:17Z, `IndexProvenanceMismatchError` (new class in `src/error-summary.ts`, thrown by `src/embed/index-store.ts`):
+  the hook, MCP, router and `test --semantic` degradation lines append a fixed rebuild hint for that class only;
+  `runTest` catches its `resolve` and prints the summary. `semantic-search-silent-noop.md` claim updated and
+  citations re-pointed, `gate-composition-and-dedup.md` citations re-pointed with no claim change. Re-stamped: gate-composition-and-dedup.md, native-deps-and-ci-smoke.md, score-blend-resolver.md, semantic-search-silent-noop.md.
+
 - 2026-11-03T16:05:58Z, `src/error-summary.ts` (new, `errorSummary` moved out of `src/embed/fts-warning.ts`, which re-exports it),
   `src/router.ts`, `src/hooks/user-prompt-submit.ts`, `src/hooks/pre-tool-use.ts`, `src/mcp/server.ts`, `src/cli.ts`: the
   prompt-handling fallbacks print the error summary instead of `String(err)`. `semantic-search-silent-noop.md` re-verified
