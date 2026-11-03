@@ -6,15 +6,44 @@ const { spawnSync } = require('node:child_process');
 const fixturesDir = path.join(__dirname, 'fixtures', 'memories');
 const distDir = path.join(__dirname, '..', 'dist', 'hooks');
 
+// Preload that turns one dist/router.js export into a thrower whose Error
+// message carries the marker phrase; see that file for why the two defensive
+// catches in the hooks can only be reached through such a seam.
+const PRELOAD = path.join(__dirname, 'fixtures', 'stub-router-preload.cjs');
+
+// Only ever appears inside a thrown error's message (or, for the malformed
+// payload cases, inside the payload itself); a leak into stderr means the catch
+// printed the message instead of the error summary.
+const MARKER = 'PROMPT-MARKER-xyz';
+
+interface RunOptions {
+  /** Extra node CLI args, prepended before the script path (e.g. --require). */
+  nodeArgs?: string[];
+  /** Extra env, applied on top of the hermetic base below. */
+  env?: Record<string, string>;
+}
+
 function runHook(
   script: string,
   input: unknown,
+  opts: RunOptions = {},
 ): { stdout: string; stderr: string; code: number } {
-  const res = spawnSync('node', [path.join(distDir, script)], {
-    input: JSON.stringify(input),
-    env: { ...process.env, MEMORY_ROUTER_DIR: fixturesDir },
-    encoding: 'utf8',
-  });
+  // A string input is fed through raw: the malformed-payload cases below must
+  // reach JSON.parse inside the hook, which JSON.stringify would undo.
+  const payload = typeof input === 'string' ? input : JSON.stringify(input);
+  const res = spawnSync(
+    'node',
+    [...(opts.nodeArgs ?? []), path.join(distDir, script)],
+    {
+      input: payload,
+      env: {
+        ...process.env,
+        MEMORY_ROUTER_DIR: fixturesDir,
+        ...(opts.env ?? {}),
+      },
+      encoding: 'utf8',
+    },
+  );
   return {
     stdout: res.stdout ?? '',
     stderr: res.stderr ?? '',
@@ -79,4 +108,115 @@ test('pre-tool-use emits no stdout for Bash(ls)', () => {
   });
   assert.equal(code, 0);
   assert.equal(stdout, '');
+});
+
+// --- stderr hygiene on the prompt/tool-input path (src/error-summary.ts) -----
+//
+// Three catches, three lines, one rule: name the error class (plus its code when
+// it carries one) and never the message, because every error reachable here
+// arrives with the prompt or the tool input in flight. An SQLite FTS message
+// quotes back the phrase it was given, and that phrase is built from the prompt;
+// a JSON.parse SyntaxError quotes the stdin payload, i.e. the prompt or the tool
+// input itself. The hook's stderr is collected next to the transcript, so
+// echoing a message copied that text into the log.
+
+// Premise check for the malformed-payload cases: the payload must actually make
+// JSON.parse throw with the marker inside the message, or the assertion below
+// would pass for the wrong reason (a V8 message-format change would otherwise
+// silently turn this into a no-op).
+function assertPayloadCarriesMarker(payload: string): void {
+  let message = '';
+  try {
+    JSON.parse(payload);
+  } catch (err: unknown) {
+    message = err instanceof Error ? err.message : String(err);
+  }
+  assert.ok(
+    message.includes(MARKER),
+    `test premise broken: JSON.parse of ${JSON.stringify(payload)} does not put ${MARKER} in its message, got ${JSON.stringify(message)}`,
+  );
+}
+
+test('user-prompt-submit: a resolver failure names the error class and code, never the message', () => {
+  const { stdout, stderr, code } = runHook(
+    'user-prompt-submit.js',
+    { prompt: 'merge PR 42' },
+    {
+      nodeArgs: ['--require', PRELOAD],
+      env: {
+        MEMORY_ROUTER_TEST_STUB_EXPORT: 'resolveBlended',
+        MEMORY_ROUTER_TEST_STUB_MARKER: MARKER,
+      },
+    },
+  );
+  assert.match(
+    stderr,
+    /memory-router: memory resolution failed, no context injected: RouterFailure \(SQLITE_ERROR\)/,
+  );
+  assert.ok(
+    !stderr.includes(MARKER),
+    `the resolver error message leaked into stderr: ${JSON.stringify(stderr)}`,
+  );
+  assert.ok(
+    !stderr.includes('if the embedding provider or model changed'),
+    `a non-provenance error must not print the rebuild hint: ${JSON.stringify(stderr)}`,
+  );
+  // The failure still degrades instead of blocking the prompt.
+  assert.equal(code, 0);
+  assert.equal(stdout, '', 'no hits to inject after the failed resolution');
+});
+
+test('user-prompt-submit: an index provenance mismatch appends the fixed rebuild hint with the memory dir', () => {
+  const { stdout, stderr, code } = runHook(
+    'user-prompt-submit.js',
+    { prompt: 'merge PR 42' },
+    {
+      nodeArgs: ['--require', PRELOAD],
+      env: {
+        MEMORY_ROUTER_TEST_STUB_EXPORT: 'resolveBlended',
+        MEMORY_ROUTER_TEST_STUB_MARKER: MARKER,
+        MEMORY_ROUTER_TEST_STUB_PROVENANCE: '1',
+      },
+    },
+  );
+  assert.match(
+    stderr,
+    /memory-router: memory resolution failed, no context injected: IndexProvenanceMismatchError; if the embedding provider or model changed, run `memory-router index \/.*` to rebuild\n/,
+  );
+  assert.ok(
+    stderr.includes(`memory-router index ${fixturesDir}\` to rebuild`),
+    `expected the hint to name the hook's own memory dir (${fixturesDir}): ${JSON.stringify(stderr)}`,
+  );
+  assert.ok(
+    !stderr.includes(MARKER),
+    `the provenance error message leaked into stderr: ${JSON.stringify(stderr)}`,
+  );
+  assert.equal(code, 0);
+  assert.equal(stdout, '', 'the hint does not change the degraded no-inject contract');
+});
+
+test('user-prompt-submit: a pre-resolver failure names the error class, never the stdin payload it failed to parse', () => {
+  // Not JSON at all: V8's SyntaxError message quotes the offending input, which
+  // is exactly the prompt payload.
+  const payload = MARKER;
+  assertPayloadCarriesMarker(payload);
+  const { stderr, code } = runHook('user-prompt-submit.js', payload);
+  assert.match(stderr, /^memory-router user-prompt-submit failed: SyntaxError\n/);
+  assert.ok(
+    !stderr.includes(MARKER),
+    `the stdin payload leaked into stderr: ${JSON.stringify(stderr)}`,
+  );
+  assert.equal(code, 1);
+});
+
+test('pre-tool-use: a pre-resolver failure names the error class, never the tool input it failed to parse', () => {
+  const payload = MARKER;
+  assertPayloadCarriesMarker(payload);
+  const { stderr, code } = runHook('pre-tool-use.js', payload);
+  assert.match(stderr, /^memory-router pre-tool-use failed: SyntaxError\n/);
+  assert.ok(
+    !stderr.includes(MARKER),
+    `the stdin payload leaked into stderr: ${JSON.stringify(stderr)}`,
+  );
+  assert.equal(code, 1);
 });

@@ -1,5 +1,19 @@
 # Bundle log
 
+- 2026-11-03T17:04:17Z, `IndexProvenanceMismatchError` (new class in `src/error-summary.ts`, thrown by `src/embed/index-store.ts`):
+  the hook, MCP, router and `test --semantic` degradation lines append a fixed rebuild hint for that class only;
+  `runTest` catches its `resolve` and prints the summary. `semantic-search-silent-noop.md` claim updated and
+  citations re-pointed, `gate-composition-and-dedup.md` citations re-pointed with no claim change. Re-stamped: gate-composition-and-dedup.md, native-deps-and-ci-smoke.md, score-blend-resolver.md, semantic-search-silent-noop.md.
+
+- 2026-11-03T16:05:58Z, `src/error-summary.ts` (new, `errorSummary` moved out of `src/embed/fts-warning.ts`, which re-exports it),
+  `src/router.ts`, `src/hooks/user-prompt-submit.ts`, `src/hooks/pre-tool-use.ts`, `src/mcp/server.ts`, `src/cli.ts`: the
+  prompt-handling fallbacks print the error summary instead of `String(err)`. `semantic-search-silent-noop.md` re-verified
+  (catch output is class plus code; `errorSummary` now at `error-summary.ts`); `score-blend-resolver.md` and
+  `gate-composition-and-dedup.md` citations moved by one line with the new `require`, claims unchanged. The older
+  `fts-warning.ts:21-27` anchor in the entry below named the `errorSummary` definition, which now lives in
+  `error-summary.ts`. The batch squash merge of the earlier entry re-dated `render.ts`, `indexer.ts` and
+  `index-store.ts`; no claim depends on that. Re-stamped all three.
+
 - 2026-11-03T11:20:15Z, `src/embed/fts-warning.ts` (new), `src/embed/index-store.ts`, `src/embed/indexer.ts`, `src/render.ts`: both keyword-path warnings print only the error class and SQLite code (never the message, which can hold queried prompt text) and share one once-per-process flag; `CONTROL_CHARS_RE` also strips U+061C, U+200B-U+200D, U+2028, U+2029 and U+FEFF. `semantic-search-silent-noop.md` re-verified: its warning claims now name the shared flag and the class-plus-code output, its anchors (`index-store.ts:105-109`, `fts-warning.ts:21-27` and `:32-37`, `indexer.ts:583-593`, `:186-190`, `:313-316`) were checked at HEAD, and its `router.ts` and `docs/scoring.md` sources (changed 2026-10-27) still match its claims (`scoring.md` one stderr line per process is now true). `gate-composition-and-dedup.md`, `score-blend-resolver.md` (cite `render.ts`) and `native-deps-and-ci-smoke.md` (cites `index-store.ts`): the edits are line-neutral hunks in code these docs make no claim about; claims and citations unchanged. All four re-stamped.
 
 - 2026-10-27T20:45:30Z, release 0.9.0: `package.json` and `PACKAGE_VERSION` in `src/hooks/user-prompt-submit.ts` move from 0.8.0 to 0.9.0 on the same lines. `gate-composition-and-dedup.md`, `native-deps-and-ci-smoke.md` and `score-blend-resolver.md` cite neither the version nor the changed line; claims and citations unchanged. Re-stamped.

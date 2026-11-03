@@ -3,6 +3,7 @@ const { loadMemoriesFromDir } = require('../memory/loader');
 const { resolveBlended } = require('../router');
 const { renderHitsBudgeted } = require('../render');
 const { readStdin } = require('./io');
+const { errorSummary, indexRebuildHint } = require('../error-summary');
 
 // Single source of truth for the version reported by the `--version` CLI
 // short-circuit. Bump alongside package.json on release; the
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
     allHits = await resolveBlended(ctx, memories, memoryDir);
   } catch (err: unknown) {
     process.stderr.write(
-      `memory-router: memory resolution failed, no context injected: ${String(err)}\n`,
+      `memory-router: memory resolution failed, no context injected: ${errorSummary(err)}${indexRebuildHint(err, memoryDir)}\n`,
     );
   }
 
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   process.stderr.write(
-    `memory-router user-prompt-submit failed: ${String(err)}\n`,
+    `memory-router user-prompt-submit failed: ${errorSummary(err)}\n`,
   );
   process.exit(1);
 });

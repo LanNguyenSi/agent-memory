@@ -3,7 +3,7 @@ type: module
 title: Native-dependency smoke check
 description: Pointer doc. Why the CI matrix runs a dedicated native-addon load before typecheck/build, which matrix leg it exercises, and how its probe relates to the calls index-store.ts makes at runtime.
 tags: [native-deps, ci-smoke, better-sqlite3, sqlite-vec]
-timestamp: 2026-11-03T11:20:15Z
+timestamp: 2026-11-03T17:04:17Z
 sources:
   - .github/workflows/ci.yml
   - packages/memory-router/package.json

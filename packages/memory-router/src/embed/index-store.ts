@@ -93,7 +93,7 @@
 const Database = require('better-sqlite3');
 const sqliteVec = require('sqlite-vec');
 const { createHash } = require('node:crypto');
-const { errorSummary, warnKeywordPathOnce } = require('./fts-warning');
+const { errorSummary, warnKeywordPathOnce, IndexProvenanceMismatchError } = require('./fts-warning');
 
 // Warned at most once per process through the flag shared with the keyword-pass
 // wrapper in src/embed/indexer.ts (src/embed/fts-warning.ts), the same shape as
@@ -646,7 +646,7 @@ function openIndex(opts: IndexStoreOptions): {
     storedProvider !== null &&
     storedProvider !== opts.meta.provider
   ) {
-    throw new Error(
+    throw new IndexProvenanceMismatchError(
       `embedding index at ${opts.path} was built with provider=${storedProvider} model=${storedModel ?? 'unknown'}` +
         `${dimensions !== null ? ` (dimensions=${dimensions})` : ''}; current configuration is ` +
         `provider=${opts.meta.provider} model=${opts.meta.model}. Embeddings from different providers are ` +
@@ -676,7 +676,7 @@ function openIndex(opts: IndexStoreOptions): {
         )
         .get(opts.meta.model) as { n: number };
       if (mismatched > 0) {
-        throw new Error(
+        throw new IndexProvenanceMismatchError(
           `embedding index at ${opts.path} has ${mismatched} existing entr(y/ies) not tagged for model=${opts.meta.model} (provider=${opts.meta.provider})` +
             `${dimensions !== null ? ` (dimensions=${dimensions})` : ''}; the index predates provider/model provenance ` +
             `tracking and its rows belong to a different embedding space. Rebuild the index: ${rebuildHint()}`,
@@ -989,7 +989,7 @@ function openIndex(opts: IndexStoreOptions): {
       ensureVecTable(dimensions);
       recordProvenance(dimensions);
     } else if (embedding.length !== dimensions) {
-      throw new Error(
+      throw new IndexProvenanceMismatchError(
         `embedding dimension ${embedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
@@ -1323,7 +1323,7 @@ function openIndex(opts: IndexStoreOptions): {
   function putCachedQuery(prompt: string, embedding: number[]): void {
     if (!cacheModel || cacheCapacity <= 0) return;
     if (dimensions !== null && embedding.length !== dimensions) {
-      throw new Error(
+      throw new IndexProvenanceMismatchError(
         `cached embedding dimension ${embedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
@@ -1351,7 +1351,7 @@ function openIndex(opts: IndexStoreOptions): {
   ): SearchHit[] {
     if (dimensions === null) return []; // nothing has ever been embedded
     if (queryEmbedding.length !== dimensions) {
-      throw new Error(
+      throw new IndexProvenanceMismatchError(
         `query dimension ${queryEmbedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }
@@ -1408,7 +1408,7 @@ function openIndex(opts: IndexStoreOptions): {
       return []; // nothing embedded yet, or an index without chunk support
     }
     if (queryEmbedding.length !== dimensions) {
-      throw new Error(
+      throw new IndexProvenanceMismatchError(
         `query dimension ${queryEmbedding.length} != index dimension ${dimensions}${dimensionMismatchSuffix()}`,
       );
     }

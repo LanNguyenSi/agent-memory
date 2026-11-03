@@ -20,6 +20,7 @@ import { z } from 'zod';
 const { loadMemoriesFromDir } = require('../memory/loader');
 const { resolveBlended } = require('../router');
 const { semanticSearch } = require('../embed/indexer');
+const { errorSummary, indexRebuildHint } = require('../error-summary');
 
 const SERVER_NAME = 'memory-router';
 const SERVER_VERSION = '0.1.0';
@@ -133,7 +134,7 @@ server.registerTool(
       all = await resolveBlended(ctx, memories, memoryDir);
     } catch (err: unknown) {
       process.stderr.write(
-        `memory-router MCP: memory resolution failed, falling back to no hits: ${String(err)}\n`,
+        `memory-router MCP: memory resolution failed, falling back to no hits: ${errorSummary(err)}${indexRebuildHint(err, memoryDir)}\n`,
       );
     }
 
