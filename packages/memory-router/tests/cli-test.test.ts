@@ -10,6 +10,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 
 const BIN = path.join(__dirname, '..', 'dist', 'cli.js');
@@ -239,4 +241,58 @@ test('test --json for a prompt with no match reports 0 rendered bytes', () => {
   const { status, stdout } = run(['test', 'rename a typescript variable to camelCase', '--dir', FIXTURES, '--json']);
   assert.equal(status, 0);
   assert.equal((JSON.parse(stdout) as { renderedBytes: number }).renderedBytes, 0);
+});
+
+// `--semantic` handles a prompt, so its confidence-gate failure line must name
+// the error class and never the message (src/error-summary.ts): the prompt is in
+// flight and a store-level failure on this path can come back with a message
+// quoting prompt-derived text.
+//
+// The failure here is real, not stubbed: the corpus has an index and a provider
+// config, and the embed endpoint is a closed loopback port, so the search gets
+// past openIndex and `embedBatch` rejects. indexer.ts rethrows that through
+// `describeEmbedError`, whose message interpolates the active model tag (here
+// MARKER), so a message-echoing catch would put the marker on stderr.
+const MARKER = 'PROMPT-MARKER-xyz';
+
+test('test --semantic: a failed confidence gate names the error class, never the error message', () => {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'memory-router-cli-hygiene-'),
+  );
+  try {
+    fs.mkdirSync(path.join(dir, '.memory-router'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'force_push.md'),
+      '---\nname: hygiene_force_push\ndescription: force push rule\ntype: feedback\ntopics: [destructive_ops]\n---\n\nnever git push --force to a shared branch\n',
+    );
+    const { openIndex } = require('../src/embed/index-store');
+    const store = openIndex({
+      path: path.join(dir, '.memory-router', 'index.sqlite'),
+      dimensions: 4,
+      meta: { provider: 'openai', model: MARKER },
+    });
+    store.close();
+    const res = run(
+      ['test', 'git push --force to master', '--dir', dir, '--semantic'],
+      {
+        OPENAI_API_KEY: 'sk-test-not-real',
+        MEMORY_ROUTER_EMBED_PROVIDER: 'openai',
+        MEMORY_ROUTER_EMBED_MODEL: MARKER,
+        OPENAI_BASE_URL: 'http://127.0.0.1:1/v1',
+      },
+    );
+    assert.match(
+      res.stderr,
+      /warning: --semantic confidence gate failed, sync hits only: Error\n/,
+    );
+    assert.ok(
+      !res.stderr.includes(MARKER),
+      `the confidence-gate error message leaked into stderr: ${JSON.stringify(res.stderr)}`,
+    );
+    // The documented fallback: the sync-only hits are still reported.
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /topic match: destructive_ops/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

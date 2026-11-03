@@ -8,6 +8,7 @@ sources:
   - packages/memory-router/src/embed/indexer.ts
   - packages/memory-router/src/embed/index-store.ts
   - packages/memory-router/src/embed/fts-warning.ts
+  - packages/memory-router/src/error-summary.ts
   - packages/memory-router/src/embed/keyword.ts
   - packages/memory-router/src/embed/provider.ts
   - packages/memory-router/src/router.ts
@@ -18,6 +19,7 @@ sources:
   - packages/memory-router/src/consolidate/near-dupes.ts
   - packages/memory-router/tests/blend.test.ts
   - packages/memory-router/tests/fts-warning-hygiene.test.ts
+  - packages/memory-router/tests/router-error-hygiene.test.ts
   - packages/memory-router/docs/scoring.md
 ---
 
@@ -43,15 +45,15 @@ The call sites below are the ones among the hits of
 `rg -n 'semanticSearch\b' packages/memory-router/src` at the time of
 writing (comments, imports, and the definition set aside):
 
-- `resolveBlended()` (`packages/memory-router/src/router.ts:242`), used by
+- `resolveBlended()` (`packages/memory-router/src/router.ts:243`), used by
   the `UserPromptSubmit` hook, MCP `memory_resolve`, and
   `memory-router eval`. Since schema v4 its default search entry point is
   `blendedSearch()` (`packages/memory-router/src/embed/indexer.ts:687-702`),
   which returns `{ semantic, keyword }` and shares one store open and one
   query embedding with the keyword pass.
-- `resolveConfidence()` (`packages/memory-router/src/router.ts:80`), used
+- `resolveConfidence()` (`packages/memory-router/src/router.ts:81`), used
   by `memory-router test --semantic`.
-- MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:84-89`),
+- MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:85-90`),
   which calls it directly.
 - The package entry point re-exports it
   (`packages/memory-router/src/index.ts:35`), so a library consumer can
@@ -145,8 +147,10 @@ one take the same flag, so a run that trips the pass-level throw and a
 store-level FTS error as well still writes exactly one of them. Both
 forms name only the error class and the SQLite result code (e.g.
 `SqliteError (SQLITE_ERROR)`, through `errorSummary`,
-`packages/memory-router/src/embed/fts-warning.ts:21-27`) and never the
-error message: an SQLite FTS error message can quote back part of the
+`packages/memory-router/src/error-summary.ts:22-28`, re-exported by
+`packages/memory-router/src/embed/fts-warning.ts:21` and `:39` so both keyword
+paths keep requiring one module) and never the error message: an SQLite FTS
+error message can quote back part of the
 phrase it was given, and that phrase is built from the user's prompt, so
 echoing the message (the `String(err)` this used to print) would copy
 prompt text into whatever collects the hook's stderr. Only id tokens are
@@ -207,24 +211,29 @@ this path: `semanticSearch()` does not write.
 
 ### What each caller does with them
 
-- `resolveBlended()` (`packages/memory-router/src/router.ts:241-254`)
+- `resolveBlended()` (`packages/memory-router/src/router.ts:242-255`)
   catches any throw from the search and degrades to `resolve()`
-  (`packages/memory-router/src/router.ts:360`). The returned hits equal
+  (`packages/memory-router/src/router.ts:361`). The returned hits equal
   the unconfigured case: see [docs/scoring.md "Degradation and the Tool
   Gate"](../scoring.md#degradation-and-the-tool-gate), pinned by the
   tests at `packages/memory-router/tests/blend.test.ts:449` (a thrown
   search) and `packages/memory-router/tests/blend.test.ts:473` (no
-  index/provider). stderr does not equal it: the catch interpolates
-  `String(err)` (`packages/memory-router/src/router.ts:252`), so the full
-  error message, including the rebuild command a provenance error carries
-  (`packages/memory-router/src/embed/index-store.ts:653`, `:679`), is
-  written on every call that throws.
+  index/provider). stderr does not equal it either: the catch prints the
+  error class plus its machine-readable code through `errorSummary`
+  (`packages/memory-router/src/router.ts:253`), never the message, because this
+  is the blend path a prompt runs through and a message here can quote
+  prompt-derived text (see `packages/memory-router/src/error-summary.ts`, pinned
+  by `packages/memory-router/tests/router-error-hygiene.test.ts`). What that
+  drops is the rebuild command a provenance error carries
+  (`packages/memory-router/src/embed/index-store.ts:653`, `:679`): it stays on
+  the operator paths below, which still print the full message, and the prompt
+  path only says which error class fired.
 - `memory-router test --semantic`
-  (`packages/memory-router/src/cli.ts:786-797`) catches the throw from
-  `resolveConfidence`, writes a `warning:` line that also interpolates
-  `String(err)` (`packages/memory-router/src/cli.ts:794`), and prints the
-  sync-only hits.
-- MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:80-92`)
+  (`packages/memory-router/src/cli.ts:787-798`) catches the throw from
+  `resolveConfidence`, writes a `warning:` line with the same class-plus-code
+  summary (`packages/memory-router/src/cli.ts:795`, again no message, same
+  reason), and prints the sync-only hits.
+- MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:81-93`)
   has no catch in its handler: the error leaves the tool handler.
 
 ## Other `openIndex()` callers
@@ -235,9 +244,9 @@ writing:
 
 - `rebuildIndex()` (`packages/memory-router/src/embed/indexer.ts:186-190`),
   run by `memory-router index`
-  (`packages/memory-router/src/cli.ts:592-593`). `runIndex` has no catch;
+  (`packages/memory-router/src/cli.ts:593-594`). `runIndex` has no catch;
   the CLI's top-level handler
-  (`packages/memory-router/src/cli.ts:1188-1191`) prints the error and
+  (`packages/memory-router/src/cli.ts:1189-1192`) prints the error and
   exits non-zero, so a provider or legacy-provenance mismatch fails the
   command with the rebuild command in its text.
 - `lint --conflicts --semantic`

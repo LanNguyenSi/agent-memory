@@ -26,6 +26,7 @@ const {
 } = require('./lint/stale');
 const { loadMemoriesFromDir } = require('./memory/loader');
 const { resolve, resolveConfidence, dedupeAndRank } = require('./router');
+const { errorSummary } = require('./error-summary');
 const { runGoldenEval } = require('./eval/runner');
 const {
   renderHitsBudgeted,
@@ -791,7 +792,7 @@ async function runTest(
       allHits = dedupeAndRank([...syncHits, ...semHits], maxHits);
     } catch (err: unknown) {
       process.stderr.write(
-        `warning: --semantic confidence gate failed, sync hits only: ${String(err)}\n`,
+        `warning: --semantic confidence gate failed, sync hits only: ${errorSummary(err)}\n`,
       );
     }
   }

@@ -4,6 +4,7 @@ const { resolve } = require('../router');
 const { toolGate } = require('../gates/tool');
 const { renderHitsAsContext } = require('../render');
 const { readStdin } = require('./io');
+const { errorSummary } = require('../error-summary');
 
 // Claude Code PreToolUse hook input. We only consume tool_name / tool_input /
 // cwd; the full schema also carries session_id / transcript_path.
@@ -47,7 +48,7 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   process.stderr.write(
-    `memory-router pre-tool-use failed: ${String(err)}\n`,
+    `memory-router pre-tool-use failed: ${errorSummary(err)}\n`,
   );
   process.exit(1);
 });

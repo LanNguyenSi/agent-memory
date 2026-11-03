@@ -38,7 +38,7 @@ const MARKER = 'zzpromptmarkerphrase';
 const ANY_KEYWORD_WARN_RE =
   /memory-router: (FTS keyword index query failed|keyword search failed), continuing without keyword matches/g;
 
-const { errorSummary } = require('../src/embed/fts-warning');
+const { errorSummary } = require('../src/error-summary');
 
 // Drop all three module caches: the shared flag lives in fts-warning.ts, but it
 // is read through the two modules that use it, so a clean flag means a clean
