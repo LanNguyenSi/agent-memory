@@ -9,6 +9,10 @@
 // prints. dist/router.js ends in `module.exports = { ... }`, so the patched
 // property is the one the entry point destructures when it requires the module
 // AFTER this preload ran.
+//
+// With MEMORY_ROUTER_TEST_STUB_PROVENANCE set, the thrower instead throws the
+// dist IndexProvenanceMismatchError (same marker-in-message rule), the shape
+// that makes the fixed rebuild hint appear on the degradation lines.
 const path = require('node:path');
 
 const ROUTER = require.resolve(
@@ -26,9 +30,27 @@ if (!STUBABLE.includes(exportName)) {
 }
 
 const router = require(ROUTER);
-router[exportName] = async () => {
-  const err = new Error(`resolver input: ${MARKER}`);
-  err.name = 'RouterFailure';
-  err.code = 'SQLITE_ERROR';
-  throw err;
-};
+if (process.env.MEMORY_ROUTER_TEST_STUB_PROVENANCE) {
+  // Provenance shape: the dist copy of the class index-store.ts throws, so
+  // the catching entry point's instanceof check recognizes it and the fixed
+  // rebuild hint (src/error-summary.ts's indexRebuildHint) must fire.
+  const { IndexProvenanceMismatchError } = require(path.join(
+    __dirname,
+    '..',
+    '..',
+    'dist',
+    'error-summary.js',
+  ));
+  router[exportName] = async () => {
+    throw new IndexProvenanceMismatchError(
+      `embedding index was built with provider=openai model=${MARKER}; rebuild required`,
+    );
+  };
+} else {
+  router[exportName] = async () => {
+    const err = new Error(`resolver input: ${MARKER}`);
+    err.name = 'RouterFailure';
+    err.code = 'SQLITE_ERROR';
+    throw err;
+  };
+}

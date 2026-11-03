@@ -33,7 +33,7 @@ allocate result slots differently.
 |---|---|---|
 | `PreToolUse` hook (`packages/memory-router/src/hooks/pre-tool-use.ts:31`) | `resolve(ctx, memories, { gates: [toolGate] })` | Tool Gate only, explicitly overriding `DEFAULT_GATES` |
 | `memory-router test` CLI verb, no `--semantic` | `resolve(ctx, memories, { maxHits })` (default `opts.gates`) | `DEFAULT_GATES = [topicGate, toolGate]` |
-| `memory-router test --semantic` | `resolve(...)` then `resolveConfidence(...)`, merged via `dedupeAndRank` (`packages/memory-router/src/cli.ts:784-798`) | Topic + Tool (sync) plus Confidence (async), as two separate calls |
+| `memory-router test --semantic` | `resolve(...)` then `resolveConfidence(...)`, merged via `dedupeAndRank` (`packages/memory-router/src/cli.ts:784-809`) | Topic + Tool (sync) plus Confidence (async), as two separate calls |
 | `UserPromptSubmit` hook, MCP `memory_resolve`, `memory-router eval` | `resolveBlended(ctx, memories, memoryDir)` | Semantic score (dominant) + Topic Gate (boost) + recency/type modifiers, plus Tool Gate only when `ctx.tool` is set |
 
 The two hook callers also differ in how they render their hits, not only in
@@ -57,7 +57,7 @@ Two things worth stating explicitly:
   `DEFAULT_GATES` is used by every `resolve()` call that passes no `gates`
   option (`packages/memory-router/src/router.ts:61`): among them the `test`
   CLI verb's `resolve(ctx, memories, { maxHits })` call
-  (`packages/memory-router/src/cli.ts:784`), run whether or not
+  (`packages/memory-router/src/cli.ts:789`), run whether or not
   `--semantic` is also passed, and `resolveBlended`'s own degraded
   fallback (`packages/memory-router/src/router.ts:361-362`, `resolve(ctx, memories, { maxHits })`;
   since schema v4 a keyword-admitted memory may take the first slots ahead of that
@@ -74,8 +74,8 @@ Two things worth stating explicitly:
   narrowest of the three resolvers this module exports: the Confidence
   Gate run in isolation, with its own `maxHits` default (`3`, vs.
   `resolve`'s and `resolveBlended`'s `5`). Its only call site under
-  `packages/memory-router/src` is the `test --semantic` path
-  (`packages/memory-router/src/cli.ts:789`), per
+  `packages/memory-router/src` is the   `test --semantic` path
+  (`packages/memory-router/src/cli.ts:800`), per
   `rg -n 'resolveConfidence\b' packages/memory-router/src`, which also
   shows the package entry point re-exporting it
   (`packages/memory-router/src/index.ts:30`); `resolveBlended` does not

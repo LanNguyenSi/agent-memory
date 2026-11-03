@@ -14,7 +14,7 @@ const {
 // point (one store open + one query embedding shared by the semantic KNN
 // and the schema v4 keyword pass, see src/embed/indexer.ts).
 const { semanticSearch, blendedSearch } = require('./embed/indexer');
-const { errorSummary } = require('./error-summary');
+const { errorSummary, indexRebuildHint } = require('./error-summary');
 const {
   loadKeywordConfig,
   keywordReason,
@@ -250,7 +250,7 @@ async function resolveBlended(
     }
   } catch (err: unknown) {
     process.stderr.write(
-      `memory-router: semantic search failed, degrading to topic/recency/type only: ${errorSummary(err)}\n`,
+      `memory-router: semantic search failed, degrading to topic/recency/type only: ${errorSummary(err)}${indexRebuildHint(err, memoryDir)}\n`,
     );
   }
 

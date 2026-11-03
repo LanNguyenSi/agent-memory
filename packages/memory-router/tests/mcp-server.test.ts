@@ -296,7 +296,49 @@ test('memory_resolve: a resolver failure names the error class and code, never t
     !session.stderr.includes(MARKER),
     `the resolver error message leaked into stderr: ${JSON.stringify(session.stderr)}`,
   );
+  assert.ok(
+    !session.stderr.includes('if the embedding provider or model changed'),
+    `a non-provenance error must not print the rebuild hint: ${JSON.stringify(session.stderr)}`,
+  );
   // The failure degrades the tool call instead of failing it.
+  const call = expectResponse<{ result: { content: { text: string }[] } }>(session, 2);
+  assert.deepEqual(JSON.parse(call.result.content[0].text), { hits: [] });
+});
+
+test('memory_resolve: an index provenance mismatch appends the fixed rebuild hint with the memory dir', async () => {
+  const session = await runRpcSession(
+    [
+      initialize,
+      initialized,
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'memory_resolve',
+          arguments: { prompt: 'merge PR 42' },
+        },
+      },
+    ],
+    {
+      MEMORY_ROUTER_TEST_STUB_EXPORT: 'resolveBlended',
+      MEMORY_ROUTER_TEST_STUB_MARKER: MARKER,
+      MEMORY_ROUTER_TEST_STUB_PROVENANCE: '1',
+    },
+    ['--require', PRELOAD],
+  );
+  assert.match(
+    session.stderr,
+    /memory-router MCP: memory resolution failed, falling back to no hits: IndexProvenanceMismatchError; if the embedding provider or model changed, run `memory-router index \/.*` to rebuild\n/,
+  );
+  assert.ok(
+    session.stderr.includes(`memory-router index ${fixturesDir}\` to rebuild`),
+    `expected the hint to name the server's own memory dir (${fixturesDir}): ${JSON.stringify(session.stderr)}`,
+  );
+  assert.ok(
+    !session.stderr.includes(MARKER),
+    `the provenance error message leaked into stderr: ${JSON.stringify(session.stderr)}`,
+  );
   const call = expectResponse<{ result: { content: { text: string }[] } }>(session, 2);
   assert.deepEqual(JSON.parse(call.result.content[0].text), { hits: [] });
 });

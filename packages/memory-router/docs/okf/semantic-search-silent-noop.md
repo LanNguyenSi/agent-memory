@@ -223,15 +223,23 @@ this path: `semanticSearch()` does not write.
   (`packages/memory-router/src/router.ts:253`), never the message, because this
   is the blend path a prompt runs through and a message here can quote
   prompt-derived text (see `packages/memory-router/src/error-summary.ts`, pinned
-  by `packages/memory-router/tests/router-error-hygiene.test.ts`). What that
-  drops is the rebuild command a provenance error carries
+  by `packages/memory-router/tests/router-error-hygiene.test.ts`). The
+  provenance throws are one dedicated class, `IndexProvenanceMismatchError`
+  (`packages/memory-router/src/error-summary.ts`, constructed at
+  `packages/memory-router/src/embed/index-store.ts:649`, `:679` and by the
+  same-provider dimension-mismatch throws); when the caught error is that
+  class the line additionally carries a FIXED rebuild hint (`; if the embedding
+  provider or model changed, run \`memory-router index <dir>\` to rebuild`, the
+  hint built from the caller's own memory dir, never from the error). What
+  those lines still drop is the exact rebuild command the message carries
   (`packages/memory-router/src/embed/index-store.ts:653`, `:679`): it stays on
-  the operator paths below, which still print the full message, and the prompt
-  path only says which error class fired.
+  the operator paths below, which print the full message, while every other
+  error keeps the short class-plus-code line.
 - `memory-router test --semantic`
-  (`packages/memory-router/src/cli.ts:787-798`) catches the throw from
+  (`packages/memory-router/src/cli.ts:798-809`) catches the throw from
   `resolveConfidence`, writes a `warning:` line with the same class-plus-code
-  summary (`packages/memory-router/src/cli.ts:795`, again no message, same
+  summary and the same fixed rebuild hint on an `IndexProvenanceMismatchError`
+  (`packages/memory-router/src/cli.ts:806`, again no message, same
   reason), and prints the sync-only hits.
 - MCP `memory_search` (`packages/memory-router/src/mcp/server.ts:81-93`)
   has no catch in its handler: the error leaves the tool handler.
@@ -246,7 +254,7 @@ writing:
   run by `memory-router index`
   (`packages/memory-router/src/cli.ts:593-594`). `runIndex` has no catch;
   the CLI's top-level handler
-  (`packages/memory-router/src/cli.ts:1189-1192`) prints the error and
+  (`packages/memory-router/src/cli.ts:1200-1203`) prints the error and
   exits non-zero, so a provider or legacy-provenance mismatch fails the
   command with the rebuild command in its text.
 - `lint --conflicts --semantic`

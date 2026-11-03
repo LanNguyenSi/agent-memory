@@ -27,4 +27,32 @@ function errorSummary(err: unknown): string {
   return `${name}${code}`;
 }
 
-module.exports = { errorSummary };
+// The error class of an embedding index whose provenance disagrees with the
+// active embedding config: built ONLY where those errors are created, in
+// src/embed/index-store.ts (the provider-mismatch and legacy-provenance
+// throws at open time, and the same-provider dimension-mismatch throws in
+// upsert/putCachedQuery/search/searchChunks - a width change is a model
+// switch seen from the index side). The class is what lets the prompt-handling
+// degradation lines below recognize this one failure without echoing its
+// message, which carries the index path and the provider/model tags.
+class IndexProvenanceMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IndexProvenanceMismatchError';
+  }
+}
+
+// The FIXED hint appended to a degradation line when (and only when) the
+// caught error is an IndexProvenanceMismatchError. The full rebuild command
+// lives in that error's message, which these lines must not print, so without
+// this hint a hook that silently degrades after an embedding model switch
+// carries no pointer back to `memory-router index`. The hint text is fixed
+// (never derived from the error); `memoryDir` is the caller's own memory dir,
+// a value the code has, so no prompt- or error-derived text reaches stderr.
+// Every other error keeps the short class-plus-code line.
+function indexRebuildHint(err: unknown, memoryDir: string): string {
+  if (!(err instanceof IndexProvenanceMismatchError)) return '';
+  return `; if the embedding provider or model changed, run \`memory-router index ${memoryDir}\` to rebuild`;
+}
+
+module.exports = { errorSummary, IndexProvenanceMismatchError, indexRebuildHint };

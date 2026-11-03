@@ -26,7 +26,7 @@ const {
 } = require('./lint/stale');
 const { loadMemoriesFromDir } = require('./memory/loader');
 const { resolve, resolveConfidence, dedupeAndRank } = require('./router');
-const { errorSummary } = require('./error-summary');
+const { errorSummary, indexRebuildHint } = require('./error-summary');
 const { runGoldenEval } = require('./eval/runner');
 const {
   renderHitsBudgeted,
@@ -781,7 +781,18 @@ async function runTest(
   // docs/memory-schema.md's Topic vocabulary section.
   const ctx = { prompt, cwd: process.cwd(), memoryDir: dir };
 
-  const syncHits: GateHit[] = resolve(ctx, memories, { maxHits });
+  // resolve() runs with the prompt in flight, so a throw here must not reach
+  // the top-level main().catch (which prints String(err), message included):
+  // print only the errorSummary and exit non-zero, like that handler did.
+  let syncHits: GateHit[];
+  try {
+    syncHits = await resolve(ctx, memories, { maxHits });
+  } catch (err: unknown) {
+    process.stderr.write(
+      `error: memory-router test failed: ${errorSummary(err)}\n`,
+    );
+    process.exit(1);
+  }
   let allHits: GateHit[] = syncHits;
 
   if (semantic) {
@@ -792,7 +803,7 @@ async function runTest(
       allHits = dedupeAndRank([...syncHits, ...semHits], maxHits);
     } catch (err: unknown) {
       process.stderr.write(
-        `warning: --semantic confidence gate failed, sync hits only: ${errorSummary(err)}\n`,
+        `warning: --semantic confidence gate failed, sync hits only: ${errorSummary(err)}${indexRebuildHint(err, dir)}\n`,
       );
     }
   }

@@ -18,7 +18,7 @@ let warned = false;
 // degradation paths keep requiring exactly one module. For an FTS failure that
 // output is unchanged by the move: `SqliteError (SQLITE_ERROR)`.
 
-const { errorSummary } = require('../error-summary');
+const { errorSummary, IndexProvenanceMismatchError } = require('../error-summary');
 
 // Writes `line` and returns true on the first call of this process; every later
 // call from either path returns false and writes nothing. Callers build the
@@ -36,4 +36,4 @@ function warnKeywordPathOnce(line: string): boolean {
   return true;
 }
 
-module.exports = { errorSummary, warnKeywordPathOnce };
+module.exports = { errorSummary, warnKeywordPathOnce, IndexProvenanceMismatchError };

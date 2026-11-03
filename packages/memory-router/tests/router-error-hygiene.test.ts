@@ -21,6 +21,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const { resolveBlended, resolve } = require('../src/router');
+const { IndexProvenanceMismatchError } = require('../src/error-summary');
 
 // No topics.yml here, so the topic gate falls back to the built-in default
 // vocabulary and this prompt matches nothing: the degraded result is then the
@@ -82,6 +83,10 @@ interface ErrorCase {
   name: string;
   make: () => unknown;
   want: string;
+  /** Whether the fixed rebuild hint must follow the summary (only the
+   * IndexProvenanceMismatchError case sets it; every other error must keep
+   * the short line). */
+  hint?: boolean;
 }
 
 const ERROR_CASES: ErrorCase[] = [
@@ -117,7 +122,20 @@ const ERROR_CASES: ErrorCase[] = [
     make: () => null,
     want: 'Error',
   },
+  {
+    name: 'index provenance mismatch adds the fixed rebuild hint with the memory dir',
+    make: () =>
+      new IndexProvenanceMismatchError(
+        `embedding index at /some/dir was built with provider=openai model=${MARKER}; Rebuild the index: rm -rf '/some/dir/.memory-router' && memory-router index '/some/dir'`,
+      ),
+    want: 'IndexProvenanceMismatchError',
+    hint: true,
+  },
 ];
+
+// The FIXED hint text (src/error-summary.ts's indexRebuildHint): fixed prose
+// plus the caller's own memory dir, never anything from the error message.
+const HINT_FRAGMENT = 'if the embedding provider or model changed';
 
 for (const c of ERROR_CASES) {
   test(`resolveBlended semantic-search failure line: ${c.name}`, async () => {
@@ -149,5 +167,18 @@ for (const c of ERROR_CASES) {
       !stderr[0].includes(MARKER),
       `the error message leaked into stderr: ${JSON.stringify(stderr[0])}`,
     );
+    if (c.hint) {
+      assert.ok(
+        stderr[0].endsWith(
+          `; ${HINT_FRAGMENT}, run \`memory-router index ${NOVOCAB_DIR}\` to rebuild\n`,
+        ),
+        `expected the fixed hint with the memory dir at the end of: ${JSON.stringify(stderr[0])}`,
+      );
+    } else {
+      assert.ok(
+        !stderr[0].includes(HINT_FRAGMENT),
+        `a non-provenance error must not print the rebuild hint: ${JSON.stringify(stderr[0])}`,
+      );
+    }
   });
 }

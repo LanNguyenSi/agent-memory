@@ -439,9 +439,15 @@ embed response and recorded in the index alongside the provider and
 model. An index opened under a different provider refuses at open time to
 silently compare incompatible vector spaces. A same-provider
 dimensionality change isn't checked at open time; it's caught the moment
-it's actually written or queried. Either way `memory-router index`/the
-Confidence Gate raise an error naming the exact rebuild command (`rm -rf
-'<dir>/.memory-router' && memory-router index '<dir>'`).
+it's actually written or queried. Either way the throw is an
+`IndexProvenanceMismatchError`, and what the user sees depends on the
+entry point: `memory-router index` prints the full error, naming the
+exact rebuild command (`rm -rf '<dir>/.memory-router' && memory-router
+index '<dir>'`), while the prompt-handling paths (the `UserPromptSubmit`
+hook, the MCP server, `memory-router test --semantic`) must never echo a
+message, so they print the error class plus a fixed hint (`if the
+embedding provider or model changed, run \`memory-router index <dir>\` to
+rebuild`).
 
 Local Ollama setup: `ollama pull nomic-embed-text`, then run `ollama
 serve` (or use the app) before `memory-router index`/normal hook usage.

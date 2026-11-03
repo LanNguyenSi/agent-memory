@@ -157,9 +157,42 @@ test('user-prompt-submit: a resolver failure names the error class and code, nev
     !stderr.includes(MARKER),
     `the resolver error message leaked into stderr: ${JSON.stringify(stderr)}`,
   );
+  assert.ok(
+    !stderr.includes('if the embedding provider or model changed'),
+    `a non-provenance error must not print the rebuild hint: ${JSON.stringify(stderr)}`,
+  );
   // The failure still degrades instead of blocking the prompt.
   assert.equal(code, 0);
   assert.equal(stdout, '', 'no hits to inject after the failed resolution');
+});
+
+test('user-prompt-submit: an index provenance mismatch appends the fixed rebuild hint with the memory dir', () => {
+  const { stdout, stderr, code } = runHook(
+    'user-prompt-submit.js',
+    { prompt: 'merge PR 42' },
+    {
+      nodeArgs: ['--require', PRELOAD],
+      env: {
+        MEMORY_ROUTER_TEST_STUB_EXPORT: 'resolveBlended',
+        MEMORY_ROUTER_TEST_STUB_MARKER: MARKER,
+        MEMORY_ROUTER_TEST_STUB_PROVENANCE: '1',
+      },
+    },
+  );
+  assert.match(
+    stderr,
+    /memory-router: memory resolution failed, no context injected: IndexProvenanceMismatchError; if the embedding provider or model changed, run `memory-router index \/.*` to rebuild\n/,
+  );
+  assert.ok(
+    stderr.includes(`memory-router index ${fixturesDir}\` to rebuild`),
+    `expected the hint to name the hook's own memory dir (${fixturesDir}): ${JSON.stringify(stderr)}`,
+  );
+  assert.ok(
+    !stderr.includes(MARKER),
+    `the provenance error message leaked into stderr: ${JSON.stringify(stderr)}`,
+  );
+  assert.equal(code, 0);
+  assert.equal(stdout, '', 'the hint does not change the degraded no-inject contract');
 });
 
 test('user-prompt-submit: a pre-resolver failure names the error class, never the stdin payload it failed to parse', () => {

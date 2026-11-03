@@ -29,10 +29,13 @@ const VOCAB_CORPUS = path.join(__dirname, 'fixtures', 'vocab');
 function run(
   args: string[],
   env: NodeJS.ProcessEnv = {},
+  // Extra node CLI args, prepended before the script path (e.g. a
+  // --require preload for the dist/router.js export seam).
+  nodeArgs: string[] = [],
 ): { status: number | null; stdout: string; stderr: string } {
   const baseEnv = { ...process.env };
   delete baseEnv.MEMORY_ROUTER_DIR;
-  const res = spawnSync(process.execPath, [BIN, ...args], {
+  const res = spawnSync(process.execPath, [...nodeArgs, BIN, ...args], {
     encoding: 'utf8',
     timeout: 8_000,
     env: { ...baseEnv, ...env },
@@ -289,10 +292,94 @@ test('test --semantic: a failed confidence gate names the error class, never the
       !res.stderr.includes(MARKER),
       `the confidence-gate error message leaked into stderr: ${JSON.stringify(res.stderr)}`,
     );
+    assert.ok(
+      !res.stderr.includes('if the embedding provider or model changed'),
+      `a non-provenance error must not print the rebuild hint: ${JSON.stringify(res.stderr)}`,
+    );
     // The documented fallback: the sync-only hits are still reported.
     assert.equal(res.status, 0);
     assert.match(res.stdout, /topic match: destructive_ops/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// An index built with a different provider is the provenance-mismatch class:
+// openIndex throws it at the confidence gate, and the warning line must carry
+// the FIXED rebuild hint naming the dir (the full rebuild command lives in the
+// error message, which the line must not print - src/error-summary.ts).
+test('test --semantic: an index provenance mismatch appends the fixed rebuild hint with the dir', () => {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'memory-router-cli-provenance-'),
+  );
+  try {
+    fs.mkdirSync(path.join(dir, '.memory-router'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'force_push.md'),
+      '---\nname: hygiene_force_push\ndescription: force push rule\ntype: feedback\ntopics: [destructive_ops]\n---\n\nnever git push --force to a shared branch\n',
+    );
+    const { openIndex } = require('../src/embed/index-store');
+    // Index provenance: provider=openai, model=MARKER (only ever printed
+    // from the error message).
+    const store = openIndex({
+      path: path.join(dir, '.memory-router', 'index.sqlite'),
+      dimensions: 4,
+      meta: { provider: 'openai', model: MARKER },
+    });
+    store.close();
+    const res = run(
+      ['test', 'git push --force to master', '--dir', dir, '--semantic'],
+      {
+        OPENAI_API_KEY: '',
+        MEMORY_ROUTER_EMBED_PROVIDER: 'ollama',
+      },
+    );
+    assert.match(
+      res.stderr,
+      /warning: --semantic confidence gate failed, sync hits only: IndexProvenanceMismatchError; if the embedding provider or model changed, run `memory-router index \/.*` to rebuild\n/,
+    );
+    assert.ok(
+      res.stderr.includes(`memory-router index ${dir}\` to rebuild`),
+      `expected the hint to name the tested dir (${dir}): ${JSON.stringify(res.stderr)}`,
+    );
+    assert.ok(
+      !res.stderr.includes(MARKER),
+      `the provenance error message leaked into stderr: ${JSON.stringify(res.stderr)}`,
+    );
+    // Same documented fallback as any other gate failure: sync hits only.
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /topic match: destructive_ops/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The sync resolve() in runTest runs with the prompt in flight, so a gate
+// error must be caught there (errorSummary + non-zero exit), not escape to
+// the top-level main().catch with its String(err).
+const PRELOAD = path.join(__dirname, 'fixtures', 'stub-router-preload.cjs');
+
+test('test: a sync resolver failure prints the error summary, never the message, and exits 1', () => {
+  const res = run(
+    ['test', 'git push --force to master', '--dir', FIXTURES],
+    {
+      MEMORY_ROUTER_TEST_STUB_EXPORT: 'resolve',
+      MEMORY_ROUTER_TEST_STUB_MARKER: MARKER,
+    },
+    ['--require', PRELOAD],
+  );
+  assert.match(
+    res.stderr,
+    /^error: memory-router test failed: RouterFailure \(SQLITE_ERROR\)\n/,
+  );
+  assert.ok(
+    !res.stderr.includes(MARKER),
+    `the resolver error message leaked into stderr: ${JSON.stringify(res.stderr)}`,
+  );
+  assert.ok(
+    !res.stderr.includes('if the embedding provider or model changed'),
+    `a non-provenance error must not print the rebuild hint: ${JSON.stringify(res.stderr)}`,
+  );
+  assert.equal(res.stdout, '');
+  assert.equal(res.status, 1);
 });
