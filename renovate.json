@@ -1,4 +1,18 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>LanNguyenSi/renovate-config"]
+  "extends": [
+    "github>LanNguyenSi/renovate-config"
+  ],
+  "packageRules": [
+    {
+      "description": "tsx 4.23 changes node --test coverage accounting (functions 100% -> 82.93% with identical code/tests), breaking memory-digest-cli's coverage gate. Hold until the coverage setup is adjusted.",
+      "matchFileNames": [
+        "packages/memory-digest-cli/package.json"
+      ],
+      "matchPackageNames": [
+        "tsx"
+      ],
+      "allowedVersions": "<4.23.0"
+    }
+  ]
 }
