@@ -20,6 +20,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`@hono/node-server` 2.1.8** (GHSA-qv5m-9pm6-hqp3, GHSA-jpvv-r467-5p4w): the lockfile resolves 2.1.8 (was 2.1.5), which fixes a process crash on `ECONNRESET` during an async WebSocket upgrade and a backslash in the request path being parsed as a separator (affected: `>= 2.0.0, < 2.1.6`). Lockfile only, pulled in through `@modelcontextprotocol/sdk`; the declared ranges are unchanged.
 - **`@hono/node-server` 2.1.5** (GHSA-rmxm-3fg6-px4f): the lockfile resolves 2.1.5 (was 2.0.12), which fixes `serveStatic` decoding the request path a second time and so letting a request bypass middleware on static paths (affected: `>= 1.19.10, < 2.1.3`). Lockfile only, pulled in through `@modelcontextprotocol/sdk`, whose range is unchanged.
 
+### Changed
+
+- Non-major dependency updates (lockfile and declared ranges): `@modelcontextprotocol/sdk` `^1.32.2`, `better-sqlite3` `^12.11.1`, `yaml` `^2.9.1`, `zod` `^4.6.7`; devDependencies `@types/node` `^22.20.5`, `prettier` `^3.9.10`, `tsx` `^4.23.15`, `typescript` `^5.9.3`. No behaviour change.
+
 ## [0.9.0] - 2026-10-27
 
 ### Added

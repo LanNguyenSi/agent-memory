@@ -1,5 +1,7 @@
 # Bundle log
 
+- 2026-11-17T13:08:42Z, release 0.9.1: `package.json` and `PACKAGE_VERSION` in `src/hooks/user-prompt-submit.ts` move from 0.9.0 to 0.9.1 on the same lines, no line shifts. `gate-composition-and-dedup.md` and `score-blend-resolver.md` cite `user-prompt-submit.ts:41`, `:55` and `:65`; each cited line was compared against HEAD (the `ctx` build, the `resolveBlended` call, the `renderHitsBudgeted` call) and is unchanged, claims unchanged. `native-deps-and-ci-smoke.md` was STALE from the 2026-11-16 non-major dependency bump to `package.json` (`better-sqlite3` ^12.11.1 and other ranges, no change to the `better-sqlite3` and `sqlite-vec` dependency claim) and from this release's version bump; re-verified the dependency claim, the `.github/workflows/ci.yml:24-27` matrix and the `:47-53` smoke step, all still hold. Re-stamped: gate-composition-and-dedup.md, native-deps-and-ci-smoke.md, score-blend-resolver.md.
+
 - 2026-11-03T17:04:17Z, `IndexProvenanceMismatchError` (new class in `src/error-summary.ts`, thrown by `src/embed/index-store.ts`):
   the hook, MCP, router and `test --semantic` degradation lines append a fixed rebuild hint for that class only;
   `runTest` catches its `resolve` and prints the summary. `semantic-search-silent-noop.md` claim updated and
