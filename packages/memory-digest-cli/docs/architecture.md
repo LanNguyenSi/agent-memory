@@ -158,10 +158,12 @@ The repo has no root `package.json`/npm workspaces; CI (`.github/workflows/ci.ym
 4. `npm run build --if-present`
 5. `npm run lint --if-present`, which for this package is an alias for `typecheck`
    (`"lint": "npm run typecheck"` in `package.json`), not `eslint`
-6. `npm run test:coverage --if-present`: `tsx --test` with
+6. `npm run test:coverage --if-present`: `node --import tsx --test` with
    `--experimental-test-coverage` and `--test-coverage-lines=90
 --test-coverage-branches=80 --test-coverage-functions=92` thresholds, so a
-   coverage regression fails the build
+   coverage regression fails the build (`node --import tsx` rather than
+   `tsx --test`, because the latter enables source maps from tsx 4.23.9 on and
+   node then counts tsx's module wrapper as an uncovered function)
 
 There is no `prettier --check` step and no `npm pack` step in this workflow.
 
