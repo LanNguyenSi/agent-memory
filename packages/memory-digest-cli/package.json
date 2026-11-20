@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "A CLI tool to generate digests from dated YYYY-MM-DD.md memory files, extracting events, decisions, and insights into a summary",
   "private": true,
-  "//test:coverage": "Coverage runs under c8, not node's --experimental-test-coverage. Since tsx 4.23 the `tsx --test` CLI adds --enable-source-maps, so node maps coverage back to the .ts sources. tsx wraps every CJS module in `__filename=...;(()=>{ ... })()` on a generated line that has no source-map entry, node drops that unmappable first range of the wrapper, and what is left is the wrapper's trailing `0&&(module.exports={...})` block with count 0: one phantom uncovered `anonymous_0` function per module (functions 100.00 -> 82.93 with identical code and tests). Up to tsx 4.22 the maps were not applied, so node measured the transpiled JS instead (lines were generated lines, functions included esbuild helpers). c8 (v8-to-istanbul) maps the same V8 data to the sources without the phantom, so lines are real source lines again; esbuild helper functions (__name, __export, ...) are still counted, as covered functions on source line 1. Thresholds are unchanged.",
+  "//test:coverage": "Coverage runs under `node --import tsx --test`, not `tsx --test`. Since tsx 4.23 the `tsx --test` CLI adds --enable-source-maps, so node maps coverage back to the .ts sources. tsx wraps every CJS module in `__filename=...;(()=>{ ... })()` on a generated line that has no source-map entry; node drops that unmappable first range of the wrapper and keeps its trailing `0&&(module.exports={...})` block with count 0, which is counted as one phantom uncovered `anonymous_0` function per module (functions 100.00 -> 82.93 with identical code and tests). `node --import tsx` does not enable source maps, so node measures the transpiled JS as it did up to tsx 4.22 and the phantom does not appear. Thresholds are unchanged.",
   "//": "Internal/local CLI, intentionally NOT published to npm (no consumers; this repo publishes only @lannguyensi/memory-router). The MEDIUM audit fix (PR #43) ships in source and runs from source. Posture recorded for agent-tasks 9723a709.",
   "bin": {
     "memory-digest-cli": "./dist/main.js"
@@ -17,7 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "tsx --test tests/*.test.ts",
-    "test:coverage": "c8 --include='src/**' --reporter=text --check-coverage --lines=90 --branches=80 --functions=92 tsx --test tests/*.test.ts"
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-exclude='tests/**' --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=92 tests/*.test.ts"
   },
   "engines": {
     "node": ">=20"
@@ -26,14 +26,8 @@
     "commander": "^13.1.0",
     "yaml": "^2.9.1"
   },
-  "//overrides": "c8 12.0.0 (test-exclude 8) resolves glob 13 and minimatch 10, which npm audit flags (minimatch up to 11.0.0, glob 9.0.0 to 14.0.1). Dev-only, but kept off the audit report; glob 14 and minimatch 11 run fine under c8 here. Drop when c8 ships patched ranges.",
-  "overrides": {
-    "glob": "^14.0.6",
-    "minimatch": "^11.0.9"
-  },
   "devDependencies": {
     "@types/node": "^22.20.5",
-    "c8": "^12.0.0",
     "prettier": "^3.9.10",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
